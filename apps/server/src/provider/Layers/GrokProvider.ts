@@ -83,7 +83,7 @@ export function buildInitialGrokProviderSnapshot(
           version: null,
           status: "warning",
           auth: { status: "unknown" },
-          message: "Grok is disabled in ARIS settings.",
+          message: "Grok is disabled in Circe settings.",
         },
       });
     }
@@ -350,7 +350,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Grok is disabled in ARIS settings.",
+        message: "Grok is disabled in Circe settings.",
       },
     });
   }

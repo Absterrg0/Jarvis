@@ -10,7 +10,7 @@ const reactorPath = NodePath.resolve(
 );
 
 describe("orchestration reactor ownership", () => {
-  it("keeps Jarvis concepts out of the generic reactor", () => {
-    expect(NodeFS.readFileSync(reactorPath, "utf8"), reactorPath).not.toMatch(/jarvis/iu);
+  it("keeps Circe concepts out of the generic reactor", () => {
+    expect(NodeFS.readFileSync(reactorPath, "utf8"), reactorPath).not.toMatch(/circe/iu);
   });
 });

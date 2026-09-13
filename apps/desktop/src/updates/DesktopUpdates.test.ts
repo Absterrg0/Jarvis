@@ -19,7 +19,7 @@ import * as DesktopUpdates from "./DesktopUpdates.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 
 describe("DesktopUpdates", () => {
-  it("defers unified-install updates to ARIS Setup while preserving standalone updater rules", () => {
+  it("defers unified-install updates to Circe Setup while preserving standalone updater rules", () => {
     const common = {
       isDevelopment: false,
       isPackaged: true,
@@ -32,16 +32,16 @@ describe("DesktopUpdates", () => {
     assert.equal(
       DesktopUpdates.getAutoUpdateDisabledReason({
         ...common,
-        distribution: "unified-jarvis",
+        distribution: "unified-circe",
       }),
-      "Updates are managed by ARIS Setup.",
+      "Updates are managed by Circe Setup.",
     );
     assert.equal(
       DesktopUpdates.getAutoUpdateDisabledReason({
         ...common,
-        distribution: "official-jarvis",
+        distribution: "official-circe",
       }),
-      "Automatic updates for official ARIS releases are managed through ARIS Releases.",
+      "Automatic updates for official Circe releases are managed through Circe Releases.",
     );
     assert.isNull(
       DesktopUpdates.getAutoUpdateDisabledReason({

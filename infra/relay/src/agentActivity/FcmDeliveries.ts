@@ -133,7 +133,7 @@ export class FcmDeliveries extends Context.Service<
       | EnvironmentLinks.EnvironmentLinkUserListPersistenceError
     >;
   }
->()("@t3tools/jarvis-relay/agentActivity/FcmDeliveries") {}
+>()("@circe/relay/agentActivity/FcmDeliveries") {}
 
 export const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;

@@ -10,9 +10,9 @@ const orchestrationHttpPath = NodePath.resolve(
 );
 
 describe("orchestration HTTP ownership", () => {
-  it("keeps Jarvis concepts out of the generic HTTP handlers", () => {
+  it("keeps Circe concepts out of the generic HTTP handlers", () => {
     expect(NodeFS.readFileSync(orchestrationHttpPath, "utf8"), orchestrationHttpPath).not.toMatch(
-      /jarvis/iu,
+      /circe/iu,
     );
   });
 });

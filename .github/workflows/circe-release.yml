@@ -1,0 +1,310 @@
+name: Circe core release
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Release channel"
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - preview
+      version:
+        description: "Circe package version to release (for example 1.2.3)"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: circe-core-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight main and release identity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      channel: ${{ steps.identity.outputs.channel }}
+      tag: ${{ steps.identity.outputs.tag }}
+      prerelease: ${{ steps.identity.outputs.prerelease }}
+      make_latest: ${{ steps.identity.outputs.make_latest }}
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_CHANNEL: ${{ inputs.channel }}
+      RELEASE_RUN_NUMBER: ${{ github.run_number }}
+    steps:
+      - name: Checkout shallow current main
+        uses: actions/checkout@v6
+        with:
+          ref: refs/heads/main
+          fetch-depth: 1
+          fetch-tags: false
+
+      - id: identity
+        name: Verify main, package versions, and clean release identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$RELEASE_VERSION"
+          channel="$RELEASE_CHANNEL"
+          if [[ "$channel" != stable && "$channel" != preview ]]; then
+            echo "Release channel must be stable or preview: $channel" >&2
+            exit 1
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release version must be the package X.Y.Z semver: $version" >&2
+            exit 1
+          fi
+          if [[ "$channel" == preview ]]; then
+            tag="v${version}-preview.${RELEASE_RUN_NUMBER}"
+            prerelease=true
+            make_latest=false
+          else
+            tag="v${version}"
+            prerelease=false
+            make_latest=true
+          fi
+          test "$GITHUB_REF" = refs/heads/main || {
+            echo "Core releases must be dispatched from main, received $GITHUB_REF." >&2
+            exit 1
+          }
+          git fetch --force origin refs/heads/main:refs/remotes/origin/main
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          test "$main_sha" = "$GITHUB_SHA" || {
+            echo "Dispatch SHA $GITHUB_SHA is not the current origin/main SHA $main_sha." >&2
+            exit 1
+          }
+          desktop_version="$(node -p "require('./apps/desktop/package.json').version")"
+          server_version="$(node -p "require('./apps/server/package.json').version")"
+          test "$version" = "$desktop_version" || {
+            echo "Release version $version does not match desktop package $desktop_version." >&2
+            exit 1
+          }
+          test "$version" = "$server_version" || {
+            echo "Release version $version does not match server package $server_version." >&2
+            exit 1
+          }
+          if tag_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" 2>/dev/null)"; then
+            tag_type="$(jq -r '.object.type' <<<"$tag_ref")"
+            tag_sha="$(jq -r '.object.sha' <<<"$tag_ref")"
+            while [[ "$tag_type" == tag ]]; do
+              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_sha")"
+              tag_type="$(jq -r '.object.type' <<<"$tag_object")"
+              tag_sha="$(jq -r '.object.sha' <<<"$tag_object")"
+            done
+            if [[ "$tag_type" != commit || "$tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "Existing tag $tag resolves to $tag_type $tag_sha, not $GITHUB_SHA." >&2
+              exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "make_latest=$make_latest" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js for release transaction
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Fail closed without complete Apple release credentials
+        if: ${{ inputs.channel == 'stable' }}
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          required=(
+            CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID
+            APPLE_API_ISSUER
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            [[ -n "${!name:-}" ]] || missing+=("$name")
+          done
+          if ((${#missing[@]})); then
+            echo "Circe public release is closed: missing Apple signing/notarization credentials: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Fail closed without complete Azure Trusted Signing credentials
+        if: ${{ inputs.channel == 'stable' }}
+        shell: bash
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: |
+          set -euo pipefail
+          required=(
+            AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET
+            AZURE_TRUSTED_SIGNING_ENDPOINT AZURE_TRUSTED_SIGNING_ACCOUNT_NAME
+            AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME AZURE_TRUSTED_SIGNING_PUBLISHER_NAME
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            [[ -n "${!name:-}" ]] || missing+=("$name")
+          done
+          if ((${#missing[@]})); then
+            echo "Circe public release is closed: missing Azure Trusted Signing credentials: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Preflight existing GitHub release state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CIRCE_RELEASE_CHANNEL: ${{ steps.identity.outputs.channel }}
+          CIRCE_RELEASE_TAG: ${{ steps.identity.outputs.tag }}
+          CIRCE_RELEASE_PRERELEASE: ${{ steps.identity.outputs.prerelease }}
+          CIRCE_RELEASE_MAKE_LATEST: ${{ steps.identity.outputs.make_latest }}
+        run: node scripts/circe-release-transaction.ts preflight "$RELEASE_VERSION" "$GITHUB_SHA"
+
+  build_linux:
+    name: Build Linux desktop
+    needs: preflight
+    uses: ./.github/workflows/circe-desktop-linux.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+    secrets: inherit
+
+  build_windows:
+    name: Build Windows setup
+    needs: preflight
+    uses: ./.github/workflows/circe-setup-windows.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      public_release: ${{ inputs.channel == 'stable' }}
+    secrets: inherit
+
+  build_mac:
+    name: Build macOS desktop
+    needs: preflight
+    uses: ./.github/workflows/circe-desktop-mac.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      public_release: ${{ inputs.channel == 'stable' }}
+    secrets: inherit
+
+  build_headless:
+    name: Build Linux headless runtime
+    needs: preflight
+    uses: ./.github/workflows/headless-node-release.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+    secrets: inherit
+
+  promote:
+    name: Validate and promote one release
+    needs: [preflight, build_linux, build_windows, build_mac, build_headless]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      CIRCE_RELEASE_CHANNEL: ${{ needs.preflight.outputs.channel }}
+      CIRCE_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+      CIRCE_RELEASE_PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+      CIRCE_RELEASE_MAKE_LATEST: ${{ needs.preflight.outputs.make_latest }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout release verifier
+        uses: actions/checkout@v6
+
+      - name: Download exact Linux desktop artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: circe-desktop-linux-x64-${{ needs.preflight.outputs.version }}
+          path: downloads/linux
+
+      - name: Download exact Windows setup artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: circe-setup-windows-${{ needs.preflight.outputs.version }}
+          path: downloads/windows
+
+      - name: Download exact macOS desktop artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: circe-desktop-mac-*-${{ needs.preflight.outputs.version }}
+          path: downloads/mac
+          merge-multiple: true
+
+      - name: Download exact headless x64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: circe-headless-linux-x64
+          path: downloads/headless/x64
+
+      - name: Download exact headless arm64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: circe-headless-linux-arm64
+          path: downloads/headless/arm64
+
+      - name: Stage only the release asset set
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf release-assets
+          mkdir -p release-assets
+          copy_one() {
+            local root="$1" name="$2" destination="$3"
+            mapfile -t matches < <(find "$root" -type f -name "$name" -print)
+            test "${#matches[@]}" -eq 1 || {
+              echo "Expected exactly one $name below $root, found ${#matches[@]}." >&2
+              exit 1
+            }
+            cp "${matches[0]}" "release-assets/$destination"
+          }
+          version="$VERSION"
+          copy_one downloads/linux "Circe-${version}-x86_64.AppImage" "Circe-${version}-x86_64.AppImage"
+          copy_one downloads/linux "Circe-${version}-x86_64.AppImage.sha256" "Circe-${version}-x86_64.AppImage.sha256"
+          copy_one downloads/linux "Circe-${version}-x86_64.AppImage.provenance.json" "Circe-${version}-x86_64.AppImage.provenance.json"
+          for arch in arm64 x64; do
+            copy_one downloads/mac "Circe-${version}-${arch}.dmg" "Circe-${version}-${arch}.dmg"
+            copy_one downloads/mac "Circe-${version}-${arch}.dmg.sha256" "Circe-${version}-${arch}.dmg.sha256"
+            copy_one downloads/mac "Circe-${version}-${arch}.dmg.provenance.json" "Circe-${version}-${arch}.dmg.provenance.json"
+          done
+          setup="Circe-Setup-${version}-win-x64.exe"
+          copy_one downloads/windows "$setup" "$setup"
+          copy_one downloads/windows "$setup.sha256" "$setup.sha256"
+          copy_one downloads/windows "$setup.manifest.json" "$setup.manifest.json"
+          copy_one downloads/windows "$setup.manifest.json.sha256" "$setup.manifest.json.sha256"
+          copy_one downloads/windows "$setup.provenance.json" "$setup.provenance.json"
+          cp "release-assets/$setup" release-assets/Circe-Setup.exe
+          for arch in x64 arm64; do
+            artifact="Circe-Headless-Node-${version}-linux-${arch}.tar.gz"
+            copy_one "downloads/headless/$arch" "$artifact" "$artifact"
+            copy_one "downloads/headless/$arch" "$artifact.sha256" "$artifact.sha256"
+            copy_one "downloads/headless/$arch" "$artifact.provenance.json" "$artifact.provenance.json"
+          done
+
+      - name: Setup Node.js for release transaction
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Verify, stage, and publish the release transaction
+        run: node scripts/circe-release-transaction.ts release-assets "$VERSION" "$GITHUB_SHA"

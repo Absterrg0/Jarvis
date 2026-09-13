@@ -62,9 +62,9 @@ const resolveResourcePath = Effect.fn("desktop.assets.resolveResourcePath")(func
 });
 
 const sourceTreeIconFileNames = {
-  ico: "jarvis-windows.ico",
-  macPng: "jarvis-macos-1024.png",
-  universalPng: "jarvis-universal-1024.png",
+  ico: "circe-windows.ico",
+  macPng: "circe-macos-1024.png",
+  universalPng: "circe-universal-1024.png",
 } as const;
 
 function resolveSourceTreeIconPath(
@@ -78,7 +78,7 @@ function resolveSourceTreeIconPath(
       : environment.platform === "darwin"
         ? sourceTreeIconFileNames.macPng
         : sourceTreeIconFileNames.universalPng;
-  return environment.path.join(environment.rootDir, "assets", "jarvis", fileName);
+  return environment.path.join(environment.rootDir, "assets", "circe", fileName);
 }
 
 const resolveIconPath = Effect.fn("desktop.assets.resolveIconPath")(function* (

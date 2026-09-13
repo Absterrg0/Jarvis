@@ -2,11 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { STANDARD_THEME_CARDS, previewColorsOf } from "./ThemePreviewCircles";
 
-describe("ARIS standard theme preview", () => {
+describe("Circe standard theme preview", () => {
   it("shows amber action colors instead of inherited indigo", () => {
     const card = STANDARD_THEME_CARDS.find((entry) => entry.id === "default");
     expect(card).toBeDefined();
-    expect(card?.label).toBe("ARIS");
+    expect(card?.label).toBe("Circe");
 
     const light = previewColorsOf(card!, "light");
     const dark = previewColorsOf(card!, "dark");

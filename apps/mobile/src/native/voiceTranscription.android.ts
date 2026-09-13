@@ -5,7 +5,7 @@ import {
   type VoiceTranscriptionOptions,
 } from "@t3tools/client-runtime/voice-input";
 
-import { getJarvisLocalAsrModule, isJarvisLocalAsrAvailable } from "./jarvisLocalAsr";
+import { getCirceLocalAsrModule, isCirceLocalAsrAvailable } from "./circeLocalAsr";
 
 function getDeviceLocale(): string {
   return Intl.DateTimeFormat().resolvedOptions().locale;
@@ -40,7 +40,7 @@ export type LocalLiveVoiceRecognizer = {
 };
 
 /**
- * Android on-device transcription through the narrow `JarvisLocalAsr` module,
+ * Android on-device transcription through the narrow `CirceLocalAsr` module,
  * which uses only `SpeechRecognizer.createOnDeviceSpeechRecognizer`.
  *
  * Support checks run before every operation: unavailable recognition or a
@@ -53,7 +53,7 @@ export type LocalLiveVoiceRecognizer = {
  * device in CI); static tests mock the native module.
  */
 export function getLocalLiveVoiceRecognizer(): LocalLiveVoiceRecognizer | null {
-  if (!isJarvisLocalAsrAvailable()) return null;
+  if (!isCirceLocalAsrAvailable()) return null;
   const locale = getDeviceLocale();
   return { prepare: (options) => prepareLiveRecognition(locale, options) };
 }
@@ -72,8 +72,8 @@ async function prepareLiveRecognition(
   { signal }: VoiceTranscriptionOptions,
 ): Promise<PreparedLocalLiveVoiceSession> {
   throwIfVoiceTranscriptionAborted(signal);
-  const module = getJarvisLocalAsrModule();
-  if (!module || !isJarvisLocalAsrAvailable()) {
+  const module = getCirceLocalAsrModule();
+  if (!module || !isCirceLocalAsrAvailable()) {
     throw new VoiceTranscriptionError(
       "unavailable",
       "On-device speech recognition is not available on this device.",

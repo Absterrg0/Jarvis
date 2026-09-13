@@ -3,7 +3,7 @@ import { RouterProvider } from "@tanstack/react-router";
 
 import { ElectronBrowserHost } from "./browser/ElectronBrowserHost";
 import { PreviewAutomationHosts } from "./components/preview/PreviewAutomationHosts";
-import { JarvisManagerHost } from "./components/jarvis/JarvisManagerHost";
+import { CirceManagerHost } from "./components/circe/CirceManagerHost";
 import { QuitHoldOverlay } from "./components/QuitHoldOverlay";
 import { AppAtomRegistryProvider } from "./rpc/atomRegistry";
 import type { AppRouter } from "./router";
@@ -31,7 +31,7 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
     <AppAtomRegistryProvider>
       <RendererReadySignal />
       <RouterProvider router={router} />
-      <JarvisManagerHost router={router} />
+      <CirceManagerHost router={router} />
       <PreviewAutomationHosts />
       <ElectronBrowserHost />
       <QuitHoldOverlay />

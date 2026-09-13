@@ -50,7 +50,7 @@ describe("DesktopAssets", () => {
         ),
       );
       const fileSystemLayer = FileSystem.layerNoop({
-        exists: (path) => Effect.succeed(String(path).includes("/assets/jarvis/")),
+        exists: (path) => Effect.succeed(String(path).includes("/assets/circe/")),
       });
       const assets = yield* DesktopAssets.DesktopAssets.pipe(
         Effect.provide(
@@ -62,8 +62,8 @@ describe("DesktopAssets", () => {
 
       const icons = yield* assets.iconPaths;
 
-      assert.match(Option.getOrThrow(icons.ico), /assets\/jarvis\/jarvis-windows\.ico$/);
-      assert.match(Option.getOrThrow(icons.png), /assets\/jarvis\/jarvis-universal-1024\.png$/);
+      assert.match(Option.getOrThrow(icons.ico), /assets\/circe\/circe-windows\.ico$/);
+      assert.match(Option.getOrThrow(icons.png), /assets\/circe\/circe-universal-1024\.png$/);
       assert.isTrue(Option.isNone(icons.icns));
     }),
   );

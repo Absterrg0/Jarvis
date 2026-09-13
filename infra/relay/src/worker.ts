@@ -16,10 +16,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
 
 import { RelayApi } from "@t3tools/contracts/relay";
-import {
-  JARVIS_LIVE_VOICE_DEFAULT_MODEL,
-  JARVIS_LIVE_VOICE_DEFAULT_VOICE,
-} from "@t3tools/contracts";
+import { CIRCE_LIVE_VOICE_DEFAULT_MODEL, CIRCE_LIVE_VOICE_DEFAULT_VOICE } from "@t3tools/contracts";
 
 import {
   clientApi,
@@ -183,10 +180,10 @@ export const ApiLive = Api.make(
       ),
     );
     const liveVoiceModel = yield* Config.string("LIVE_VOICE_MODEL").pipe(
-      Config.withDefault(JARVIS_LIVE_VOICE_DEFAULT_MODEL),
+      Config.withDefault(CIRCE_LIVE_VOICE_DEFAULT_MODEL),
     );
     const liveVoiceVoice = yield* Config.string("LIVE_VOICE_VOICE").pipe(
-      Config.withDefault(JARVIS_LIVE_VOICE_DEFAULT_VOICE),
+      Config.withDefault(CIRCE_LIVE_VOICE_DEFAULT_VOICE),
     );
 
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;

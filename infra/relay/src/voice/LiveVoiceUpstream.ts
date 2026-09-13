@@ -51,7 +51,7 @@ export interface LiveVoiceUpstreamShape {
 }
 
 export class LiveVoiceUpstream extends Context.Service<LiveVoiceUpstream, LiveVoiceUpstreamShape>()(
-  "@t3tools/jarvis-relay/voice/LiveVoiceUpstream",
+  "@circe/relay/voice/LiveVoiceUpstream",
 ) {}
 
 /** Closes the sideband socket after a verified `session.closed`, or on failure. */

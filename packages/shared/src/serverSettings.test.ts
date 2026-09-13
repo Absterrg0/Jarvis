@@ -98,10 +98,10 @@ describe("serverSettings helpers", () => {
     expect(resolveProjectScripts(secondUpdate, firstProject)).toEqual([firstAction]);
   });
 
-  it("replaces and resets the per-node Jarvis model selection atomically", () => {
+  it("replaces and resets the per-node Circe model selection atomically", () => {
     const current = {
       ...DEFAULT_SERVER_SETTINGS,
-      jarvisDefaultModelSelection: createModelSelection(
+      circeDefaultModelSelection: createModelSelection(
         ProviderInstanceId.make("codex"),
         "gpt-5.4-mini",
         [{ id: "reasoningEffort", value: "high" }],
@@ -110,16 +110,16 @@ describe("serverSettings helpers", () => {
 
     expect(
       applyServerSettingsPatch(current, {
-        jarvisDefaultModelSelection: {
+        circeDefaultModelSelection: {
           instanceId: ProviderInstanceId.make("claude"),
           model: "claude-sonnet-5",
         },
-      }).jarvisDefaultModelSelection,
+      }).circeDefaultModelSelection,
     ).toEqual({ instanceId: "claude", model: "claude-sonnet-5" });
 
     expect(
-      applyServerSettingsPatch(current, { jarvisDefaultModelSelection: null })
-        .jarvisDefaultModelSelection,
+      applyServerSettingsPatch(current, { circeDefaultModelSelection: null })
+        .circeDefaultModelSelection,
     ).toBeNull();
   });
 

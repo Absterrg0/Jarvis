@@ -77,7 +77,7 @@ Edit text to remove AI patterns and add human voice.
 30. Cut adverbs or choose a stronger verb.
 31. Prefer the plain word: use, help, many, and if.
 
-## Jarvis conversation rules
+## Circe conversation rules
 
 - Start tool-using turns with one short action update before the first tool call.
 - Keep progress updates tied to work that just happened or will happen next.

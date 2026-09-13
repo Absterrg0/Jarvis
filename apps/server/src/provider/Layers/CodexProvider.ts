@@ -339,7 +339,7 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   return {
     clientInfo: {
       name: "t3code_desktop",
-      title: "ARIS Desktop",
+      title: "Circe Desktop",
       version: packageJson.version,
     },
     capabilities: {
@@ -504,7 +504,7 @@ const makePendingCodexProvider = (
           version: null,
           status: "warning",
           auth: { status: "unknown" },
-          message: "Codex is disabled in ARIS settings.",
+          message: "Codex is disabled in Circe settings.",
         },
       });
     }
@@ -590,7 +590,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex is disabled in ARIS settings.",
+        message: "Codex is disabled in Circe settings.",
       },
     });
   }

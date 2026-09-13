@@ -146,7 +146,7 @@ const withIdentity = <A, E, R>(
 // before Electron's ready event), so the legacy-directory cases seed a real
 // temp home instead of stubbing FileSystem.
 const makeTempHomeDirectory = Effect.acquireRelease(
-  Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "jarvis-identity-"))),
+  Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "circe-identity-"))),
   (directory) => Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
 );
 
@@ -154,7 +154,7 @@ describe("DesktopAppIdentity", () => {
   it.effect("keeps using the legacy userData path when it already exists", () =>
     Effect.gen(function* () {
       const homeDirectory = yield* makeTempHomeDirectory;
-      const legacyPath = NodePath.join(homeDirectory, "Library", "Application Support", "Jarvis");
+      const legacyPath = NodePath.join(homeDirectory, "Library", "Application Support", "Circe");
       yield* Effect.sync(() => NodeFS.mkdirSync(legacyPath, { recursive: true }));
 
       yield* withIdentity(
@@ -180,7 +180,7 @@ describe("DesktopAppIdentity", () => {
 
           assert.equal(
             userDataPath,
-            NodePath.join(homeDirectory, "Library", "Application Support", "jarvis"),
+            NodePath.join(homeDirectory, "Library", "Application Support", "circe"),
           );
         }),
         { environment: { homeDirectory } },
@@ -193,8 +193,8 @@ describe("DesktopAppIdentity", () => {
     let thrown: unknown;
     try {
       DesktopAppIdentity.resolveUserDataPathSync({
-        legacyPath: "/Users/alice/Library/Application Support/Jarvis",
-        userDataPath: "/Users/alice/Library/Application Support/jarvis",
+        legacyPath: "/Users/alice/Library/Application Support/Circe",
+        userDataPath: "/Users/alice/Library/Application Support/circe",
         statSync: () => {
           throw cause;
         },
@@ -222,8 +222,8 @@ describe("DesktopAppIdentity", () => {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         yield* identity.configure;
 
-        assert.deepEqual(calls.setName, ["ARIS"]);
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "ARIS");
+        assert.deepEqual(calls.setName, ["Circe"]);
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "Circe");
         assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
         assert.equal(calls.setAboutPanelOptions[0]?.version, "0123456789ab");
         // Packaged: the bundle's own icon stands, so a custom one the user

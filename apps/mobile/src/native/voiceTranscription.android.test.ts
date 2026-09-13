@@ -1,7 +1,7 @@
 /**
  * Static contract tests for the Android on-device adapter.
  *
- * The native `JarvisLocalAsr` module is mocked. No microphone, recognizer, or
+ * The native `CirceLocalAsr` module is mocked. No microphone, recognizer, or
  * network runs here. Physical-device verification (pack download, offline
  * behavior, locale coverage) is pending and documented in
  * `voiceTranscription.android.ts`.
@@ -24,9 +24,9 @@ const mocks = vi.hoisted(() => ({
   cancel: vi.fn<() => void>(),
 }));
 
-vi.mock("./jarvisLocalAsr", () => ({
-  getJarvisLocalAsrModule: mocks.getModule,
-  isJarvisLocalAsrAvailable: mocks.isAvailable,
+vi.mock("./circeLocalAsr", () => ({
+  getCirceLocalAsrModule: mocks.getModule,
+  isCirceLocalAsrAvailable: mocks.isAvailable,
 }));
 
 import {

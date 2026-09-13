@@ -2,7 +2,7 @@
 export const HOME_HORIZONTAL_INSET = 20;
 
 /**
- * ARIS geometry. Sharp 3px controls and 4px panels with crisp 1px rules,
+ * Circe geometry. Sharp 3px controls and 4px panels with crisp 1px rules,
  * matching web (`--control-radius` / `--radius`). Status dots, avatars, and
  * icon circles stay round intentionally; only rectangular controls and panels
  * use these values.

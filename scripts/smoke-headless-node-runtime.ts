@@ -16,7 +16,7 @@ const Net = NodeNet;
 const OS = NodeOS;
 const Path = NodePath;
 
-export const HEADLESS_READY_LINE = "ARIS server is ready.";
+export const HEADLESS_READY_LINE = "Circe server is ready.";
 const STARTUP_TIMEOUT_MS = 30_000;
 const TERMINATION_TIMEOUT_MS = 5_000;
 
@@ -54,9 +54,9 @@ export function validateHeadlessEnvironmentDescriptor(descriptor: unknown): void
     throw new Error("Headless runtime returned an invalid environment descriptor.");
   }
 
-  const node = descriptor.capabilities.jarvisNode;
+  const node = descriptor.capabilities.circeNode;
   if (!isRecord(node)) {
-    throw new Error("Headless runtime descriptor is missing Jarvis node capabilities.");
+    throw new Error("Headless runtime descriptor is missing Circe node capabilities.");
   }
 
   const expected: Record<string, unknown> = {
@@ -208,9 +208,7 @@ const terminateExactChild = async (child: NodeChildProcess.ChildProcess): Promis
 export async function runHeadlessRuntimeSmoke(rootDir: string): Promise<void> {
   const absoluteRoot = Path.resolve(rootDir);
   const { nodePath, serverPath } = await findPackagedServer(absoluteRoot);
-  const homeDir = await FileSystem.mkdtemp(
-    Path.join(OS.tmpdir(), "jarvis-headless-runtime-smoke-"),
-  );
+  const homeDir = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-headless-runtime-smoke-"));
   let child: NodeChildProcess.ChildProcess | undefined;
   try {
     await FileSystem.mkdir(Path.join(homeDir, "config"), { recursive: true });
@@ -223,9 +221,9 @@ export async function runHeadlessRuntimeSmoke(rootDir: string): Promise<void> {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       T3CODE_HOME: homeDir,
-      JARVIS_HEADLESS_HOME: homeDir,
+      CIRCE_HEADLESS_HOME: homeDir,
     };
-    delete env.JARVIS_NODE_PRESET;
+    delete env.CIRCE_NODE_PRESET;
     delete env.T3CODE_PORT;
     delete env.T3CODE_HOST;
     delete env.T3CODE_MODE;

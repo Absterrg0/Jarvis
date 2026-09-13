@@ -8,10 +8,10 @@ import { describe, expect, it } from "vite-plus/test";
 const orchestrationDir = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)));
 
 describe("checkpoint reactor ownership", () => {
-  it("keeps Jarvis concepts out of generic checkpoint production and tests", () => {
+  it("keeps Circe concepts out of generic checkpoint production and tests", () => {
     for (const filename of ["CheckpointReactor.ts", "CheckpointReactor.test.ts"]) {
       const path = NodePath.join(orchestrationDir, "Layers", filename);
-      expect(NodeFS.readFileSync(path, "utf8"), path).not.toMatch(/jarvis/iu);
+      expect(NodeFS.readFileSync(path, "utf8"), path).not.toMatch(/circe/iu);
     }
   });
 });

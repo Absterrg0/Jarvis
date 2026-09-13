@@ -1,4 +1,4 @@
-// This file mostly exists because we want dev mode to say "Jarvis (Dev)" instead of "electron"
+// This file mostly exists because we want dev mode to say "Circe (Dev)" instead of "electron"
 
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -15,11 +15,11 @@ const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()
   .replaceAll(/[^a-z0-9]+/g, "");
-const APP_DISPLAY_NAME = isDevelopment ? "Jarvis (Dev)" : "Jarvis";
+const APP_DISPLAY_NAME = isDevelopment ? "Circe (Dev)" : "Circe";
 const APP_BUNDLE_ID = isDevelopment
-  ? `com.abstergo.jarvis.dev.${devBundleIdSuffix || "local"}`
-  : "com.abstergo.jarvis";
-const APP_PROTOCOL_SCHEMES = isDevelopment ? ["jarvis-dev"] : ["jarvis"];
+  ? `com.abstergo.circe.dev.${devBundleIdSuffix || "local"}`
+  : "com.abstergo.circe";
+const APP_PROTOCOL_SCHEMES = isDevelopment ? ["circe-dev"] : ["circe"];
 const LAUNCHER_VERSION = 19;
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,

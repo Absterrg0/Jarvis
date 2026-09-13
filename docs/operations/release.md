@@ -2,8 +2,8 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
-This document covers the Jarvis release coordinator. The upstream T3 release graph is retained
-below as a disabled reference only; it is not a second Jarvis release path.
+This document covers the Circe release coordinator. The upstream T3 release graph is retained
+below as a disabled reference only; it is not a second Circe release path.
 
 ## Voice release scope
 
@@ -13,13 +13,13 @@ Prerequisites before the voice pass: a configured supervisor provider on the sem
 
 CI and synthetic tests validate wiring and package topology only. They cannot validate physical hardware, OS microphone permissions, or device routing. Release candidates require a short real-device acceptance pass. Do not claim cross-platform readiness from mocked tests.
 
-Visible copy says ARIS. Installed IDs stay as shipped. See [ARIS identity](../internals/aris-identity.md).
+Visible copy says Circe. Installed IDs stay as shipped. See [Circe identity](../internals/circe-identity.md).
 
-## Jarvis core release (staging first)
+## Circe core release (staging first)
 
-The Jarvis desktop macOS arm64/x64 DMG artifacts, Windows setup, and headless artifacts are
+The Circe desktop macOS arm64/x64 DMG artifacts, Windows setup, and headless artifacts are
 released together by
-`.github/workflows/jarvis-release.yml`. Dispatch it manually from the current `main` branch with
+`.github/workflows/circe-release.yml`. Dispatch it manually from the current `main` branch with
 the exact `X.Y.Z` version in both `apps/desktop/package.json` and `apps/server/package.json`. The
 published release body includes the install matrix and checksum/provenance verification instructions
 for these artifacts.
@@ -42,7 +42,7 @@ never latest. Manual component `workflow_dispatch` runs also default to `public_
 they can produce unsigned debug builds for packaging, resource, and startup verification. Public Windows builds
 pass `--signed` to the desktop artifact builder, sign the outer setup, and verify Authenticode
 status and the configured publisher on both the setup executable and the installed
-`desktop\\Jarvis.exe` before upload. Public macOS builds similarly require signed/stapled output.
+`desktop\\Circe.exe` before upload. Public macOS builds similarly require signed/stapled output.
 Before upload the macOS workflow verifies the mounted DMG's bundle identity,
 hardened-runtime signature, Gatekeeper assessment,
 notarization ticket stapling, and an exact event-driven startup receipt (`version`, `platform`,
@@ -51,7 +51,7 @@ and `phase`). Signed macOS builds also require either `CLERK_PUBLISHABLE_KEY` or
 passkey source cannot consume a full packaging run.
 
 Before any release mutation, the coordinator downloads the exact Actions artifacts, restores the
-`Jarvis-Setup.exe` alias, checks the exact filename set, SHA-256 sidecars, provenance versions,
+`Circe-Setup.exe` alias, checks the exact filename set, SHA-256 sidecars, provenance versions,
 provenance source commit, and artifact digests, then writes `SHA256SUMS`. Only after those checks
 does the single promotion job create or reuse a draft release targeting the dispatch commit. A
 retry reconciles that draft by immutable release ID: it retains an existing asset only when its
@@ -84,14 +84,14 @@ The dedicated `.github/workflows/headless-node-release.yml` workflow builds the 
 archive, checksum, and provenance sidecars from the requested version in
 `apps/server/package.json`. It supports reusable `workflow_call` and manual `workflow_dispatch`
 invocations only; it has no stable tag trigger and never publishes a GitHub Release itself. The
-Jarvis core coordinator downloads its verified 14-day Actions artifacts and owns the draft and
+Circe core coordinator downloads its verified 14-day Actions artifacts and owns the draft and
 publication steps described above.
 
 ## Disabled upstream T3 release workflow (reference only)
 
 The following sections describe the upstream `.github/workflows/release.yml` graph from T3 Code.
-That workflow is disabled for this fork and must not be used to publish Jarvis artifacts. Jarvis
-releases use only `.github/workflows/jarvis-release.yml` and its reusable component workflows above.
+That workflow is disabled for this fork and must not be used to publish Circe artifacts. Circe
+releases use only `.github/workflows/circe-release.yml` and its reusable component workflows above.
 
 - Workflow: `.github/workflows/release.yml`
 - Triggers:
@@ -108,7 +108,7 @@ releases use only `.github/workflows/jarvis-release.yml` and its reusable compon
   - Pushing a `vX.Y.Z` tag by hand still works and builds exactly the tagged commit. Use it when
     the commit to ship is not the latest nightly, such as a cherry-picked fix on a release branch.
 - Runs lint, typecheck, and tests alongside artifact builds. Publishing waits for every check.
-- Reads the shared production T3 Connect relay URL and Clerk client configuration before packaging clients.
+- Reads the shared production Circe Connect relay URL and Clerk client configuration before packaging clients.
 - Builds four artifacts in parallel for both channels:
   - macOS `arm64` DMG
   - macOS `x64` DMG
@@ -139,7 +139,7 @@ The finalize job uses them to commit and push aligned package versions to `main`
 GitHub Release publication uses the repository-scoped workflow token so it has a rate-limit quota
 independent from the shared Release App installation.
 
-## T3 Connect relay deployment
+## Circe Connect relay deployment
 
 The relay is a shared control plane versioned separately from client releases. Stable and nightly
 client builds must point at the same relay so users see the same linked environments when switching
@@ -194,7 +194,7 @@ Personal stages reference the production-owned zones.
 Developers deploy personal stages locally rather than through pull-request automation:
 
 ```sh
-vp run --filter @t3tools/jarvis-relay deploy -- --stage "$USER" --env-file .env.local
+vp run --filter @circe/relay deploy -- --stage "$USER" --env-file .env.local
 ```
 
 ## Marketing site deployment
@@ -305,11 +305,11 @@ available.
 
 ## Desktop auto-update notes
 
-Automatic download and install for official Jarvis Full releases are disabled: the desktop
-runtime reports that ownership belongs to Jarvis Releases, and Jarvis Full never installs an
+Automatic download and install for official Circe Full releases are disabled: the desktop
+runtime reports that ownership belongs to Circe Releases, and Circe Full never installs an
 update on its own. The client still checks for updates on a startup delay plus interval and
 offers a manual download/install button in the desktop UI; the DMG remains the macOS
-install artifact. Jarvis Full does not publish or consume its own updater manifests or ZIP
+install artifact. Circe Full does not publish or consume its own updater manifests or ZIP
 payloads beyond what the nightly updater release carries for those manual checks.
 
 - Updater runtime: `apps/desktop/src/updates/DesktopUpdates.ts`.
@@ -323,12 +323,12 @@ payloads beyond what the nightly updater release carries for those manual checks
 - Repository slug source:
   - `T3CODE_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
-- Historical upstream updater assets (not published by Jarvis Full):
+- Historical upstream updater assets (not published by Circe Full):
   - platform installers (`.exe`, `.dmg`, and `.AppImage`)
   - channel metadata: `latest*.yml` for stable releases, `nightly*.yml` for nightly releases
   - `*.blockmap` files (used for differential downloads)
 - macOS metadata note:
-  - Jarvis Full does not publish macOS updater ZIPs or macOS updater manifests. Its signed and stapled DMG is the macOS release/install artifact.
+  - Circe Full does not publish macOS updater ZIPs or macOS updater manifests. Its signed and stapled DMG is the macOS release/install artifact.
 
 ### Windows payload topology and update validation
 
@@ -415,7 +415,7 @@ commit a version bump to `main`. Only run it when a real nightly release is acce
 
 Manual `channel=stable` is also a real stable-channel release in the upstream workflow.
 Omitting signing secrets there only makes platform artifacts unsigned; it does not prevent
-publication. Jarvis does not inherit that rule:
+publication. Circe does not inherit that rule:
 
 The core workflow has no non-publishing `workflow_dispatch` mode. Use component workflow manual
 dispatches (including the macOS workflow with its default `public_release: false`) or local quality
@@ -430,7 +430,7 @@ by invoking the artifact builder without `--signed`, but they are not release in
 
 ## 2) Apple signing + notarization setup (macOS)
 
-Stable Jarvis builds require these base signing/notarization secrets:
+Stable Circe builds require these base signing/notarization secrets:
 
 - `CSC_LINK`
 - `CSC_KEY_PASSWORD`
@@ -458,7 +458,7 @@ Checklist:
 
 1. Apple Developer account access:
    - Team has rights to create Developer ID certificates.
-2. When native passkeys are required, create an explicit App ID for `com.abstergo.jarvis` and
+2. When native passkeys are required, create an explicit App ID for `com.abstergo.circe` and
    enable Associated Domains.
 3. Create a `Developer ID Application` certificate and a compatible provisioning profile for that
    App ID with Associated Domains enabled.
@@ -473,8 +473,8 @@ Checklist:
    - `APPLE_API_KEY`: contents of the downloaded `.p8`
    - `APPLE_API_KEY_ID`: Key ID
    - `APPLE_API_ISSUER`: Issuer ID
-10. If enabling passkeys, complete the Clerk Native API and AASA setup in [T3 Connect setup](./connect-setup.md#desktop-passkeys).
-11. Dispatch the Jarvis coordinator with `channel=stable` and confirm macOS artifacts are
+10. If enabling passkeys, complete the Clerk Native API and AASA setup in [Circe Connect setup](./connect-setup.md#desktop-passkeys).
+11. Dispatch the Circe coordinator with `channel=stable` and confirm macOS artifacts are
     signed/notarized. When passkeys are configured, also confirm the expected
     `com.apple.developer.associated-domains` entitlement.
 
@@ -509,8 +509,8 @@ Checklist:
 4. Grant service principal permissions required by Trusted Signing.
 5. Create a client secret for the service principal.
 6. Add Azure secrets listed above in GitHub Actions secrets.
-7. Dispatch the Jarvis core coordinator and confirm the Windows installer and installed
-   `desktop\\Jarvis.exe` report Authenticode `Valid` with the configured publisher.
+7. Dispatch the Circe core coordinator and confirm the Windows installer and installed
+   `desktop\\Circe.exe` report Authenticode `Valid` with the configured publisher.
 
 ## 4) Ongoing release checklist
 
@@ -534,7 +534,7 @@ Checklist:
   - Check all five base Apple secrets are populated and non-empty.
   - If native passkeys are intended, check the complete optional set: `APPLE_TEAM_ID`,
     `MACOS_PROVISIONING_PROFILE`, and `CLERK_PUBLISHABLE_KEY` or `CLERK_PASSKEY_RP_DOMAINS`.
-  - Confirm the provisioning profile belongs to `APPLE_TEAM_ID.com.abstergo.jarvis` and includes
+  - Confirm the provisioning profile belongs to `APPLE_TEAM_ID.com.abstergo.circe` and includes
     Associated Domains.
 - Windows build unsigned when expected signed:
   - Check all Azure ATS and auth secrets are populated and non-empty.

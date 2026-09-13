@@ -22,9 +22,9 @@ const makeEnvironment = (overrides: Record<string, unknown> = {}) =>
     platform: "linux",
     isPackaged: true,
     isDevelopment: false,
-    displayName: "Jarvis",
-    linuxDesktopEntryName: "jarvis.desktop",
-    linuxWmClass: "jarvis",
+    displayName: "Circe",
+    linuxDesktopEntryName: "circe.desktop",
+    linuxWmClass: "circe",
     linuxApplicationsDir: "/home/alice/.local/share/applications",
     appImagePath: Option.some("/home/alice/Applications/T3-Code.AppImage"),
     path: { join: (...parts: ReadonlyArray<string>) => parts.join("/") },
@@ -110,7 +110,7 @@ describe("DesktopLinuxUrlHandler", () => {
     const entry = DesktopLinuxUrlHandler.renderUrlHandlerDesktopEntry({
       displayName: "T3 Code (Nightly)",
       execTarget: '/home/al ice/Apps/T3 "100%" $HOME\\x.AppImage',
-      scheme: "jarvis",
+      scheme: "circe",
     });
 
     assert.include(entry, "[Desktop Entry]");
@@ -124,34 +124,34 @@ describe("DesktopLinuxUrlHandler", () => {
     );
     assert.include(entry, "NoDisplay=true");
     assert.notInclude(entry, "StartupWMClass=");
-    assert.include(entry, "MimeType=x-scheme-handler/jarvis;");
+    assert.include(entry, "MimeType=x-scheme-handler/circe;");
   });
 
   it("carries structured context on registration errors", () => {
     const writeError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({
       step: "write-desktop-entry",
-      scheme: "jarvis",
-      desktopEntryPath: "/home/alice/.local/share/applications/jarvis.desktop",
+      scheme: "circe",
+      desktopEntryPath: "/home/alice/.local/share/applications/circe.desktop",
 
       cause: new Error("boom"),
     });
     assert.equal(
       writeError.message,
-      "Failed to register the jarvis:// URL handler (step: write-desktop-entry).",
+      "Failed to register the circe:// URL handler (step: write-desktop-entry).",
     );
     assert.equal(
       writeError.desktopEntryPath,
-      "/home/alice/.local/share/applications/jarvis.desktop",
+      "/home/alice/.local/share/applications/circe.desktop",
     );
 
     const exitError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({
       step: "set-default-handler",
-      scheme: "jarvis",
+      scheme: "circe",
       exitCode: 4,
     });
     assert.equal(
       exitError.message,
-      "Failed to register the jarvis:// URL handler (step: set-default-handler, xdg-mime exit code 4).",
+      "Failed to register the circe:// URL handler (step: set-default-handler, xdg-mime exit code 4).",
     );
   });
 
@@ -163,16 +163,16 @@ describe("DesktopLinuxUrlHandler", () => {
 
       assert.deepEqual(recorded.directories, ["/home/alice/.local/share/applications"]);
       assert.equal(recorded.files.length, 1);
-      assert.equal(recorded.files[0]?.path, "/home/alice/.local/share/applications/jarvis.desktop");
+      assert.equal(recorded.files[0]?.path, "/home/alice/.local/share/applications/circe.desktop");
       assert.include(
         recorded.files[0]?.content,
         'Exec="/home/alice/Applications/T3-Code.AppImage" %U',
       );
-      assert.include(recorded.files[0]?.content, "MimeType=x-scheme-handler/jarvis;");
+      assert.include(recorded.files[0]?.content, "MimeType=x-scheme-handler/circe;");
       assert.deepEqual(recorded.commands, [
         {
           command: "xdg-mime",
-          args: ["default", "jarvis.desktop", "x-scheme-handler/jarvis"],
+          args: ["default", "circe.desktop", "x-scheme-handler/circe"],
         },
       ]);
     });
@@ -197,9 +197,9 @@ describe("DesktopLinuxUrlHandler", () => {
     return Effect.gen(function* () {
       yield* runRegister(recorded, {
         existingEntry: DesktopLinuxUrlHandler.renderUrlHandlerDesktopEntry({
-          displayName: "Jarvis",
+          displayName: "Circe",
           execTarget: "/home/alice/Applications/T3-Code.AppImage",
-          scheme: "jarvis",
+          scheme: "circe",
         }),
       });
 
@@ -218,14 +218,14 @@ describe("DesktopLinuxUrlHandler", () => {
       yield* runRegister(unpackaged, {
         environment: {
           isPackaged: false,
-          linuxDesktopEntryName: "jarvis-dev.desktop",
+          linuxDesktopEntryName: "circe-dev.desktop",
         },
       });
 
       assert.deepEqual(nonLinux.files, []);
       assert.equal(
         unpackaged.files[0]?.path,
-        "/home/alice/.local/share/applications/jarvis-dev.desktop",
+        "/home/alice/.local/share/applications/circe-dev.desktop",
       );
       assert.deepEqual(unpackaged.commands, []);
     });
@@ -243,7 +243,7 @@ describe("DesktopLinuxUrlHandler", () => {
           module: "FileSystem",
           method: "writeFileString",
           description: "read-only filesystem",
-          pathOrDescriptor: "/home/alice/.local/share/applications/jarvis.desktop",
+          pathOrDescriptor: "/home/alice/.local/share/applications/circe.desktop",
         }),
       });
 

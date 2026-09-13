@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/jarvis-relay",
+  "name": "@circe/relay",
   "private": true,
   "type": "module",
   "scripts": {

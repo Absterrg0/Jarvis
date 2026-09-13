@@ -132,12 +132,9 @@ const configureMenu = (
   );
 
 describe("DesktopApplicationMenu", () => {
-  it("uses Jarvis branding in the update dialog", () => {
-    const message = DesktopApplicationMenu.formatDesktopUpToDateMessage(
-      "Jarvis (Nightly)",
-      "1.2.3",
-    );
-    assert.equal(message, "Jarvis (Nightly) 1.2.3 is currently the newest version available.");
+  it("uses Circe branding in the update dialog", () => {
+    const message = DesktopApplicationMenu.formatDesktopUpToDateMessage("Circe (Nightly)", "1.2.3");
+    assert.equal(message, "Circe (Nightly) 1.2.3 is currently the newest version available.");
     assert.notInclude(message, "T3 Code");
   });
 

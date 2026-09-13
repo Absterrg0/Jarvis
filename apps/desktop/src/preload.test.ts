@@ -25,26 +25,26 @@ import type { DesktopBridge } from "@t3tools/contracts";
 
 import {
   DESKTOP_PRELOAD_READY_CHANNEL,
-  JARVIS_LIVE_VOICE_STATE_CHANNEL,
-  JARVIS_LIVE_VOICE_TOGGLE_CHANNEL,
-  JARVIS_ORB_CATALOG_CHANNEL,
-  JARVIS_ORB_SELECT_CHANNEL,
+  CIRCE_LIVE_VOICE_STATE_CHANNEL,
+  CIRCE_LIVE_VOICE_TOGGLE_CHANNEL,
+  CIRCE_ORB_CATALOG_CHANNEL,
+  CIRCE_ORB_SELECT_CHANNEL,
 } from "./ipc/channels.ts";
 import {
-  createJarvisLiveVoiceToggleHub,
-  createJarvisOrbSelectHub,
+  createCirceLiveVoiceToggleHub,
+  createCirceOrbSelectHub,
   createMenuActionHub,
   exposeDesktopBridge,
-  isJarvisOrbSelection,
+  isCirceOrbSelection,
 } from "./preload.ts";
 
 function liveVoiceToggleHandler(): ((event: unknown) => void) | undefined {
-  const call = ipcOn.mock.calls.find(([channel]) => channel === JARVIS_LIVE_VOICE_TOGGLE_CHANNEL);
+  const call = ipcOn.mock.calls.find(([channel]) => channel === CIRCE_LIVE_VOICE_TOGGLE_CHANNEL);
   return call?.[1] as ((event: unknown) => void) | undefined;
 }
 
 function orbSelectHandler(): ((event: unknown, selection: unknown) => void) | undefined {
-  const call = ipcOn.mock.calls.find(([channel]) => channel === JARVIS_ORB_SELECT_CHANNEL);
+  const call = ipcOn.mock.calls.find(([channel]) => channel === CIRCE_ORB_SELECT_CHANNEL);
   return call?.[1] as ((event: unknown, selection: unknown) => void) | undefined;
 }
 
@@ -61,7 +61,7 @@ describe("desktop preload bridge boundary", () => {
 
     // Main can fire the hotkey during startup, before React subscribes.
     handler?.({});
-    const unsubscribe = realBridge.jarvisLiveVoice?.onToggle(() => received.push(1));
+    const unsubscribe = realBridge.circeLiveVoice?.onToggle(() => received.push(1));
     await Promise.resolve();
 
     assert.deepEqual(received, [1]);
@@ -71,7 +71,7 @@ describe("desktop preload bridge boundary", () => {
   });
 
   it("replays every pre-subscription live-voice toggle", async () => {
-    const hub = createJarvisLiveVoiceToggleHub();
+    const hub = createCirceLiveVoiceToggleHub();
     const received: number[] = [];
 
     hub.emit();
@@ -91,10 +91,10 @@ describe("desktop preload bridge boundary", () => {
     const realBridge = exposeInMainWorld.mock.calls[0]?.[1] as DesktopBridge;
     send.mockClear();
 
-    realBridge.jarvisLiveVoice?.report({ enabled: true, active: true, status: "live" });
+    realBridge.circeLiveVoice?.report({ enabled: true, active: true, status: "live" });
 
     assert.deepEqual(send.mock.calls, [
-      [JARVIS_LIVE_VOICE_STATE_CHANNEL, { enabled: true, active: true, status: "live" }],
+      [CIRCE_LIVE_VOICE_STATE_CHANNEL, { enabled: true, active: true, status: "live" }],
     ]);
   });
 
@@ -117,15 +117,15 @@ describe("desktop preload bridge boundary", () => {
     const hub = createMenuActionHub();
     const received: string[] = [];
 
-    hub.emit("jarvis.live-voice-toggle");
+    hub.emit("circe.live-voice-toggle");
     hub.subscribe((action) => received.push(action));
     await Promise.resolve();
 
-    assert.deepEqual(received, ["jarvis.live-voice-toggle"]);
+    assert.deepEqual(received, ["circe.live-voice-toggle"]);
   });
 
   it("buffers orb selections that arrive before the reporter subscribes", async () => {
-    const hub = createJarvisOrbSelectHub();
+    const hub = createCirceOrbSelectHub();
     const received: Array<{ instanceId: string; model: string }> = [];
 
     hub.emit({ instanceId: "codex", model: "gpt-5" });
@@ -142,7 +142,7 @@ describe("desktop preload bridge boundary", () => {
   });
 
   it("preserves orb selection order across the pending flush gap", async () => {
-    const hub = createJarvisOrbSelectHub();
+    const hub = createCirceOrbSelectHub();
     const received: Array<{ instanceId: string; model: string }> = [];
 
     hub.emit({ instanceId: "codex", model: "gpt-5" });
@@ -158,17 +158,17 @@ describe("desktop preload bridge boundary", () => {
   });
 
   it("validates orb selection payloads and forwards the catalog", () => {
-    assert.isTrue(isJarvisOrbSelection({ instanceId: "codex", model: "gpt-5" }));
-    assert.isFalse(isJarvisOrbSelection({ instanceId: "codex" }));
-    assert.isFalse(isJarvisOrbSelection("codex"));
-    assert.isFalse(isJarvisOrbSelection(null));
+    assert.isTrue(isCirceOrbSelection({ instanceId: "codex", model: "gpt-5" }));
+    assert.isFalse(isCirceOrbSelection({ instanceId: "codex" }));
+    assert.isFalse(isCirceOrbSelection("codex"));
+    assert.isFalse(isCirceOrbSelection(null));
 
     // An earlier test replaces the exposed bridge with an empty one, so use
     // the import-time bridge captured before any test cleared the mock.
     const realBridge = importTimeBridge;
-    assert.isDefined(realBridge.jarvisOrb);
+    assert.isDefined(realBridge.circeOrb);
     send.mockClear();
-    realBridge?.jarvisOrb?.reportCatalog({
+    realBridge?.circeOrb?.reportCatalog({
       providers: [],
       selected: null,
       pendingSelection: null,
@@ -176,7 +176,7 @@ describe("desktop preload bridge boundary", () => {
     });
     assert.deepEqual(send.mock.calls, [
       [
-        JARVIS_ORB_CATALOG_CHANNEL,
+        CIRCE_ORB_CATALOG_CHANNEL,
         { providers: [], selected: null, pendingSelection: null, error: null },
       ],
     ]);
@@ -185,7 +185,7 @@ describe("desktop preload bridge boundary", () => {
     const handler = orbSelectHandler();
     assert.isDefined(handler);
     const received: unknown[] = [];
-    const unsubscribe = realBridge?.jarvisOrb?.onSelect((selection) => received.push(selection));
+    const unsubscribe = realBridge?.circeOrb?.onSelect((selection) => received.push(selection));
     handler?.({}, { instanceId: "codex" });
     assert.deepEqual(received, []);
     handler?.({}, { instanceId: "codex", model: "gpt-5" });

@@ -59,11 +59,9 @@ describe("relayOwnsManagedEndpointZone", () => {
 
 describe("relayResourceNameForStage", () => {
   it("isolates production and personal stages", () => {
-    expect(relayResourceNameForStage("t3-code-relay-traces", "prod")).toBe(
-      "t3-code-relay-traces-prod",
-    );
-    expect(relayResourceNameForStage("t3-code-relay-traces", "dev_julius")).toBe(
-      "t3-code-relay-traces-dev-julius",
+    expect(relayResourceNameForStage("circe-relay-traces", "prod")).toBe("circe-relay-traces-prod");
+    expect(relayResourceNameForStage("circe-relay-traces", "dev_julius")).toBe(
+      "circe-relay-traces-dev-julius",
     );
   });
 });
@@ -78,11 +76,11 @@ describe("managed endpoint names", () => {
     expect(managedEndpointHostname("dev_julius", ".example.com.", hash)).toBe(
       "dev-julius-abcdef0123456789.example.com",
     );
-    expect(managedEndpointHostname("prod", "jarvisrelay.com", hash)).toBe(
-      "prod-abcdef0123456789.jarvisrelay.com",
+    expect(managedEndpointHostname("prod", "circerelay.com", hash)).toBe(
+      "prod-abcdef0123456789.circerelay.com",
     );
     expect(managedEndpointTunnelName("dev_julius", hash)).toBe(
-      "jarvisrelay-managedendpoint-dev-julius-abcdef0123456789",
+      "circerelay-managedendpoint-dev-julius-abcdef0123456789",
     );
   });
 

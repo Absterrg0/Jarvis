@@ -1,18 +1,18 @@
 export const BRAND_ASSET_PATHS = {
-  // The Jarvis mark is the shipped ARIS product identity. The
+  // The Circe mark is the shipped Circe product identity. The
   // development/nightly/production T3 families below are preserved as
   // upstream attribution sources only; every shipped boot and favicon
-  // reference resolves to the Jarvis family.
-  jarvisVectorSource: "assets/jarvis/jarvis-mark.svg",
-  jarvisMasterPng: "assets/jarvis/jarvis-master.png",
-  jarvisIosIconPng: "assets/jarvis/jarvis-ios-1024.png",
-  jarvisMacIconPng: "assets/jarvis/jarvis-macos-1024.png",
-  jarvisLinuxIconPng: "assets/jarvis/jarvis-universal-1024.png",
-  jarvisWindowsIconIco: "assets/jarvis/jarvis-windows.ico",
-  jarvisWebFaviconIco: "assets/jarvis/jarvis-web-favicon.ico",
-  jarvisWebFavicon16Png: "assets/jarvis/jarvis-web-favicon-16x16.png",
-  jarvisWebFavicon32Png: "assets/jarvis/jarvis-web-favicon-32x32.png",
-  jarvisWebAppleTouchIconPng: "assets/jarvis/jarvis-web-apple-touch-180.png",
+  // reference resolves to the Circe family.
+  circeVectorSource: "assets/circe/circe-mark.svg",
+  circeMasterPng: "assets/circe/circe-master.png",
+  circeIosIconPng: "assets/circe/circe-ios-1024.png",
+  circeMacIconPng: "assets/circe/circe-macos-1024.png",
+  circeLinuxIconPng: "assets/circe/circe-universal-1024.png",
+  circeWindowsIconIco: "assets/circe/circe-windows.ico",
+  circeWebFaviconIco: "assets/circe/circe-web-favicon.ico",
+  circeWebFavicon16Png: "assets/circe/circe-web-favicon-16x16.png",
+  circeWebFavicon32Png: "assets/circe/circe-web-favicon-32x32.png",
+  circeWebAppleTouchIconPng: "assets/circe/circe-web-apple-touch-180.png",
 
   developmentIconComposerProject: "assets/dev/app-icon.icon",
   developmentIosIconPng: "assets/dev/blueprint-ios-1024.png",
@@ -46,18 +46,18 @@ export const BRAND_ASSET_PATHS = {
   developmentWebAppleTouchIconPng: "assets/dev/blueprint-web-apple-touch-180.png",
 } as const;
 
-export type WebAssetBrand = "development" | "jarvis" | "nightly" | "production";
+export type WebAssetBrand = "development" | "circe" | "nightly" | "production";
 
 export const WEB_ASSET_CHANNELS = ["latest", "nightly"] as const;
 
 export type WebAssetChannel = (typeof WEB_ASSET_CHANNELS)[number];
 
 export function resolveWebAssetBrandForChannel(_channel: WebAssetChannel): WebAssetBrand {
-  return "jarvis";
+  return "circe";
 }
 
 export function resolveWebAssetBrandForPackageVersion(_version: string): WebAssetBrand {
-  return "jarvis";
+  return "circe";
 }
 
 export interface IconOverride {
@@ -79,11 +79,11 @@ const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
     favicon32Png: BRAND_ASSET_PATHS.developmentWebFavicon32Png,
     appleTouchIconPng: BRAND_ASSET_PATHS.developmentWebAppleTouchIconPng,
   },
-  jarvis: {
-    faviconIco: BRAND_ASSET_PATHS.jarvisWebFaviconIco,
-    favicon16Png: BRAND_ASSET_PATHS.jarvisWebFavicon16Png,
-    favicon32Png: BRAND_ASSET_PATHS.jarvisWebFavicon32Png,
-    appleTouchIconPng: BRAND_ASSET_PATHS.jarvisWebAppleTouchIconPng,
+  circe: {
+    faviconIco: BRAND_ASSET_PATHS.circeWebFaviconIco,
+    favicon16Png: BRAND_ASSET_PATHS.circeWebFavicon16Png,
+    favicon32Png: BRAND_ASSET_PATHS.circeWebFavicon32Png,
+    appleTouchIconPng: BRAND_ASSET_PATHS.circeWebAppleTouchIconPng,
   },
   nightly: {
     faviconIco: BRAND_ASSET_PATHS.nightlyWebFaviconIco,
@@ -124,13 +124,13 @@ export function resolveWebIconOverrides(
   ];
 }
 
-// ARIS is the only product shipped from this fork. Dev, latest, and
-// nightly surfaces all serve the Jarvis mark under stable web filenames.
+// Circe is the only product shipped from this fork. Dev, latest, and
+// nightly surfaces all serve the Circe mark under stable web filenames.
 // The T3 families stay checked in for attribution; they are never resolved
 // for shipped output.
-export const DEVELOPMENT_ICON_OVERRIDES = resolveWebIconOverrides("jarvis", "dist/client");
+export const DEVELOPMENT_ICON_OVERRIDES = resolveWebIconOverrides("circe", "dist/client");
 
 export const DEVELOPMENT_PUBLIC_ICON_OVERRIDES = resolveWebIconOverrides(
-  "jarvis",
+  "circe",
   "apps/web/public",
 );

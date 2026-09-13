@@ -168,7 +168,7 @@ export class ManagedEndpointProvider extends Context.Service<
       readonly environmentId: string;
     }) => Effect.Effect<boolean, ManagedEndpointDeprovisioningFailed>;
   }
->()("@t3tools/jarvis-relay/environments/ManagedEndpointProvider") {}
+>()("@circe/relay/environments/ManagedEndpointProvider") {}
 
 interface ManagedEndpointTunnel {
   readonly id?: string | null;
@@ -226,7 +226,7 @@ export class ManagedEndpointTunnelClient extends Context.Service<
     ) => Effect.Effect<string, ManagedEndpointTunnelClientError>;
     readonly delete: (tunnelId: string) => Effect.Effect<unknown, ManagedEndpointTunnelClientError>;
   }
->()("@t3tools/jarvis-relay/environments/ManagedEndpointProvider/ManagedEndpointTunnelClient") {}
+>()("@circe/relay/environments/ManagedEndpointProvider/ManagedEndpointTunnelClient") {}
 
 export const layerTunnelClient = (client: ManagedEndpointTunnelClient["Service"]) =>
   Layer.succeed(ManagedEndpointTunnelClient, client);
@@ -278,7 +278,7 @@ export class ManagedEndpointDnsClient extends Context.Service<
       dnsRecordId: string,
     ) => Effect.Effect<unknown, ManagedEndpointDnsClientError>;
   }
->()("@t3tools/jarvis-relay/environments/ManagedEndpointProvider/ManagedEndpointDnsClient") {}
+>()("@circe/relay/environments/ManagedEndpointProvider/ManagedEndpointDnsClient") {}
 
 export const layerDnsClient = (client: ManagedEndpointDnsClient["Service"]) =>
   Layer.succeed(ManagedEndpointDnsClient, client);

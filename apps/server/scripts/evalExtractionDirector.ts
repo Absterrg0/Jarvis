@@ -2,12 +2,12 @@
 // OFFLINE extraction-to-Director eval. No model, no training, no inference.
 //
 // Scores actual candidate predictions through the shared production path:
-// adaptExtractionProposal -> prepareJarvisSemanticTurn -> interpretJarvisCommand.
+// adaptExtractionProposal -> prepareCirceSemanticTurn -> interpretCirceCommand.
 // Expected full commands come only from the external fixture file, never
 // from production helpers. Fixtures live outside Git and are marked
 // synthetic-external-unreviewed in every report.
 //
-// This covers the path the training owner's scripts/jarvis-extract/evaluate.py
+// This covers the path the training owner's scripts/circe-extract/evaluate.py
 // does not: that script scores extractor spans and policy actions only. It
 // never runs the shared Director, so Director routing, instruction, provider,
 // and needs-input behavior for extractor output was unmeasured until this file.
@@ -27,7 +27,7 @@
 //     "source": "Fix authentication.",
 //     "prediction": { "text": "Fix authentication.", "action": "start", "spans": [] },
 //     "expected": {
-//       "action": "start", "dispatchScope": "local", "project": "Jarvis",
+//       "action": "start", "dispatchScope": "local", "project": "Beacon",
 //       "task": null, "instruction": "Fix authentication.",
 //       "provider": "Codex", "needsInputReason": null
 //     }
@@ -62,14 +62,14 @@ import {
   type OrchestrationProjectShell,
   type ServerProvider,
 } from "@t3tools/contracts";
-import { adaptExtractionProposal } from "@t3tools/jarvis-core/extraction";
+import { adaptExtractionProposal } from "@circe/core/extraction";
 import {
-  interpretJarvisCommand,
-  prepareJarvisSemanticTurn,
-  type JarvisCommand,
-  type JarvisCommandContext,
-  type JarvisCommandTask,
-} from "@t3tools/jarvis-core/command";
+  interpretCirceCommand,
+  prepareCirceSemanticTurn,
+  type CirceCommand,
+  type CirceCommandContext,
+  type CirceCommandTask,
+} from "@circe/core/command";
 
 export class ExtractionDirectorFixturesMissingError extends Schema.TaggedError<ExtractionDirectorFixturesMissingError>()(
   "ExtractionDirectorFixturesMissingError",
@@ -198,10 +198,10 @@ export type ExtractionDirectorSummary = {
 
 // Synthetic eval catalog. Never shipped, never persisted. Titles are the
 // only strings fixtures may expect.
-const SYNTHETIC_PROJECT_JARVIS: OrchestrationProjectShell = {
-  id: ProjectId.make("extraction-director-project-jarvis"),
-  title: "Jarvis",
-  workspaceRoot: "/synthetic/jarvis",
+const SYNTHETIC_PROJECT_CIRCE: OrchestrationProjectShell = {
+  id: ProjectId.make("extraction-director-project-beacon"),
+  title: "Beacon",
+  workspaceRoot: "/synthetic/circe",
   defaultModelSelection: null,
   scripts: [],
   createdAt: "2026-09-01T00:00:00.000Z",
@@ -259,7 +259,7 @@ const SYNTHETIC_CLAUDE: ServerProvider = {
   ],
 };
 
-const SYNTHETIC_TASK_AUTH: JarvisCommandTask = {
+const SYNTHETIC_TASK_AUTH: CirceCommandTask = {
   threadId: ThreadId.make("extraction-director-thread-auth"),
   projectId: SYNTHETIC_PROJECT_RIVVL.id,
   projectTitle: "Rivvl",
@@ -268,23 +268,23 @@ const SYNTHETIC_TASK_AUTH: JarvisCommandTask = {
   state: "running",
 };
 
-const SYNTHETIC_TASK_DOCS: JarvisCommandTask = {
+const SYNTHETIC_TASK_DOCS: CirceCommandTask = {
   threadId: ThreadId.make("extraction-director-thread-docs"),
-  projectId: SYNTHETIC_PROJECT_JARVIS.id,
-  projectTitle: "Jarvis",
+  projectId: SYNTHETIC_PROJECT_CIRCE.id,
+  projectTitle: "Beacon",
   title: "Release docs",
   objective: "Write the release and upgrade documentation",
   state: "ready",
 };
 
-const SYNTHETIC_PROJECTS = [SYNTHETIC_PROJECT_JARVIS, SYNTHETIC_PROJECT_RIVVL] as const;
+const SYNTHETIC_PROJECTS = [SYNTHETIC_PROJECT_CIRCE, SYNTHETIC_PROJECT_RIVVL] as const;
 const SYNTHETIC_PROVIDERS = [SYNTHETIC_CODEX, SYNTHETIC_CLAUDE] as const;
 const SYNTHETIC_TASKS = [SYNTHETIC_TASK_AUTH, SYNTHETIC_TASK_DOCS] as const;
 
-export function buildExtractionDirectorContext(utterance: string): JarvisCommandContext {
+export function buildExtractionDirectorContext(utterance: string): CirceCommandContext {
   return {
     utterance,
-    currentProjectId: SYNTHETIC_PROJECT_JARVIS.id,
+    currentProjectId: SYNTHETIC_PROJECT_CIRCE.id,
     projects: [...SYNTHETIC_PROJECTS],
     aliases: [],
     tasks: SYNTHETIC_TASKS.map((task) => ({
@@ -315,12 +315,12 @@ function projectTitleById(id: unknown): string | null {
   return hit?.title ?? null;
 }
 
-function taskByThread(id: unknown): JarvisCommandTask | null {
+function taskByThread(id: unknown): CirceCommandTask | null {
   const hit = SYNTHETIC_TASKS.find((task) => String(task.threadId) === String(id));
   return hit ?? null;
 }
 
-function actualInstructionFor(command: JarvisCommand): string | null {
+function actualInstructionFor(command: CirceCommand): string | null {
   switch (command.type) {
     case "start":
       return command.objective;
@@ -339,7 +339,7 @@ function actualInstructionFor(command: JarvisCommand): string | null {
   }
 }
 
-function actualProjectFor(command: JarvisCommand): string | null {
+function actualProjectFor(command: CirceCommand): string | null {
   switch (command.type) {
     case "start":
       return projectTitleById(command.projectId);
@@ -362,7 +362,7 @@ function actualProjectFor(command: JarvisCommand): string | null {
   }
 }
 
-function actualTaskFor(command: JarvisCommand): string | null {
+function actualTaskFor(command: CirceCommand): string | null {
   switch (command.type) {
     case "continue":
     case "queue":
@@ -383,7 +383,7 @@ function actualTaskFor(command: JarvisCommand): string | null {
   }
 }
 
-function actualProviderFor(command: JarvisCommand): string | null {
+function actualProviderFor(command: CirceCommand): string | null {
   if (command.type !== "start" && command.type !== "review") return null;
   const hit = SYNTHETIC_PROVIDERS.find(
     (provider) => String(provider.instanceId) === String(command.modelSelection.instanceId),
@@ -508,7 +508,7 @@ export function scoreExtractionDirectorRow(
   }
   const actualAction = adapted.proposal.action;
   const context = buildExtractionDirectorContext(row.source);
-  const prepared = prepareJarvisSemanticTurn(context);
+  const prepared = prepareCirceSemanticTurn(context);
   if (prepared.status !== "ready") {
     const actualDispatchScope: DispatchScope = "none";
     return {
@@ -533,7 +533,7 @@ export function scoreExtractionDirectorRow(
         row.expected.needsInputReason !== null && prepared.reason === row.expected.needsInputReason,
     };
   }
-  const interpretation = interpretJarvisCommand(context, prepared, adapted.proposal);
+  const interpretation = interpretCirceCommand(context, prepared, adapted.proposal);
   if (interpretation.status === "needs-input") {
     const actualDispatchScope: DispatchScope = "none";
     return {
@@ -660,7 +660,7 @@ const encodeReport = Schema.encodeEffect(ReportPrettyJson);
 
 const EXTRACTION_DIRECTOR_LIMITATIONS = [
   "Single-node fixture: dispatchScope local means the Director accepted on the fixed synthetic catalog, none means it refused. This is not a multi-node mesh evaluation; TaskRefs here carry no node qualification.",
-  "Synthetic catalog only: two projects (Jarvis, Rivvl), two tasks, two providers. Expected names must match it.",
+  "Synthetic catalog only: two projects (Beacon, Rivvl), two tasks, two providers. Expected names must match it.",
   "Instruction compares by exact string equality against the deterministic Director dispatch text.",
   "Provider compares only for start and review commands; every other command expects null.",
   "Offline with the model disabled. Counts only; no thresholds, no pass verdict.",
@@ -757,7 +757,7 @@ export const evalExtractionDirectorCommand = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    "Offline extraction-to-Director eval through adaptExtractionProposal -> interpretJarvisCommand. Model disabled: no model flags exist. Training-owner evaluate.py scores extractor spans only and never runs this Director path.",
+    "Offline extraction-to-Director eval through adaptExtractionProposal -> interpretCirceCommand. Model disabled: no model flags exist. Training-owner evaluate.py scores extractor spans only and never runs this Director path.",
   ),
 );
 

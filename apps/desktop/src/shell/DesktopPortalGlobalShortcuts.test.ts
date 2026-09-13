@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 
 import {
-  JARVIS_PORTAL_VOICE_SHORTCUT_ID,
+  CIRCE_PORTAL_VOICE_SHORTCUT_ID,
   attachDesktopPortalGlobalShortcuts,
 } from "./DesktopPortalGlobalShortcuts.ts";
 
@@ -46,7 +46,7 @@ describe("DesktopPortalGlobalShortcuts", () => {
     const globalShortcuts = {
       CreateSession: vi.fn(async () => {
         callOrder.push("create");
-        if (registeredAppId !== "com.abstergo.jarvis") {
+        if (registeredAppId !== "com.abstergo.circe") {
           throw new Error("A valid app id is required");
         }
         emitResponse("/org/freedesktop/portal/desktop/request/1_88/cs_host", {
@@ -56,7 +56,7 @@ describe("DesktopPortalGlobalShortcuts", () => {
       }),
       BindShortcuts: vi.fn(async () => {
         emitResponse("/org/freedesktop/portal/desktop/request/1_88/bs_host", {
-          shortcuts: new TestVariant("a(sa{sv})", [[JARVIS_PORTAL_VOICE_SHORTCUT_ID, {}]]),
+          shortcuts: new TestVariant("a(sa{sv})", [[CIRCE_PORTAL_VOICE_SHORTCUT_ID, {}]]),
         });
         return "/request/bind";
       }),
@@ -86,7 +86,7 @@ describe("DesktopPortalGlobalShortcuts", () => {
     };
 
     const handle = await attachDesktopPortalGlobalShortcuts({
-      appId: "com.abstergo.jarvis",
+      appId: "com.abstergo.circe",
       instanceToken: "host",
       readCgroup,
       onActivated: vi.fn(),
@@ -103,7 +103,7 @@ describe("DesktopPortalGlobalShortcuts", () => {
     });
 
     expect(handle).not.toBeNull();
-    expect(Register).toHaveBeenCalledWith("com.abstergo.jarvis", {});
+    expect(Register).toHaveBeenCalledWith("com.abstergo.circe", {});
     expect(readCgroup).not.toHaveBeenCalled();
     expect(callOrder).toEqual(["register", "create"]);
     await handle?.close();
@@ -112,10 +112,10 @@ describe("DesktopPortalGlobalShortcuts", () => {
   it("falls back to the scope identity when the host registry rejects the app id", async () => {
     const busListeners = new Set<(message: never) => void>();
     const readCgroup = vi.fn(
-      () => "0::/user.slice/user-1000.slice/app.slice/app-aris-realtime-fallback.scope",
+      () => "0::/user.slice/user-1000.slice/app.slice/app-circe-realtime-fallback.scope",
     );
     const Register = vi.fn(async () => {
-      throw new Error("App info not found for 'com.abstergo.jarvis.realtime'");
+      throw new Error("App info not found for 'com.abstergo.circe.realtime'");
     });
     const emitResponse = (path: string, results: Record<string, unknown>) => {
       queueMicrotask(() => {
@@ -133,7 +133,7 @@ describe("DesktopPortalGlobalShortcuts", () => {
       }),
       BindShortcuts: vi.fn(async () => {
         emitResponse("/org/freedesktop/portal/desktop/request/1_90/bs_fallback", {
-          shortcuts: new TestVariant("a(sa{sv})", [[JARVIS_PORTAL_VOICE_SHORTCUT_ID, {}]]),
+          shortcuts: new TestVariant("a(sa{sv})", [[CIRCE_PORTAL_VOICE_SHORTCUT_ID, {}]]),
         });
         return "/request/bind";
       }),
@@ -163,7 +163,7 @@ describe("DesktopPortalGlobalShortcuts", () => {
     };
 
     const handle = await attachDesktopPortalGlobalShortcuts({
-      appId: "com.abstergo.jarvis.realtime",
+      appId: "com.abstergo.circe.realtime",
       instanceToken: "fallback",
       readCgroup,
       onActivated: vi.fn(),
@@ -182,7 +182,7 @@ describe("DesktopPortalGlobalShortcuts", () => {
     // Regression: a rejected host registration used to abort the whole
     // shortcut. It must fall back to the scope-derived identity and bind.
     expect(handle).not.toBeNull();
-    expect(Register).toHaveBeenCalledWith("com.abstergo.jarvis.realtime", {});
+    expect(Register).toHaveBeenCalledWith("com.abstergo.circe.realtime", {});
     expect(readCgroup).toHaveBeenCalledTimes(1);
     await handle?.close();
   });
@@ -237,7 +237,7 @@ describe("DesktopPortalGlobalShortcuts", () => {
     };
 
     const handle = await attachDesktopPortalGlobalShortcuts({
-      appId: "com.abstergo.jarvis",
+      appId: "com.abstergo.circe",
       instanceToken: "empty",
       onActivated: vi.fn(),
       onDeactivated: vi.fn(),
@@ -287,10 +287,10 @@ describe("DesktopPortalGlobalShortcuts", () => {
 
     try {
       const handle = await attachDesktopPortalGlobalShortcuts({
-        appId: "com.abstergo.jarvis",
+        appId: "com.abstergo.circe",
         instanceToken: "reject",
         readCgroup: () =>
-          "0::/user.slice/user-1000.slice/app.slice/app-com.abstergo.jarvis-test.scope",
+          "0::/user.slice/user-1000.slice/app.slice/app-com.abstergo.circe-test.scope",
         onActivated: vi.fn(),
         onDeactivated: vi.fn(),
         loadDbusNext: async () =>
@@ -324,7 +324,7 @@ describe("DesktopPortalGlobalShortcuts", () => {
     const Close = vi.fn(async () => undefined);
     const disconnect = vi.fn();
     const readCgroup = vi.fn(
-      () => "0::/user.slice/user-1000.slice/app.slice/app-com.abstergo.jarvis-test.scope",
+      () => "0::/user.slice/user-1000.slice/app.slice/app-com.abstergo.circe-test.scope",
     );
 
     const emitResponse = (path: string, results: Record<string, unknown>) => {
@@ -343,13 +343,13 @@ describe("DesktopPortalGlobalShortcuts", () => {
       }),
       ListShortcuts: vi.fn(async () => {
         emitResponse("/org/freedesktop/portal/desktop/request/1_99/ls_test", {
-          shortcuts: new TestVariant("a(sa{sv})", [[JARVIS_PORTAL_VOICE_SHORTCUT_ID, {}]]),
+          shortcuts: new TestVariant("a(sa{sv})", [[CIRCE_PORTAL_VOICE_SHORTCUT_ID, {}]]),
         });
         return "/request/list";
       }),
       BindShortcuts: vi.fn(async () => {
         emitResponse("/org/freedesktop/portal/desktop/request/1_99/bs_test", {
-          shortcuts: new TestVariant("a(sa{sv})", [[JARVIS_PORTAL_VOICE_SHORTCUT_ID, {}]]),
+          shortcuts: new TestVariant("a(sa{sv})", [[CIRCE_PORTAL_VOICE_SHORTCUT_ID, {}]]),
         });
         return "/request/bind";
       }),
@@ -383,7 +383,7 @@ describe("DesktopPortalGlobalShortcuts", () => {
     };
 
     const handle = await attachDesktopPortalGlobalShortcuts({
-      appId: "com.abstergo.jarvis",
+      appId: "com.abstergo.circe",
       instanceToken: "test",
       readCgroup,
       onActivated,
@@ -408,7 +408,7 @@ describe("DesktopPortalGlobalShortcuts", () => {
       "/org/freedesktop/portal/desktop/session/test",
       expect.arrayContaining([
         [
-          JARVIS_PORTAL_VOICE_SHORTCUT_ID,
+          CIRCE_PORTAL_VOICE_SHORTCUT_ID,
           expect.objectContaining({ preferred_trigger: expect.any(TestVariant) }),
         ],
       ]),
@@ -418,24 +418,24 @@ describe("DesktopPortalGlobalShortcuts", () => {
 
     shortcutListeners.get("Activated")?.(
       "/org/freedesktop/portal/desktop/session/other",
-      JARVIS_PORTAL_VOICE_SHORTCUT_ID,
+      CIRCE_PORTAL_VOICE_SHORTCUT_ID,
     );
     shortcutListeners.get("Deactivated")?.(
       "/org/freedesktop/portal/desktop/session/other",
-      JARVIS_PORTAL_VOICE_SHORTCUT_ID,
+      CIRCE_PORTAL_VOICE_SHORTCUT_ID,
     );
     expect(onActivated).not.toHaveBeenCalled();
     expect(onDeactivated).not.toHaveBeenCalled();
     shortcutListeners.get("Activated")?.(
       "/org/freedesktop/portal/desktop/session/test",
-      JARVIS_PORTAL_VOICE_SHORTCUT_ID,
+      CIRCE_PORTAL_VOICE_SHORTCUT_ID,
     );
     shortcutListeners.get("Deactivated")?.(
       "/org/freedesktop/portal/desktop/session/test",
-      JARVIS_PORTAL_VOICE_SHORTCUT_ID,
+      CIRCE_PORTAL_VOICE_SHORTCUT_ID,
     );
-    expect(onActivated).toHaveBeenCalledWith(JARVIS_PORTAL_VOICE_SHORTCUT_ID);
-    expect(onDeactivated).toHaveBeenCalledWith(JARVIS_PORTAL_VOICE_SHORTCUT_ID);
+    expect(onActivated).toHaveBeenCalledWith(CIRCE_PORTAL_VOICE_SHORTCUT_ID);
+    expect(onDeactivated).toHaveBeenCalledWith(CIRCE_PORTAL_VOICE_SHORTCUT_ID);
 
     await handle?.close();
     expect(Close).toHaveBeenCalledTimes(1);

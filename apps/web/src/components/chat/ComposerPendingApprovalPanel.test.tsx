@@ -16,12 +16,12 @@ describe("ComposerPendingApprovalPanel", () => {
           detail,
         }}
         pendingCount={1}
-        projectTitle="Jarvis"
+        projectTitle="Circe"
       />,
     );
 
     expect(markup).toContain("Permission needed");
-    expect(markup).toContain("in Jarvis");
+    expect(markup).toContain("in Circe");
     expect(markup).toContain('data-approval-detail="complete"');
     expect(markup).toContain('aria-label="Command"');
     expect(markup).toContain('role="group"');
@@ -66,7 +66,7 @@ describe("ComposerPendingApprovalPanel", () => {
           detail: "Allow ChatGPT to use Safari?",
         }}
         pendingCount={1}
-        projectTitle="Jarvis"
+        projectTitle="Circe"
       />,
     );
 
@@ -89,7 +89,7 @@ describe("ComposerPendingApprovalPanel", () => {
           detail,
         }}
         pendingCount={1}
-        projectTitle="Jarvis"
+        projectTitle="Circe"
       />,
     );
 

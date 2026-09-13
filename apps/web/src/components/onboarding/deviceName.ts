@@ -5,7 +5,7 @@ import { SERVER_ENVIRONMENT_LABEL_MAX_LENGTH } from "@t3tools/contracts";
  * field. Pure helpers: validation, user-facing save failures, and helper copy.
  */
 
-export function validateJarvisNodeLabel(
+export function validateCirceNodeLabel(
   input: string,
 ):
   | { readonly valid: true; readonly value: string }
@@ -27,7 +27,7 @@ export function validateJarvisNodeLabel(
  * User-facing reason when the device save fails. The wizard keeps the typed
  * value so pressing Continue again retries the same rename.
  */
-export function describeJarvisOnboardingLabelSaveError(cause: unknown): string {
+export function describeCirceOnboardingLabelSaveError(cause: unknown): string {
   if (typeof cause === "object" && cause !== null) {
     const tag = (cause as { readonly _tag?: unknown })._tag;
     if (tag === "EnvironmentAuthorizationError") {
@@ -61,12 +61,12 @@ export function describeJarvisOnboardingLabelSaveError(cause: unknown): string {
  * Helper copy. Renaming from a remote view renames the connected node for
  * every client, so say so instead of implying a local-only label.
  */
-export function jarvisOnboardingDeviceNameHint(targetTag: string | null | undefined): string {
+export function circeOnboardingDeviceNameHint(targetTag: string | null | undefined): string {
   if (targetTag !== undefined && targetTag !== null && targetTag !== "PrimaryConnectionTarget") {
     return (
       "This renames the connected node for every client. " +
       "To rename only your view, use Settings → Connections."
     );
   }
-  return "ARIS uses this name anywhere this node appears. It saves when you continue.";
+  return "Circe uses this name anywhere this node appears. It saves when you continue.";
 }

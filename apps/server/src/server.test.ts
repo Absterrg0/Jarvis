@@ -87,7 +87,7 @@ import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 import { vi } from "vite-plus/test";
-import { JarvisSemanticProposal } from "@t3tools/jarvis-core/command";
+import { CirceSemanticProposal } from "@circe/core/command";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 const decodeTransferThreadSnapshot = Schema.decodeUnknownEffect(
@@ -97,7 +97,7 @@ const decodeTransferShellSnapshot = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationShellSnapshot),
 );
 const encodeTestJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
-const decodeJarvisSemanticIntent = Schema.decodeUnknownEffect(JarvisSemanticProposal);
+const decodeCirceSemanticIntent = Schema.decodeUnknownEffect(CirceSemanticProposal);
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
@@ -126,12 +126,12 @@ import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
-import { JarvisControllerLive } from "./jarvis/Layers/JarvisController.ts";
-import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
-import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
+import { CirceControllerLive } from "./circe/Layers/CirceController.ts";
+import { CirceProjectLexiconLive } from "./circe/Layers/CirceProjectLexicon.ts";
+import { CirceTaskDeskLive } from "./circe/Layers/CirceTaskDesk.ts";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns.ts";
-import { JarvisFollowUpQueueLive } from "./jarvis/Layers/JarvisFollowUpQueue.ts";
-import { jarvisDesktopRendererOrigins } from "./jarvis/desktopOrigins.ts";
+import { CirceFollowUpQueueLive } from "./circe/Layers/CirceFollowUpQueue.ts";
+import { circeDesktopRendererOrigins } from "./circe/desktopOrigins.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
@@ -830,12 +830,12 @@ const buildAppUnderTest = (options?: {
       streamChanges: Stream.empty,
       ...options?.layers?.serverSettings,
     });
-    const jarvisControllerLayer = JarvisControllerLive.pipe(
+    const circeControllerLayer = CirceControllerLive.pipe(
       Layer.provideMerge(
         Layer.mergeAll(
-          JarvisTaskDeskLive,
-          JarvisProjectLexiconLive,
-          JarvisFollowUpQueueLive,
+          CirceTaskDeskLive,
+          CirceProjectLexiconLive,
+          CirceFollowUpQueueLive,
           ProjectionTurnRepositoryLive,
         ),
       ),
@@ -1056,7 +1056,7 @@ const buildAppUnderTest = (options?: {
 
     const appLayer = servedRoutesLayer
       .pipe(
-        Layer.provideMerge(jarvisControllerLayer),
+        Layer.provideMerge(circeControllerLayer),
         Layer.provide(resourceTelemetryLayer),
         Layer.provide(UsageService.layerTest),
         Layer.provide(
@@ -1183,7 +1183,7 @@ const buildAppUnderTest = (options?: {
         ),
         Layer.provide(
           Layer.mock(CloudCliTokenManager.CloudCliTokenManager)({
-            get: Effect.die(new Error("Unexpected T3 Connect CLI authorization request.")),
+            get: Effect.die(new Error("Unexpected Circe Connect CLI authorization request.")),
             getExisting: Effect.succeed(Option.none()),
             hasCredential: Effect.succeed(false),
             clear: Effect.void,
@@ -3429,7 +3429,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("serves the documented T3 Connect mint credential endpoint", () =>
+  it.effect("serves the documented Circe Connect mint credential endpoint", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 
@@ -3488,7 +3488,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("serves signed T3 Connect environment health checks", () =>
+  it.effect("serves signed Circe Connect environment health checks", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 
@@ -4317,7 +4317,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  for (const desktopOrigin of jarvisDesktopRendererOrigins) {
+  for (const desktopOrigin of circeDesktopRendererOrigins) {
     it.effect(`allows credentialed preflights from ${desktopOrigin} in development`, () =>
       Effect.gen(function* () {
         yield* buildAppUnderTest({
@@ -6325,23 +6325,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(TestClock.withLive),
   );
 
-  it.effect("keeps Jarvis execution on WS RPC and removes its HTTP surface", () =>
+  it.effect("keeps Circe execution on WS RPC and removes its HTTP surface", () =>
     Effect.gen(function* () {
-      yield* buildAppUnderTest({ config: { jarvisNodePreset: "controller" } });
+      yield* buildAppUnderTest({ config: { circeNodePreset: "controller" } });
 
       const cookie = yield* getAuthenticatedSessionCookieHeader();
       for (const path of [
-        "/api/orchestration/jarvis",
-        "/api/orchestration/jarvis/providers",
-        "/api/orchestration/jarvis/vocabulary",
-        "/api/orchestration/jarvis/project-aliases",
-        "/api/orchestration/jarvis/task-desk",
+        "/api/orchestration/circe",
+        "/api/orchestration/circe/providers",
+        "/api/orchestration/circe/vocabulary",
+        "/api/orchestration/circe/project-aliases",
+        "/api/orchestration/circe/task-desk",
       ]) {
         const httpResponse = yield* fetchEffect(yield* getHttpServerUrl(path), {
           headers: { cookie },
         });
         // With no static fallback configured, an unregistered path reaches
-        // the catch-all's 503 response. A Jarvis HTTP handler would have
+        // the catch-all's 503 response. A Circe HTTP handler would have
         // returned a typed auth or execution response instead.
         assert.equal(httpResponse.status, 503);
       }
@@ -6356,21 +6356,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         withWsRpcClient(
           yield* getWsServerUrl("/ws", { credential: defaultDesktopBootstrapToken }),
           (client) =>
-            client[WS_METHODS.jarvisExecute]({
+            client[WS_METHODS.circeExecute]({
               kind: "control",
               projectId: defaultProjectId,
               utterance: "This must also be rejected over WS.",
             }).pipe(Effect.result),
         ),
       );
-      if (wsResult._tag !== "Failure" || wsResult.failure._tag !== "JarvisExecutionError") {
-        assert.fail("Expected a Jarvis execution-unavailable error over WS");
+      if (wsResult._tag !== "Failure" || wsResult.failure._tag !== "CirceExecutionError") {
+        assert.fail("Expected a Circe execution-unavailable error over WS");
       }
       assert.equal(wsResult.failure.code, "execution-unavailable");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("routes Jarvis instructions through the selected T3 provider over WS RPC", () =>
+  it.effect("routes Circe instructions through the selected T3 provider over WS RPC", () =>
     Effect.gen(function* () {
       const commands: Array<OrchestrationCommand> = [];
       const createdThreadIds = new Set<ThreadId>();
@@ -6411,8 +6411,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       };
       const project = {
         id: defaultProjectId,
-        title: "Jarvis",
-        workspaceRoot: "/tmp/jarvis",
+        title: "Rivvl",
+        workspaceRoot: "/tmp/rivvl",
         defaultModelSelection: null,
         scripts: [],
         createdAt: "2026-08-12T00:00:00.000Z",
@@ -6438,7 +6438,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             effort: null,
             answer: null,
           };
-          return decodeJarvisSemanticIntent(intent).pipe(Effect.orDie);
+          return decodeCirceSemanticIntent(intent).pipe(Effect.orDie);
         },
       });
 
@@ -6451,7 +6451,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           serverSettings: {
             getSettings: Effect.succeed({
               ...DEFAULT_SERVER_SETTINGS,
-              jarvisDefaultModelSelection: {
+              circeDefaultModelSelection: {
                 instanceId: ProviderInstanceId.make("codex"),
                 model: "gpt-5.6-sol",
                 options: [{ id: "reasoningEffort", value: "high" }],
@@ -6543,7 +6543,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const result = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           Effect.gen(function* () {
-            const started = yield* client[WS_METHODS.jarvisExecute]({
+            const started = yield* client[WS_METHODS.circeExecute]({
               kind: "control",
               projectId: defaultProjectId,
               requestMetadata: {
@@ -6553,35 +6553,35 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   originInteractionId: "interaction-1",
                 },
               },
-              utterance: "Jarvis, implement device presence.",
+              utterance: "Circe, implement device presence.",
             });
-            const nodeMismatch = yield* client[WS_METHODS.jarvisExecute]({
+            const nodeMismatch = yield* client[WS_METHODS.circeExecute]({
               kind: "control",
               projectId: defaultProjectId,
               projectRef: {
                 nodeId: EnvironmentId.make("environment-other"),
                 projectId: defaultProjectId,
               },
-              utterance: "Jarvis, use Codex Sol high to implement device presence.",
+              utterance: "Circe, use Codex Sol high to implement device presence.",
             }).pipe(Effect.result);
-            const steered = yield* client[WS_METHODS.jarvisExecute]({
+            const steered = yield* client[WS_METHODS.circeExecute]({
               kind: "control",
               projectId: defaultProjectId,
               utterance: "Actually, use SQLite instead.",
             });
             includeLiveThreads = true;
-            const desk = yield* client[WS_METHODS.jarvisGetTaskDesk]({});
+            const desk = yield* client[WS_METHODS.circeGetTaskDesk]({});
             includeLiveThreads = false;
-            const projectQuestion = yield* client[WS_METHODS.jarvisExecute]({
+            const projectQuestion = yield* client[WS_METHODS.circeExecute]({
               kind: "control",
               projectId: defaultProjectId,
               requestMetadata: {
                 requestId: "ws-routed-project-question",
                 inputMode: "voice",
               },
-              utterance: "Switch to the Jervous project",
+              utterance: "Switch to the Rebel project",
             });
-            const staleProjectAnswer = yield* client[WS_METHODS.jarvisExecute]({
+            const staleProjectAnswer = yield* client[WS_METHODS.circeExecute]({
               kind: "control",
               projectId: defaultProjectId,
               clarificationFrameId: "00000000-0000-0000-0000-000000000000",
@@ -6591,28 +6591,28 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               projectQuestion.status === "needs-input"
                 ? projectQuestion.clarificationFrameId
                 : undefined;
-            const projectConfirmed = yield* client[WS_METHODS.jarvisExecute]({
+            const projectConfirmed = yield* client[WS_METHODS.circeExecute]({
               kind: "control",
               projectId: defaultProjectId,
               ...(questionFrameId === undefined ? {} : { clarificationFrameId: questionFrameId }),
               utterance: "yes",
             });
-            const vocabulary = yield* client[WS_METHODS.jarvisGetProjectVocabulary]({});
-            const rememberedProject = yield* client[WS_METHODS.jarvisExecute]({
+            const vocabulary = yield* client[WS_METHODS.circeGetProjectVocabulary]({});
+            const rememberedProject = yield* client[WS_METHODS.circeExecute]({
               kind: "control",
               projectId: defaultProjectId,
               requestMetadata: {
                 requestId: "ws-routed-remembered-project",
                 inputMode: "voice",
               },
-              utterance: "Switch to the Jervous project",
+              utterance: "Switch to the Rebel project",
             });
-            const removedAlias = yield* client[WS_METHODS.jarvisManageProjectAlias]({
+            const removedAlias = yield* client[WS_METHODS.circeManageProjectAlias]({
               action: "remove",
               projectId: defaultProjectId,
-              alias: "jervous",
+              alias: "rebel",
             });
-            const vocabularyAfterRemoval = yield* client[WS_METHODS.jarvisGetProjectVocabulary]({});
+            const vocabularyAfterRemoval = yield* client[WS_METHODS.circeGetProjectVocabulary]({});
             return {
               started,
               nodeMismatch,
@@ -6633,13 +6633,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(result.started.status, "started");
       if (
         result.nodeMismatch._tag !== "Failure" ||
-        result.nodeMismatch.failure._tag !== "JarvisExecutionError"
+        result.nodeMismatch.failure._tag !== "CirceExecutionError"
       ) {
-        assert.fail("Expected a Jarvis node mismatch error");
+        assert.fail("Expected a Circe node mismatch error");
       }
       assert.equal(result.nodeMismatch.failure.code, "node-mismatch");
       if (result.started.status !== "started") return;
-      assert.equal(result.started.objective, "Jarvis, implement device presence.");
+      assert.equal(result.started.objective, "Circe, implement device presence.");
       assert.deepEqual(result.started.taskRef, {
         executionNodeId: testEnvironmentDescriptor.environmentId,
         threadId: result.started.threadId,
@@ -6673,7 +6673,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isDefined(turnStartCommand);
       assert.equal(turnStartCommand?.type, "thread.turn.start");
       if (turnStartCommand?.type !== "thread.turn.start") return;
-      assert.equal(turnStartCommand.message.text, "Jarvis, implement device presence.");
+      assert.equal(turnStartCommand.message.text, "Circe, implement device presence.");
       assert.deepEqual(turnStartCommand.modelSelection, result.started.modelSelection);
       assert.equal(turnStartCommand.bootstrap, undefined);
       assert.equal(result.steered.status, "acknowledged");
@@ -6685,8 +6685,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(result.projectQuestion.status, "needs-input");
       if (result.projectQuestion.status !== "needs-input") return;
       assert.equal(result.projectQuestion.reason, "control-target-required");
-      assert.equal(result.projectQuestion.prompt, "Did you mean Jarvis?");
-      assert.deepEqual(result.projectQuestion.choices, ["Jarvis"]);
+      assert.equal(result.projectQuestion.prompt, "Did you mean Rivvl?");
+      assert.deepEqual(result.projectQuestion.choices, ["Rivvl"]);
       // The clarification carries a frame identity the answer must echo.
       const questionFrameId = result.projectQuestion.clarificationFrameId;
       assert.equal(typeof questionFrameId, "string");
@@ -6700,9 +6700,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         status: "acknowledged",
         action: "focused",
         projectId: defaultProjectId,
-        message: "I'll use Jarvis for new tasks.",
+        message: "I'll use Rivvl for new tasks.",
       });
-      assert.deepEqual(result.vocabulary[0]?.aliases, ["Jervous"]);
+      assert.deepEqual(result.vocabulary[0]?.aliases, ["Rebel"]);
       assert.deepEqual(result.rememberedProject, result.projectConfirmed);
       assert.isTrue(result.removedAlias.changed);
       assert.deepEqual(result.vocabularyAfterRemoval[0]?.aliases, []);

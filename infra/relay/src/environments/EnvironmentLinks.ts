@@ -197,7 +197,7 @@ export class EnvironmentLinks extends Context.Service<
       readonly environmentId: string;
     }) => Effect.Effect<void, EnvironmentLinkSetEnabledPersistenceError>;
   }
->()("@t3tools/jarvis-relay/environments/EnvironmentLinks") {}
+>()("@circe/relay/environments/EnvironmentLinks") {}
 
 function agentAwarenessDeliveryUserCondition(environmentId: string) {
   return and(

@@ -1,6 +1,6 @@
 # Desktop use
 
-Desktop use is an ARIS adapter at the node's authenticated MCP and WebSocket boundaries. It
+Desktop use is an Circe adapter at the node's authenticated MCP and WebSocket boundaries. It
 controls the OS session of that node, including when reached remotely. It does not route input
 to the controller's machine or depend on the Electron renderer. Provider and orchestration
 internals do not own desktop policy. Full and Controller provide desktop capability; Headless

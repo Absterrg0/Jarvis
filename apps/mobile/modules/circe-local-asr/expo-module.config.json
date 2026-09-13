@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["CirceLocalAsrModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.circelocalasr.CirceLocalAsrModule"]
+  }
+}

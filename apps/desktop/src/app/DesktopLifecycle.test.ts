@@ -110,13 +110,13 @@ describe("DesktopLifecycle", () => {
   it("relaunches an AppImage through its stable launcher with Linux sandbox disabled", () => {
     assert.deepEqual(
       DesktopLifecycle.resolveDesktopRelaunchOptions({
-        appImagePath: "/home/alice/Applications/Jarvis.AppImage",
-        argv: ["/tmp/.mount_Jarvis/jarvis", "--inspect"],
-        executablePath: "/tmp/.mount_Jarvis/jarvis",
+        appImagePath: "/home/alice/Applications/Circe.AppImage",
+        argv: ["/tmp/.mount_Circe/circe", "--inspect"],
+        executablePath: "/tmp/.mount_Circe/circe",
         platform: "linux",
       }),
       {
-        execPath: "/home/alice/Applications/Jarvis.AppImage",
+        execPath: "/home/alice/Applications/Circe.AppImage",
         args: ["--no-sandbox", "--inspect"],
       },
     );
@@ -126,12 +126,12 @@ describe("DesktopLifecycle", () => {
     assert.deepEqual(
       DesktopLifecycle.resolveDesktopRelaunchOptions({
         appImagePath: null,
-        argv: ["/usr/bin/jarvis", "--inspect"],
-        executablePath: "/usr/bin/jarvis",
+        argv: ["/usr/bin/circe", "--inspect"],
+        executablePath: "/usr/bin/circe",
         platform: "linux",
       }),
       {
-        execPath: "/usr/bin/jarvis",
+        execPath: "/usr/bin/circe",
         args: ["--inspect"],
       },
     );

@@ -66,7 +66,7 @@ describe("mobile themes", () => {
     }
   });
 
-  it("uses the ARIS graphite palette as the default", () => {
+  it("uses the Circe graphite palette as the default", () => {
     expect(readDefaultMobileThemeVariables("light")["--color-screen"]).toBe("#faf7f1");
     expect(readDefaultMobileThemeVariables("dark")["--color-screen"]).toBe("#16181b");
     expect(readDefaultMobileThemeVariables("light")["--color-user-bubble-skill-foreground"]).toBe(

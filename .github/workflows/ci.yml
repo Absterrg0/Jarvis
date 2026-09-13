@@ -46,31 +46,31 @@ jobs:
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
-      - name: Lint Jarvis-owned paths
+      - name: Lint Circe-owned paths
         run: >-
           vp lint
           apps/desktop/src/app
-          apps/web/src/components/jarvis
-          packages/jarvis-core/src
-          packages/jarvis-client-runtime/src
+          apps/web/src/components/circe
+          packages/circe-core/src
+          packages/circe-client-runtime/src
           scripts/build-desktop-artifact.ts
           scripts/build-windows-setup.ts
           scripts/fork-workflow-policy.test.ts
-          scripts/jarvis-release-*.ts
-          scripts/verify-jarvis-release.*
+          scripts/circe-release-*.ts
+          scripts/verify-circe-release.*
           scripts/verify-windows-setup.*
           scripts/windows-setup.*
           --report-unused-disable-directives
 
-      - name: Typecheck Jarvis runtime packages
-        # Include the server workspace so its focused Jarvis composition stays typechecked.
+      - name: Typecheck Circe runtime packages
+        # Include the server workspace so its focused Circe composition stays typechecked.
         run: >-
           vp run
           --filter t3
           --filter @t3tools/web
           --filter @t3tools/desktop
-          --filter @t3tools/jarvis-core
-          --filter @t3tools/jarvis-client-runtime
+          --filter @circe/core
+          --filter @circe/client-runtime
           --filter @t3tools/scripts
           typecheck
 

@@ -8,7 +8,7 @@ import * as Semaphore from "effect/Semaphore";
 import {
   EnvironmentId,
   ProjectId,
-  type JarvisProjectRef,
+  type CirceProjectRef,
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
@@ -29,8 +29,8 @@ export interface Preferences {
    * to remote upstream; availability never overrides this choice.
    */
   readonly preferredVoiceStt?: "local" | "remote";
-  /** Last unambiguous project used from the Jarvis-first mobile surface. */
-  readonly preferredJarvisProjectRef?: JarvisProjectRef;
+  /** Last unambiguous project used from the Circe-first mobile surface. */
+  readonly preferredCirceProjectRef?: CirceProjectRef;
   readonly liveActivitiesEnabled?: boolean;
   readonly themeId?: MobileThemeId;
   readonly lightThemeId?: MobileThemeId;
@@ -103,7 +103,7 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
     preferredVoiceNodeId?: EnvironmentId;
     preferredVoiceStt?: "local" | "remote";
-    preferredJarvisProjectRef?: JarvisProjectRef;
+    preferredCirceProjectRef?: CirceProjectRef;
     liveActivitiesEnabled?: boolean;
     themeId?: MobileThemeId;
     lightThemeId?: MobileThemeId;
@@ -137,16 +137,16 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   }
 
   if (
-    typeof parsed.preferredJarvisProjectRef === "object" &&
-    parsed.preferredJarvisProjectRef !== null &&
-    typeof parsed.preferredJarvisProjectRef.nodeId === "string" &&
-    parsed.preferredJarvisProjectRef.nodeId.trim().length > 0 &&
-    typeof parsed.preferredJarvisProjectRef.projectId === "string" &&
-    parsed.preferredJarvisProjectRef.projectId.trim().length > 0
+    typeof parsed.preferredCirceProjectRef === "object" &&
+    parsed.preferredCirceProjectRef !== null &&
+    typeof parsed.preferredCirceProjectRef.nodeId === "string" &&
+    parsed.preferredCirceProjectRef.nodeId.trim().length > 0 &&
+    typeof parsed.preferredCirceProjectRef.projectId === "string" &&
+    parsed.preferredCirceProjectRef.projectId.trim().length > 0
   ) {
-    preferences.preferredJarvisProjectRef = {
-      nodeId: EnvironmentId.make(parsed.preferredJarvisProjectRef.nodeId.trim()),
-      projectId: ProjectId.make(parsed.preferredJarvisProjectRef.projectId.trim()),
+    preferences.preferredCirceProjectRef = {
+      nodeId: EnvironmentId.make(parsed.preferredCirceProjectRef.nodeId.trim()),
+      projectId: ProjectId.make(parsed.preferredCirceProjectRef.projectId.trim()),
     };
   }
 

@@ -29,17 +29,17 @@ describe("fork workflow policy", () => {
     const workflow = readWorkflow("ci.yml");
     expect(workflow).toMatch(/push:\s*\n\s+branches:\s*\n\s+- main/u);
     expect(workflow).not.toContain("run: vp check");
-    expect(workflow).toContain("Lint Jarvis-owned paths");
-    expect(workflow).toContain("Typecheck Jarvis runtime packages");
+    expect(workflow).toContain("Lint Circe-owned paths");
+    expect(workflow).toContain("Typecheck Circe runtime packages");
   });
 
-  it("keeps GitHub release mutation in the Jarvis transaction coordinator", () => {
+  it("keeps GitHub release mutation in the Circe transaction coordinator", () => {
     const mutator = /softprops\/action-gh-release|gh release (?:create|upload|edit|delete)/u;
-    const coordinator = readWorkflow("jarvis-release.yml");
-    expect(coordinator).toContain("scripts/jarvis-release-transaction.ts release-assets");
+    const coordinator = readWorkflow("circe-release.yml");
+    expect(coordinator).toContain("scripts/circe-release-transaction.ts release-assets");
     for (const name of NodeFS.readdirSync(workflowDirectory)) {
       if (!(name.endsWith(".yml") || name.endsWith(".yaml"))) continue;
-      if (name === "release.yml" || name === "jarvis-release.yml") continue;
+      if (name === "release.yml" || name === "circe-release.yml") continue;
       expect(readWorkflow(name), name).not.toMatch(mutator);
     }
   });

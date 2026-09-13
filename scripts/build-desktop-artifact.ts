@@ -23,7 +23,7 @@ import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" wit
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
-import { DESKTOP_FX_EXTRA_RESOURCE, stageJarvisFxResources } from "./jarvis-fx-packaging.ts";
+import { DESKTOP_FX_EXTRA_RESOURCE, stageCirceFxResources } from "./circe-fx-packaging.ts";
 import { BRAND_ASSET_PATHS, type WebAssetBrand } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import {
@@ -50,7 +50,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.abstergo.jarvis";
+const DESKTOP_APP_ID = "com.abstergo.circe";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
@@ -665,8 +665,8 @@ export class DesktopBuildNoArtifactsProducedError extends Schema.TaggedError<Des
   }
 }
 
-export class JarvisFxStagingError extends Schema.TaggedError<JarvisFxStagingError>()(
-  "JarvisFxStagingError",
+export class CirceFxStagingError extends Schema.TaggedError<CirceFxStagingError>()(
+  "CirceFxStagingError",
   {
     cause: Schema.Defect(),
   },
@@ -1027,8 +1027,8 @@ interface StagePackageJson {
   };
 }
 
-export const JARVIS_DESKTOP_PACKAGE_DESCRIPTION = "ARIS desktop build";
-export const JARVIS_DESKTOP_PACKAGE_AUTHOR = "Abstergo";
+export const CIRCE_DESKTOP_PACKAGE_DESCRIPTION = "Circe desktop build";
+export const CIRCE_DESKTOP_PACKAGE_AUTHOR = "Abstergo";
 
 export const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
 export const DESKTOP_ELECTRON_LANGUAGES = ["en-US"] as const;
@@ -1197,7 +1197,7 @@ export const resolveWslPrebuildArch = (arch: typeof BuildArch.Type): "x64" | "ar
  * fx publishes Linux and macOS binaries only, and a universal macOS build
  * would need both slices. Those targets keep the `~/.fx/bin/fx` fallback.
  */
-export const bundlesJarvisFxResources = (_input: {
+export const bundlesCirceFxResources = (_input: {
   readonly platform: typeof BuildPlatform.Type;
   readonly arch: typeof BuildArch.Type;
 }): boolean => false;
@@ -1217,8 +1217,8 @@ export const DESKTOP_EXTRA_RESOURCES = [
     to: "resource-monitor",
   },
   {
-    from: "apps/desktop/resources/jarvis-official-release.json",
-    to: "jarvis-official-release.json",
+    from: "apps/desktop/resources/circe-official-release.json",
+    to: "circe-official-release.json",
   },
 ] as const;
 export const LINUX_CAPTURE_EXTRA_RESOURCES = [
@@ -1303,7 +1303,7 @@ export class MissingMacPasskeyDomainConfigurationError extends Schema.TaggedErro
   {},
 ) {
   override get message(): string {
-    return "T3CODE_CLERK_PUBLISHABLE_KEY or T3CODE_CLERK_PASSKEY_RP_DOMAINS is required for signed macOS passkey builds.";
+    return "CIRCE_CLERK_PUBLISHABLE_KEY or CIRCE_CLERK_PASSKEY_RP_DOMAINS is required for signed macOS passkey builds.";
   }
 }
 
@@ -1314,7 +1314,7 @@ export class InvalidMacPasskeyPublishableKeyError extends Schema.TaggedError<Inv
   },
 ) {
   override get message(): string {
-    return "T3CODE_CLERK_PUBLISHABLE_KEY is invalid.";
+    return "CIRCE_CLERK_PUBLISHABLE_KEY is invalid.";
   }
 }
 
@@ -1392,12 +1392,12 @@ export function resolveMacPasskeySigningConfiguration(
     throw new MissingMacPasskeyProvisioningProfileError();
   }
 
-  const configuredRpDomains = env.T3CODE_CLERK_PASSKEY_RP_DOMAINS?.trim();
+  const configuredRpDomains = env.CIRCE_CLERK_PASSKEY_RP_DOMAINS?.trim();
   let rpDomains: readonly string[];
   if (configuredRpDomains) {
     rpDomains = configuredRpDomains.split(",").map(normalizePasskeyRpDomain);
   } else {
-    const publishableKey = env.T3CODE_CLERK_PUBLISHABLE_KEY?.trim();
+    const publishableKey = env.CIRCE_CLERK_PUBLISHABLE_KEY?.trim();
     if (!publishableKey) {
       throw new MissingMacPasskeyDomainConfigurationError();
     }
@@ -2741,9 +2741,9 @@ export function resolveDesktopUpdateChannel(version: string): "latest" | "nightl
 }
 
 export function resolveDesktopWebAssetBrand(_version: string): WebAssetBrand {
-  // Desktop artifacts are the official ARIS surface, same as every other
+  // Desktop artifacts are the official Circe surface, same as every other
   // shipped channel in this fork.
-  return "jarvis";
+  return "circe";
 }
 
 function isDesktopPreviewVersion(version: string): boolean {
@@ -2751,13 +2751,13 @@ function isDesktopPreviewVersion(version: string): boolean {
 }
 
 export function resolveDesktopBuildIconAssets(_version: string): DesktopBuildIconAssets {
-  // Desktop artifacts produced by this repository are official ARIS
+  // Desktop artifacts produced by this repository are official Circe
   // builds. Nightly still keeps its update/product channel semantics, but
   // should not silently fall back to the hosted T3 icon family.
   return {
-    macIconPng: BRAND_ASSET_PATHS.jarvisMacIconPng,
-    linuxIconPng: BRAND_ASSET_PATHS.jarvisLinuxIconPng,
-    windowsIconIco: BRAND_ASSET_PATHS.jarvisWindowsIconIco,
+    macIconPng: BRAND_ASSET_PATHS.circeMacIconPng,
+    linuxIconPng: BRAND_ASSET_PATHS.circeLinuxIconPng,
+    windowsIconIco: BRAND_ASSET_PATHS.circeWindowsIconIco,
   };
 }
 
@@ -2780,8 +2780,8 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "ARIS (Nightly)"
-    : (desktopPackageJson.productName ?? "ARIS");
+    ? "Circe (Nightly)"
+    : (desktopPackageJson.productName ?? "Circe");
 }
 
 /**
@@ -2832,7 +2832,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
-    artifactName: "Jarvis-${version}-${arch}.${ext}",
+    artifactName: "Circe-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
@@ -2881,13 +2881,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       category: "public.app-category.developer-tools",
       extendInfo: {
         NSScreenCaptureUsageDescription:
-          "ARIS captures the active window when you use the window capture shortcut.",
-        NSMicrophoneUsageDescription: "ARIS uses your microphone for voice input.",
+          "Circe captures the active window when you use the window capture shortcut.",
+        NSMicrophoneUsageDescription: "Circe uses your microphone for voice input.",
       },
       protocols: [
         {
-          name: "ARIS",
-          schemes: ["jarvis", "jarvis-dev"],
+          name: "Circe",
+          schemes: ["circe", "circe-dev"],
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
@@ -2928,21 +2928,21 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "jarvis",
+      executableName: "circe",
       icon: "icons",
       category: "Development",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
       // in the .desktop entry (Exec already gets %U), so browsers can hand
-      // jarvis:// OAuth callbacks to the app.
+      // circe:// OAuth callbacks to the app.
       protocols: [
         {
-          name: "ARIS",
-          schemes: ["jarvis", "jarvis-dev"],
+          name: "Circe",
+          schemes: ["circe", "circe-dev"],
         },
       ],
       desktop: {
         entry: {
-          StartupWMClass: "jarvis",
+          StartupWMClass: "circe",
         },
       },
     };
@@ -3361,7 +3361,7 @@ function windowsPayloadAllowedPaths(input: {
     windowsPayloadResourcePath("server.asar"),
     // This marker is intentionally shipped loose so every desktop surface can
     // detect the official distribution before loading the app bundle.
-    windowsPayloadResourcePath("jarvis-official-release.json"),
+    windowsPayloadResourcePath("circe-official-release.json"),
     windowsPayloadResourcePath("resource-monitor/t3-resource-monitor.exe"),
     // The WSL sidecar ships loose in resources/ when bundled; the validator
     // below enforces its presence, hash, and members, so the generic
@@ -4089,15 +4089,15 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
 
-  if (bundlesJarvisFxResources(options)) {
+  if (bundlesCirceFxResources(options)) {
     yield* Effect.tryPromise({
       try: () =>
-        stageJarvisFxResources({
+        stageCirceFxResources({
           platform: options.platform,
           arch: options.arch === "arm64" ? "arm64" : "x64",
           stageProdResourcesDir,
         }),
-      catch: (cause) => new JarvisFxStagingError({ cause }),
+      catch: (cause) => new CirceFxStagingError({ cause }),
     }).pipe(Effect.orDie);
   }
 
@@ -4105,8 +4105,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const macPasskeyConfigurationValues = [
     repoEnv.T3CODE_APPLE_TEAM_ID,
     repoEnv.T3CODE_MACOS_PROVISIONING_PROFILE,
-    repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY,
-    repoEnv.T3CODE_CLERK_PASSKEY_RP_DOMAINS,
+    repoEnv.CIRCE_CLERK_PUBLISHABLE_KEY,
+    repoEnv.CIRCE_CLERK_PASSKEY_RP_DOMAINS,
   ];
   const configuredMacPasskeySigning =
     options.platform === "mac" &&
@@ -4175,14 +4175,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "jarvis",
+    name: "circe",
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
     private: true,
     packageManager: rootPackageJson.packageManager,
-    description: JARVIS_DESKTOP_PACKAGE_DESCRIPTION,
-    author: JARVIS_DESKTOP_PACKAGE_AUTHOR,
+    description: CIRCE_DESKTOP_PACKAGE_DESCRIPTION,
+    author: CIRCE_DESKTOP_PACKAGE_AUTHOR,
     main: "apps/desktop/dist-electron/main.cjs",
     build: yield* createBuildConfig(
       options.platform,
@@ -4207,7 +4207,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
           }
         : undefined,
       bundlesWslRuntime({ arch: options.arch, prebuildPath: options.wslPrebuild }),
-      bundlesJarvisFxResources(options),
+      bundlesCirceFxResources(options),
     ),
     dependencies: stageDependencies,
     devDependencies: {

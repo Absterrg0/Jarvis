@@ -1,11 +1,11 @@
 # Brand icons
 
-## Jarvis raster family
+## Circe raster family
 
-`jarvis/jarvis-mark.svg` is the canonical Jarvis signal-aperture mark. Its
+`circe/circe-mark.svg` is the canonical Circe signal-aperture mark. Its
 derived PNG and ICO variants are generated deterministically with ImageMagick
-by `vp run jarvis:assets` and are kept in the dedicated `jarvis/` directory so
-hosted T3 channel assets remain unchanged. Run `vp run jarvis:assets:check` to
+by `vp run circe:assets` and are kept in the dedicated `circe/` directory so
+hosted T3 channel assets remain unchanged. Run `vp run circe:assets:check` to
 verify every desktop and web rendition is current.
 
 The three Icon Composer projects are the source of truth for full application icons:

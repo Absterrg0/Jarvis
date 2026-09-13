@@ -85,23 +85,23 @@ const DESKTOP_BACKEND_ENV_NAMES = [
   "T3CODE_DESKTOP_HTTPS_ENDPOINTS",
   "T3CODE_TAILSCALE_SERVE",
   "T3CODE_TAILSCALE_SERVE_PORT",
-  "JARVIS_NODE_PRESET",
+  "CIRCE_NODE_PRESET",
 ] as const;
 
 const T3CODE_CODEX_LAUNCH_ARGS_ENV = "T3CODE_CODEX_LAUNCH_ARGS";
-const JARVIS_CODEX_DEFAULT_LAUNCH_ARGS = "--disable apps";
+const CIRCE_CODEX_DEFAULT_LAUNCH_ARGS = "--disable apps";
 
-const resolveJarvisCodexDefaultLaunchArgs = (
+const resolveCirceCodexDefaultLaunchArgs = (
   distribution: DesktopEnvironment.DesktopDistribution,
 ): string | undefined =>
-  distribution === "unified-jarvis" || distribution === "official-jarvis"
-    ? process.env[T3CODE_CODEX_LAUNCH_ARGS_ENV]?.trim() || JARVIS_CODEX_DEFAULT_LAUNCH_ARGS
+  distribution === "unified-circe" || distribution === "official-circe"
+    ? process.env[T3CODE_CODEX_LAUNCH_ARGS_ENV]?.trim() || CIRCE_CODEX_DEFAULT_LAUNCH_ARGS
     : undefined;
 
-const resolveJarvisCodexDefaultEnvironment = (
+const resolveCirceCodexDefaultEnvironment = (
   distribution: DesktopEnvironment.DesktopDistribution,
 ): Record<string, string> => {
-  const launchArgs = resolveJarvisCodexDefaultLaunchArgs(distribution);
+  const launchArgs = resolveCirceCodexDefaultLaunchArgs(distribution);
   return launchArgs === undefined ? {} : { [T3CODE_CODEX_LAUNCH_ARGS_ENV]: launchArgs };
 };
 
@@ -539,7 +539,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       cwd: environment.backendCwd,
       env: {
         ...backendChildEnvPatch(),
-        ...resolveJarvisCodexDefaultEnvironment(environment.distribution),
+        ...resolveCirceCodexDefaultEnvironment(environment.distribution),
         ELECTRON_RUN_AS_NODE: "1",
       },
       // Primary wants process.env (PATH, dev-runner's T3CODE_HOME, etc.).
@@ -705,7 +705,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       ...parentEnvWithoutT3Home,
       ...backendChildEnvPatch(),
       ...forwardedEnv,
-      ...resolveJarvisCodexDefaultEnvironment(environment.distribution),
+      ...resolveCirceCodexDefaultEnvironment(environment.distribution),
       ...(wslEnv !== undefined ? { WSLENV: wslEnv } : {}),
     },
     // env is already a complete process.env minus T3CODE_HOME; pass it
@@ -753,7 +753,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const lastSlash = preflight.nodePath.lastIndexOf("/");
   const nodeBinDir = lastSlash > 0 ? preflight.nodePath.slice(0, lastSlash) : "/usr/bin";
   const launchPath = `${nodeBinDir}:${WSL_SERVER_SYSTEM_PATH}:${preflight.resolvedPath}`;
-  const codexDefaultLaunchArgs = resolveJarvisCodexDefaultLaunchArgs(environment.distribution);
+  const codexDefaultLaunchArgs = resolveCirceCodexDefaultLaunchArgs(environment.distribution);
   const codexDefaultEnvArgs =
     codexDefaultLaunchArgs === undefined
       ? []

@@ -417,9 +417,9 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                 startedAt,
                 finishedAt,
                 message: couldNotVerify
-                  ? "Update command completed, but ARIS could not verify the provider version."
+                  ? "Update command completed, but Circe could not verify the provider version."
                   : stillOutdated
-                    ? "Update command completed, but ARIS still detects an outdated provider version."
+                    ? "Update command completed, but Circe still detects an outdated provider version."
                     : "Provider updated.",
                 output: commandOutput(result),
               }),

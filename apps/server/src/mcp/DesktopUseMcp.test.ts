@@ -13,7 +13,7 @@ import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 
 import * as ServerConfig from "../config.ts";
-import * as DesktopUse from "../jarvis/desktopUse/DesktopUse.ts";
+import * as DesktopUse from "../circe/desktopUse/DesktopUse.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 

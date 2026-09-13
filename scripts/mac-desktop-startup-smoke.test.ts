@@ -18,7 +18,7 @@ describe("macOS desktop startup smoke helper", () => {
   it("launches the copied app through LaunchServices and quits only its exact bundle", () => {
     assert.include(source, 'const launchCommand = "/usr/bin/open"');
     assert.include(source, 'const launchArgs = ["-n", "-W", appBundle, "--args"]');
-    assert.include(source, 'const jarvisBundleId = "com.abstergo.jarvis"');
+    assert.include(source, 'const circeBundleId = "com.abstergo.circe"');
     assert.include(source, '"/usr/bin/osascript"');
     assert.include(source, "tell application id");
     assert.notInclude(source, "Contents/MacOS");

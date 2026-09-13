@@ -52,7 +52,7 @@ export class ManagedTunnelLimits extends Context.Service<
       readonly environmentId: string;
     }) => Effect.Effect<void, ManagedTunnelLimitExceeded | ManagedTunnelLimitPersistenceError>;
   }
->()("@t3tools/jarvis-relay/environments/ManagedTunnelLimits") {}
+>()("@circe/relay/environments/ManagedTunnelLimits") {}
 
 export const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;

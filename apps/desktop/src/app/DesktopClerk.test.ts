@@ -34,8 +34,8 @@ const makeDesktopClerkLayer = (isDevelopment = true, events: string[] = []) => {
     stateDir: "/tmp/t3-state",
     isDevelopment,
     appDataDirectory: "/tmp/app-data",
-    userDataDirName: isDevelopment ? "jarvis-dev" : "jarvis",
-    legacyUserDataDirName: isDevelopment ? "Jarvis (Dev)" : "Jarvis",
+    userDataDirName: isDevelopment ? "circe-dev" : "circe",
+    legacyUserDataDirName: isDevelopment ? "Circe (Dev)" : "Circe",
     path: { join: (...parts: ReadonlyArray<string>) => parts.join("/") },
   } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
 
@@ -88,7 +88,7 @@ describe("DesktopClerk", () => {
     // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- sync boundary is the behavior under test.
     Effect.runSync(Effect.scoped(Layer.build(makeDesktopClerkLayer(true, events))));
 
-    assert.deepEqual(events, ["setPath:userData:/tmp/app-data/jarvis-dev", "createClerkBridge"]);
+    assert.deepEqual(events, ["setPath:userData:/tmp/app-data/circe-dev", "createClerkBridge"]);
     assert.equal(cleanup.mock.calls.length, 1);
   });
 
@@ -109,7 +109,7 @@ describe("DesktopClerk", () => {
           {
             storage: storageAdapter,
             passkeys: true,
-            renderer: { scheme: "jarvis-dev", host: "app" },
+            renderer: { scheme: "circe-dev", host: "app" },
           },
         ],
       ]);
@@ -117,7 +117,7 @@ describe("DesktopClerk", () => {
       // The bridge acquires Electron's single-instance lock at creation, and
       // the lock both lives in and creates the userData directory — so the
       // real path must be set before the bridge exists.
-      assert.deepEqual(events, ["setPath:userData:/tmp/app-data/jarvis-dev", "createClerkBridge"]);
+      assert.deepEqual(events, ["setPath:userData:/tmp/app-data/circe-dev", "createClerkBridge"]);
       storageMock.mockClear();
       createClerkBridgeMock.mockClear();
     });
@@ -227,8 +227,8 @@ describe("DesktopClerk", () => {
     );
   });
   it.each([
-    { isDevelopment: true, scheme: "jarvis-dev" },
-    { isDevelopment: false, scheme: "jarvis" },
+    { isDevelopment: true, scheme: "circe-dev" },
+    { isDevelopment: false, scheme: "circe" },
   ])("configures the SDK with the $scheme renderer origin", ({ isDevelopment, scheme }) => {
     const bridge = { cleanup: vi.fn(), isPrimaryInstance: true };
     storageMock.mockReturnValue(storageAdapter);

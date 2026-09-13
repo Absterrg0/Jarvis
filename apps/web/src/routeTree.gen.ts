@@ -13,8 +13,8 @@ import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
-import { Route as JarvisRouteImport } from './routes/jarvis'
 import { Route as ConnectRouteImport } from './routes/connect'
+import { Route as CirceRouteImport } from './routes/circe'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
@@ -54,14 +54,14 @@ const PairRoute = PairRouteImport.update({
   path: '/pair',
   getParentRoute: () => rootRouteImport,
 } as any)
-const JarvisRoute = JarvisRouteImport.update({
-  id: '/jarvis',
-  path: '/jarvis',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ConnectRoute = ConnectRouteImport.update({
   id: '/connect',
   path: '/connect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CirceRoute = CirceRouteImport.update({
+  id: '/circe',
+  path: '/circe',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChatRoute = ChatRouteImport.update({
@@ -157,8 +157,8 @@ const ChatEnvironmentIdThreadIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
+  '/circe': typeof CirceRoute
   '/connect': typeof ConnectRoute
-  '/jarvis': typeof JarvisRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -181,8 +181,8 @@ export interface FileRoutesByFullPath {
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
 }
 export interface FileRoutesByTo {
+  '/circe': typeof CirceRoute
   '/connect': typeof ConnectRoute
-  '/jarvis': typeof JarvisRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -208,8 +208,8 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
+  '/circe': typeof CirceRoute
   '/connect': typeof ConnectRoute
-  '/jarvis': typeof JarvisRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -236,8 +236,8 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/circe'
     | '/connect'
-    | '/jarvis'
     | '/pair'
     | '/settings'
     | '/usage'
@@ -260,8 +260,8 @@ export interface FileRouteTypes {
     | '/draft/$draftId'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/circe'
     | '/connect'
-    | '/jarvis'
     | '/pair'
     | '/settings'
     | '/usage'
@@ -286,8 +286,8 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_chat'
+    | '/circe'
     | '/connect'
-    | '/jarvis'
     | '/pair'
     | '/settings'
     | '/usage'
@@ -313,8 +313,8 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
+  CirceRoute: typeof CirceRoute
   ConnectRoute: typeof ConnectRoute
-  JarvisRoute: typeof JarvisRoute
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
@@ -353,18 +353,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PairRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/jarvis': {
-      id: '/jarvis'
-      path: '/jarvis'
-      fullPath: '/jarvis'
-      preLoaderRoute: typeof JarvisRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/connect': {
       id: '/connect'
       path: '/connect'
       fullPath: '/connect'
       preLoaderRoute: typeof ConnectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/circe': {
+      id: '/circe'
+      path: '/circe'
+      fullPath: '/circe'
+      preLoaderRoute: typeof CirceRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_chat': {
@@ -546,8 +546,8 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
+  CirceRoute: CirceRoute,
   ConnectRoute: ConnectRoute,
-  JarvisRoute: JarvisRoute,
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,

@@ -99,7 +99,7 @@ import {
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
 import { onOpenCommandPalette } from "../commandPaletteBus";
-import { openJarvis } from "../jarvisBus";
+import { openCirce } from "../circeBus";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
@@ -1656,12 +1656,12 @@ function OpenCommandPaletteDialog(props: {
 
   actionItems.push({
     kind: "action",
-    value: "action:jarvis",
+    value: "action:circe",
     searchTerms: [...ARIS_COMMAND_CENTER_SEARCH_TERMS],
-    title: "Open ARIS",
-    description: "Open the ARIS command center",
+    title: "Open Circe",
+    description: "Open the Circe command center",
     icon: <AudioLinesIcon className={ITEM_ICON_CLASS} />,
-    run: async () => openJarvis(),
+    run: async () => openCirce(),
   });
 
   actionItems.push({

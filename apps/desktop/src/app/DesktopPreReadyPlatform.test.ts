@@ -89,7 +89,7 @@ describe("DesktopPreReadyPlatform", () => {
           desktopName = name;
         });
         writeFileSyncMock.mockImplementation((path: string, contents: string) => {
-          if (path === "/xdg/applications/com.abstergo.jarvis.desktop") desktopEntry = contents;
+          if (path === "/xdg/applications/com.abstergo.circe.desktop") desktopEntry = contents;
         });
 
         return Effect.scoped(
@@ -101,10 +101,10 @@ describe("DesktopPreReadyPlatform", () => {
               ),
             );
             const identity = yield* Effect.promise(() => portalIdentity);
-            assert.equal(identity.desktopName, "com.abstergo.jarvis.desktop");
+            assert.equal(identity.desktopName, "com.abstergo.circe.desktop");
             assert.include(identity.desktopEntry ?? "", 'Exec="/Applications/current.AppImage" %U');
-            assert.include(identity.desktopEntry ?? "", "Name=ARIS");
-            assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/jarvis;");
+            assert.include(identity.desktopEntry ?? "", "Name=Circe");
+            assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/circe;");
           }),
         ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
       },

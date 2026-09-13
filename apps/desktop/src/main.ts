@@ -55,11 +55,11 @@ import * as DesktopSnapShot from "./snapShot/DesktopSnapShot.ts";
 import * as DesktopAppSettings from "./settings/DesktopAppSettings.ts";
 import * as DesktopPreReadyPlatform from "./app/DesktopPreReadyPlatform.ts";
 import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
-import * as DesktopJarvisShell from "./shell/DesktopJarvisShell.ts";
+import * as DesktopCirceShell from "./shell/DesktopCirceShell.ts";
 import {
-  isDesktopJarvisOverlayHelper,
-  runDesktopJarvisOverlayHelper,
-} from "./shell/DesktopJarvisOverlayHelper.ts";
+  isDesktopCirceOverlayHelper,
+  runDesktopCirceOverlayHelper,
+} from "./shell/DesktopCirceOverlayHelper.ts";
 import { applyDesktopDbusNextElectronCompat } from "./shell/DesktopDbusNextElectronCompat.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
@@ -216,7 +216,7 @@ const desktopApplicationLayer = Layer.mergeAll(
   DesktopLifecycle.layer,
   desktopAppActivationLayer,
   DesktopApplicationMenu.layer,
-  DesktopJarvisShell.layer,
+  DesktopCirceShell.layer,
   DesktopLinuxUrlHandler.layer,
   DesktopShellEnvironment.layer,
   desktopSshLayer,
@@ -249,8 +249,8 @@ const desktopRuntimeLayer = desktopClerkLayer.pipe(
   Layer.provideMerge(DesktopPreReadyPlatform.layer),
 );
 
-if (isDesktopJarvisOverlayHelper(process.argv)) {
-  void runDesktopJarvisOverlayHelper();
+if (isDesktopCirceOverlayHelper(process.argv)) {
+  void runDesktopCirceOverlayHelper();
 } else {
   DesktopApp.program.pipe(Effect.provide(desktopRuntimeLayer), NodeRuntime.runMain);
 }

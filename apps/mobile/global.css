@@ -3,7 +3,7 @@
 @import "./generated-uniwind-themes.css";
 
 /* ─── Theme tokens ──────────────────────────────────────────────────── */
-/* ARIS mobile palette: warm paper in light, graphite in dark, amber for
+/* Circe mobile palette: warm paper in light, graphite in dark, amber for
    actions, focus, and rules. Surfaces stay solid so the static first paint
    matches the themed paint. Keep these values aligned with
    src/lib/mobileDefaultTheme.ts. */

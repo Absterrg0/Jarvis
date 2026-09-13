@@ -165,7 +165,7 @@ async function createHoistedFixture(root: string): Promise<{ deploy: string; sta
 
 describe("Windows runtime staging", () => {
   it("omits validated .bin shims and keeps hoisted dependencies physical after source removal", async () => {
-    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-windows-stage-test-"));
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-windows-stage-test-"));
     const { deploy, staged } = await createHoistedFixture(root);
     try {
       await copyWindowsRuntimePayload(deploy, staged);
@@ -308,7 +308,7 @@ describe("Windows runtime staging", () => {
     ];
     for (const testCase of cases) {
       const root = await FileSystem.mkdtemp(
-        Path.join(OS.tmpdir(), `jarvis-windows-stage-${testCase.name}-`),
+        Path.join(OS.tmpdir(), `circe-windows-stage-${testCase.name}-`),
       );
       const { deploy, staged } = await createHoistedFixture(root);
       try {

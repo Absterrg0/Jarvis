@@ -85,7 +85,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --app-scrollbar-thumb: rgb(217 217 217);
   --app-scrollbar-thumb-hover: rgb(191 191 191);
   /*
-   * ARIS geometry. Square panels and controls with crisp 1px rules.
+   * Circe geometry. Square panels and controls with crisp 1px rules.
    * Keep these values semantic so sidebar, palette, tooltip, and toolbar
    * controls cannot quietly drift apart.
    */
@@ -555,7 +555,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     background-color: color-mix(in oklab, var(--primary) 45%, transparent);
   }
   :root {
-    /* ARIS stage art is graphite with a restrained amber rule. Built-in
+    /* Circe stage art is graphite with a restrained amber rule. Built-in
        themes override them with their own pigments in the components layer. */
     --stage-art-top: oklch(0.78 0.02 85);
     --stage-art-mid: oklch(0.66 0.03 85);
@@ -954,10 +954,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   background-size: var(--surface-grain-size);
 }
 
-/* ARIS type hierarchy. Mono uppercase labels for sections, tight tracking
+/* Circe type hierarchy. Mono uppercase labels for sections, tight tracking
    for titles, tabular numbers for counts. Use these instead of ad-hoc
    text sizes so control center, settings, and chat share one voice. */
-@utility aris-section-label {
+@utility circe-section-label {
   font-family: var(--font-mono);
   font-size: 0.625rem;
   font-weight: 600;
@@ -966,12 +966,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   color: var(--contrast-muted-foreground);
 }
 
-@utility aris-title {
+@utility circe-title {
   letter-spacing: -0.01em;
   text-wrap: balance;
 }
 
-@utility aris-rule {
+@utility circe-rule {
   border-color: var(--contrast-border);
 }
 

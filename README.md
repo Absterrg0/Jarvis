@@ -1,8 +1,8 @@
 > [!NOTE]
-> This repository ships ARIS as the sole product composition over the T3 coding harness. Find
-> ARIS builds in the [GitHub Releases](https://github.com/Absterrg0/Jarvis/releases) page and
-> follow [ARIS installation instructions](./docs/user/install.md). The T3 material below
-> documents the upstream harness foundation; its links and package-manager commands are not ARIS
+> This repository ships Circe as the sole product composition over the T3 coding harness. Find
+> Circe builds in the [GitHub Releases](https://github.com/Absterrg0/Circe/releases) page and
+> follow [Circe installation instructions](./docs/user/install.md). The T3 material below
+> documents the upstream harness foundation; its links and package-manager commands are not Circe
 > installers.
 
 # T3 Code

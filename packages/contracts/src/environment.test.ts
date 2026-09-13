@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ExecutionEnvironmentDescriptor,
-  jarvisNodeCapabilitiesForPreset,
+  circeNodeCapabilitiesForPreset,
   ServerEnvironmentLabelInput,
 } from "./environment.ts";
 
@@ -37,17 +37,17 @@ describe("ExecutionEnvironmentDescriptor", () => {
     ).toBe(true);
   });
 
-  it("decodes canonical Jarvis node capabilities and keeps old descriptors compatible", () => {
-    expect(decodeDescriptor(descriptor).capabilities.jarvisNode).toBeUndefined();
+  it("decodes canonical Circe node capabilities and keeps old descriptors compatible", () => {
+    expect(decodeDescriptor(descriptor).capabilities.circeNode).toBeUndefined();
     expect(
       decodeDescriptor({
         ...descriptor,
         capabilities: {
           ...descriptor.capabilities,
-          jarvisNode: jarvisNodeCapabilitiesForPreset("headless"),
+          circeNode: circeNodeCapabilitiesForPreset("headless"),
         },
-      }).capabilities.jarvisNode,
-    ).toEqual(jarvisNodeCapabilitiesForPreset("headless"));
+      }).capabilities.circeNode,
+    ).toEqual(circeNodeCapabilitiesForPreset("headless"));
   });
 
   it("treats a missing attachment upload capability as unsupported", () => {

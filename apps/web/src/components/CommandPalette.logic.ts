@@ -20,17 +20,17 @@ export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
 
 /**
- * Search terms for the ARIS command center palette entry. The visible title
- * is "Open ARIS", so the title words must stay searchable. "jarvis" remains
+ * Search terms for the Circe command center palette entry. The visible title
+ * is "Open Circe", so the title words must stay searchable. "circe" remains
  * as a hidden compatibility alias for the legacy action value.
  */
 export const ARIS_COMMAND_CENTER_SEARCH_TERMS: readonly string[] = [
-  "aris",
+  "circe",
   "open",
   "command",
   "center",
   "control",
-  "jarvis",
+  "circe",
   "voice",
   "manager",
   "agent",

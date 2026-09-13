@@ -9,7 +9,7 @@ if (!appBundle || !receiptPath || !version || !targetArch || !logPath) {
   );
 }
 if (!appBundle.endsWith(".app") || !NodeFS.existsSync(appBundle)) {
-  throw new Error(`Jarvis app bundle does not exist: ${appBundle}`);
+  throw new Error(`Circe app bundle does not exist: ${appBundle}`);
 }
 if (targetArch !== "arm64" && targetArch !== "x64") {
   throw new Error(`Unsupported target architecture: ${targetArch}`);
@@ -28,11 +28,11 @@ if (hostArch !== targetArch) {
 
 const launchCommand = "/usr/bin/open";
 const launchArgs = ["-n", "-W", appBundle, "--args"];
-const jarvisBundleId = "com.abstergo.jarvis";
+const circeBundleId = "com.abstergo.circe";
 
 const expectedReceipt = {
   schemaVersion: 1,
-  product: "Jarvis",
+  product: "Circe",
   version,
   platform: "darwin",
   phase: "main-window-revealed",
@@ -48,11 +48,11 @@ const printBoundedLog = () => {
         : contents;
     const prefix =
       contents.length > MAX_LOG_BYTES
-        ? `\n--- Jarvis startup log (last ${MAX_LOG_BYTES} bytes) ---\n`
-        : "\n--- Jarvis startup log ---\n";
-    process.stderr.write(`${prefix}${bounded.toString("utf8")}\n--- end Jarvis startup log ---\n`);
+        ? `\n--- Circe startup log (last ${MAX_LOG_BYTES} bytes) ---\n`
+        : "\n--- Circe startup log ---\n";
+    process.stderr.write(`${prefix}${bounded.toString("utf8")}\n--- end Circe startup log ---\n`);
   } catch (cause) {
-    process.stderr.write(`Unable to read Jarvis startup log ${logPath}: ${String(cause)}\n`);
+    process.stderr.write(`Unable to read Circe startup log ${logPath}: ${String(cause)}\n`);
   }
 };
 
@@ -84,7 +84,7 @@ const readReceipt = () => {
 
 const child = NodeChildProcess.spawn(
   launchCommand,
-  [...launchArgs, `--jarvis-startup-probe=${receiptPath}`],
+  [...launchArgs, `--circe-startup-probe=${receiptPath}`],
   {
     stdio: ["ignore", "pipe", "pipe"],
   },
@@ -122,7 +122,7 @@ const stop = async () => {
     try {
       NodeChildProcess.execFileSync(
         "/usr/bin/osascript",
-        ["-e", `tell application id "${jarvisBundleId}" to quit`],
+        ["-e", `tell application id "${circeBundleId}" to quit`],
         { stdio: "ignore" },
       );
     } catch {
@@ -167,7 +167,7 @@ try {
       if (!settled) {
         finish(
           new Error(
-            `Jarvis LaunchServices handle PID ${pid} exited before startup receipt (code=${code ?? "none"}, signal=${signal ?? "none"}).`,
+            `Circe LaunchServices handle PID ${pid} exited before startup receipt (code=${code ?? "none"}, signal=${signal ?? "none"}).`,
           ),
         );
       }
@@ -175,9 +175,7 @@ try {
     timer = setTimeout(
       () =>
         finish(
-          new Error(
-            `Startup receipt timeout for captured Jarvis LaunchServices handle PID ${pid}.`,
-          ),
+          new Error(`Startup receipt timeout for captured Circe LaunchServices handle PID ${pid}.`),
         ),
       90_000,
     );
@@ -187,13 +185,13 @@ try {
   });
   startupSucceeded = true;
   process.stdout.write(
-    `Jarvis startup receipt verified for LaunchServices handle PID ${pid} on ${targetArch}.\n`,
+    `Circe startup receipt verified for LaunchServices handle PID ${pid} on ${targetArch}.\n`,
   );
 } finally {
   await stop();
   if (!startupSucceeded) {
     printBoundedLog();
   } else if (childExitResult && childExitResult.code !== 0 && childExitResult.signal === null) {
-    process.stderr.write(`Jarvis startup log: ${logPath}\n`);
+    process.stderr.write(`Circe startup log: ${logPath}\n`);
   }
 }

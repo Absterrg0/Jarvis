@@ -71,18 +71,18 @@ describe("electron development launcher", () => {
 
   it("keeps the native Electron executable name inside the branded macOS bundle", () => {
     const paths = resolveMacLauncherPaths(
-      "/repo/apps/desktop/.electron-runtime/Jarvis (Dev).app",
-      "Jarvis (Dev)",
+      "/repo/apps/desktop/.electron-runtime/Circe (Dev).app",
+      "Circe (Dev)",
     );
 
-    assert.equal(paths.launcherExecutableName, "Jarvis (Dev) Launcher");
+    assert.equal(paths.launcherExecutableName, "Circe (Dev) Launcher");
     assert.equal(
       paths.launcherBinaryPath,
-      "/repo/apps/desktop/.electron-runtime/Jarvis (Dev).app/Contents/MacOS/Jarvis (Dev) Launcher",
+      "/repo/apps/desktop/.electron-runtime/Circe (Dev).app/Contents/MacOS/Circe (Dev) Launcher",
     );
     assert.equal(
       paths.runtimeElectronBinaryPath,
-      "/repo/apps/desktop/.electron-runtime/Jarvis (Dev).app/Contents/MacOS/Electron",
+      "/repo/apps/desktop/.electron-runtime/Circe (Dev).app/Contents/MacOS/Electron",
     );
 
     const script = makeDevelopmentLauncherScript({
@@ -93,7 +93,7 @@ describe("electron development launcher", () => {
     });
     assert.include(
       script,
-      "exec '/repo/apps/desktop/.electron-runtime/Jarvis (Dev).app/Contents/MacOS/Electron'",
+      "exec '/repo/apps/desktop/.electron-runtime/Circe (Dev).app/Contents/MacOS/Electron'",
     );
     assert.notInclude(script, "node_modules/electron");
   });

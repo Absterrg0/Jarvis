@@ -1,7 +1,7 @@
 import type {
   DesktopBridge,
-  DesktopJarvisOrbCatalog,
-  DesktopJarvisOrbSelection,
+  DesktopCirceOrbCatalog,
+  DesktopCirceOrbSelection,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
@@ -36,7 +36,7 @@ const clientPlatform = process.platform;
 
 /**
  * Main-process actions can arrive immediately after the renderer-ready signal,
- * before React's Jarvis host effect has subscribed. Keep that narrow startup
+ * before React's Circe host effect has subscribed. Keep that narrow startup
  * gap durable while still broadcasting ordinary actions synchronously.
  */
 export function createMenuActionHub(): {
@@ -78,11 +78,11 @@ export function createMenuActionHub(): {
 const menuActionHub = createMenuActionHub();
 
 /**
- * The hotkey can fire before the Jarvis runtime subscribes. Keep every
+ * The hotkey can fire before the Circe runtime subscribes. Keep every
  * pre-subscription toggle durable so a fresh renderer does not drop presses
  * and repeated presses flip state the same number of times.
  */
-export function createJarvisLiveVoiceToggleHub(): {
+export function createCirceLiveVoiceToggleHub(): {
   readonly emit: () => void;
   readonly subscribe: (listener: () => void) => () => void;
 } {
@@ -119,19 +119,19 @@ export function createJarvisLiveVoiceToggleHub(): {
   };
 }
 
-const liveVoiceToggleHub = createJarvisLiveVoiceToggleHub();
+const liveVoiceToggleHub = createCirceLiveVoiceToggleHub();
 
 /**
  * Orb picker selections travel orb -> main -> renderer. The overlay can be
- * clicked before the Jarvis host effect subscribes, so keep that narrow
+ * clicked before the Circe host effect subscribes, so keep that narrow
  * startup gap durable the same way the live toggle does.
  */
-export function createJarvisOrbSelectHub(): {
-  readonly emit: (selection: DesktopJarvisOrbSelection) => void;
-  readonly subscribe: (listener: (selection: DesktopJarvisOrbSelection) => void) => () => void;
+export function createCirceOrbSelectHub(): {
+  readonly emit: (selection: DesktopCirceOrbSelection) => void;
+  readonly subscribe: (listener: (selection: DesktopCirceOrbSelection) => void) => () => void;
 } {
-  const listeners = new Set<(selection: DesktopJarvisOrbSelection) => void>();
-  const pending: DesktopJarvisOrbSelection[] = [];
+  const listeners = new Set<(selection: DesktopCirceOrbSelection) => void>();
+  const pending: DesktopCirceOrbSelection[] = [];
   let flushScheduled = false;
 
   const flush = (): void => {
@@ -162,24 +162,24 @@ export function createJarvisOrbSelectHub(): {
   };
 }
 
-export function isJarvisOrbSelection(value: unknown): value is DesktopJarvisOrbSelection {
+export function isCirceOrbSelection(value: unknown): value is DesktopCirceOrbSelection {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return typeof candidate.instanceId === "string" && typeof candidate.model === "string";
 }
 
-const orbSelectHub = createJarvisOrbSelectHub();
+const orbSelectHub = createCirceOrbSelectHub();
 
 ipcRenderer.on(IpcChannels.MENU_ACTION_CHANNEL, (_event, action: unknown) => {
   if (typeof action === "string") menuActionHub.emit(action);
 });
 
-ipcRenderer.on(IpcChannels.JARVIS_LIVE_VOICE_TOGGLE_CHANNEL, () => {
+ipcRenderer.on(IpcChannels.CIRCE_LIVE_VOICE_TOGGLE_CHANNEL, () => {
   liveVoiceToggleHub.emit();
 });
 
-ipcRenderer.on(IpcChannels.JARVIS_ORB_SELECT_CHANNEL, (_event, selection: unknown) => {
-  if (isJarvisOrbSelection(selection)) orbSelectHub.emit(selection);
+ipcRenderer.on(IpcChannels.CIRCE_ORB_SELECT_CHANNEL, (_event, selection: unknown) => {
+  if (isCirceOrbSelection(selection)) orbSelectHub.emit(selection);
 });
 
 function unwrapEnsureSshEnvironmentResult(result: unknown) {
@@ -214,18 +214,18 @@ const desktopBridge = {
     const result = ipcRenderer.sendSync(IpcChannels.GET_SYSTEM_LOCALE_CHANNEL);
     return typeof result === "string" ? result : null;
   },
-  jarvisLiveVoice: {
+  circeLiveVoice: {
     // Fire-and-forget: the tray and global shortcut read the latest reported
     // state; a dropped report is corrected by the next one.
     report: (state) => {
-      ipcRenderer.send(IpcChannels.JARVIS_LIVE_VOICE_STATE_CHANNEL, state);
+      ipcRenderer.send(IpcChannels.CIRCE_LIVE_VOICE_STATE_CHANNEL, state);
     },
     onToggle: (listener) => liveVoiceToggleHub.subscribe(listener),
   },
-  jarvisOrb: {
+  circeOrb: {
     // Fire-and-forget catalog push; the overlay renders the latest it got.
-    reportCatalog: (catalog: DesktopJarvisOrbCatalog) => {
-      ipcRenderer.send(IpcChannels.JARVIS_ORB_CATALOG_CHANNEL, catalog);
+    reportCatalog: (catalog: DesktopCirceOrbCatalog) => {
+      ipcRenderer.send(IpcChannels.CIRCE_ORB_CATALOG_CHANNEL, catalog);
     },
     onSelect: (listener) => orbSelectHub.subscribe(listener),
   },

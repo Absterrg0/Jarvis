@@ -22,13 +22,13 @@ function sliceWorkflowJob(workflow: string, jobName: string): string {
 
 describe("standalone Windows setup verifier", () => {
   it("verifies release metadata and installed payload bytes without repository imports", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-verify-test-"));
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "circe-verify-test-"));
     try {
-      const artifactName = "Jarvis-Setup-1.2.3-win-x64.exe";
+      const artifactName = "Circe-Setup-1.2.3-win-x64.exe";
       const manifestName = `${artifactName}.manifest.json`;
       const provenanceName = `${artifactName}.provenance.json`;
       const artifactPath = NodePath.join(root, artifactName);
-      const aliasPath = NodePath.join(root, "Jarvis-Setup.exe");
+      const aliasPath = NodePath.join(root, "Circe-Setup.exe");
       const manifestPath = NodePath.join(root, manifestName);
       const checksumPath = NodePath.join(root, `${artifactName}.sha256`);
       const provenancePath = NodePath.join(root, provenanceName);
@@ -38,7 +38,7 @@ describe("standalone Windows setup verifier", () => {
       const payloadSha256 = NodeCrypto.createHash("sha256").update(payload).digest("hex");
       const manifest = {
         format: 3,
-        product: "Jarvis",
+        product: "Circe",
         version: "1.2.3",
         platform: "windows",
         arch: "x64",
@@ -57,10 +57,10 @@ describe("standalone Windows setup verifier", () => {
       const manifestSha256 = NodeCrypto.createHash("sha256").update(manifestBytes).digest("hex");
       const provenance = {
         format: 1,
-        product: "Jarvis",
+        product: "Circe",
         artifactName,
         artifactSha256,
-        aliasName: "Jarvis-Setup.exe",
+        aliasName: "Circe-Setup.exe",
         manifestName,
         manifestSha256,
         provenanceName,
@@ -107,7 +107,7 @@ describe("standalone Windows setup verifier", () => {
 
   it("keeps clean acceptance source-free and gates publication", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/circe-setup-windows.yml"),
       "utf8",
     );
     const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
@@ -119,26 +119,26 @@ describe("standalone Windows setup verifier", () => {
     expect(workflow).not.toMatch(/gh release|softprops\/action-gh-release/u);
 
     const coordinator = await NodeFSP.readFile(
-      NodePath.join(repoRoot, ".github/workflows/jarvis-release.yml"),
+      NodePath.join(repoRoot, ".github/workflows/circe-release.yml"),
       "utf8",
     );
     expect(coordinator).toContain(
       "needs: [preflight, build_linux, build_windows, build_mac, build_headless]",
     );
-    expect(coordinator).toContain('cp "release-assets/$setup" release-assets/Jarvis-Setup.exe');
+    expect(coordinator).toContain('cp "release-assets/$setup" release-assets/Circe-Setup.exe');
     expect(coordinator).toContain("build_windows");
-    expect(coordinator).toContain("scripts/jarvis-release-transaction.ts release-assets");
+    expect(coordinator).toContain("scripts/circe-release-transaction.ts release-assets");
   });
 
   it("sets up pnpm before staging the standalone runtime", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/circe-setup-windows.yml"),
       "utf8",
     );
     const pnpmSetupStart = workflow.indexOf("      - name: Setup pnpm");
     const resolveStart = workflow.indexOf("      - id: resolve_version", pnpmSetupStart);
     const stageStart = workflow.indexOf("      - name: Stage standalone Windows runtime");
-    const stageEnd = workflow.indexOf("      - name: Build outer Jarvis Setup", stageStart);
+    const stageEnd = workflow.indexOf("      - name: Build outer Circe Setup", stageStart);
     expect(pnpmSetupStart).toBeGreaterThanOrEqual(0);
     expect(resolveStart).toBeGreaterThan(pnpmSetupStart);
     expect(stageStart).toBeGreaterThanOrEqual(0);
@@ -168,7 +168,7 @@ describe("standalone Windows setup verifier", () => {
     );
     expect(stage).not.toContain("service-launcher.mjs");
     expect(stage).toContain('& "$runtime\\node\\node.exe" "$runtime\\dist\\bin.mjs" --help');
-    expect(stage).toContain("Run the ARIS server");
+    expect(stage).toContain("Run the Circe server");
     expect(stage).toContain("[setup-ci] Runtime payload:");
     expect(stage).not.toContain("Copy-Item -Destination $runtime");
     expect(stage).not.toContain(".vite-plus");
@@ -176,7 +176,7 @@ describe("standalone Windows setup verifier", () => {
 
   it("prints bounded headless runtime diagnostics only after health timeout", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/circe-setup-windows.yml"),
       "utf8",
     );
     const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
@@ -186,7 +186,7 @@ describe("standalone Windows setup verifier", () => {
       cleanJob.indexOf("throw 'Headless runtime", healthFailure),
     );
     expect(healthFailure).toBeGreaterThanOrEqual(0);
-    expect(diagnostics).toContain("Get-ScheduledTaskInfo -TaskName 'Jarvis Headless Node'");
+    expect(diagnostics).toContain("Get-ScheduledTaskInfo -TaskName 'Circe Headless Node'");
     expect(diagnostics).toContain("LastTaskResult");
     expect(diagnostics).toContain("LastRunTime");
     expect(diagnostics).toContain("NextRunTime");
@@ -206,17 +206,17 @@ describe("standalone Windows setup verifier", () => {
 
   it("runs the packaged desktop probe through graceful quit and captures main-process failures", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/circe-setup-windows.yml"),
       "utf8",
     );
     const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
     const probeStart = cleanJob.indexOf("function Invoke-InstalledDesktopProbe");
-    const probeEnd = cleanJob.indexOf("function Assert-JarvisRegistration", probeStart);
+    const probeEnd = cleanJob.indexOf("function Assert-CirceRegistration", probeStart);
     const probe = cleanJob.slice(probeStart, probeEnd);
     expect(probeStart).toBeGreaterThanOrEqual(0);
     expect(probeEnd).toBeGreaterThan(probeStart);
     expect(probe).toContain("T3CODE_HOME = (Join-Path $probeRoot 't3-home')");
-    expect(probe).toContain("JARVIS_STARTUP_PROBE_QUIT = '1'");
+    expect(probe).toContain("CIRCE_STARTUP_PROBE_QUIT = '1'");
     expect(probe).toContain("-RedirectStandardOutput $stdoutPath");
     expect(probe).toContain("-RedirectStandardError $stderrPath");
     expect(probe).toContain("if (-not $desktop.WaitForExit(30000))");
@@ -231,7 +231,7 @@ describe("standalone Windows setup verifier", () => {
 
   it("keeps the native headless lifecycle gate exact and bounded", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/circe-setup-windows.yml"),
       "utf8",
     );
     const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
@@ -239,7 +239,7 @@ describe("standalone Windows setup verifier", () => {
     expect(workflow).toContain("renderWindowsNodeSupervisorMjs");
     expect(cleanJob).toContain('$runtimeServerCommand = "$root\\runtime-win\\dist\\bin.mjs"');
     expect(cleanJob).toContain(
-      '$runtimeSupervisorCommand = "$root\\runtime-win\\jarvis-node-supervisor.mjs"',
+      '$runtimeSupervisorCommand = "$root\\runtime-win\\circe-node-supervisor.mjs"',
     );
     expect(cleanJob).toContain("[System.StringComparison]::OrdinalIgnoreCase");
     expect(cleanJob).toContain("Stop-Process -Id $firstHeadlessServerPid -Force");
@@ -285,7 +285,7 @@ describe("standalone Windows setup verifier", () => {
 
   it("uploads every setup sidecar from the exported output directory", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/circe-setup-windows.yml"),
       "utf8",
     );
     const uploadStart = workflow.indexOf("      - name: Upload setup artifacts");
@@ -293,19 +293,19 @@ describe("standalone Windows setup verifier", () => {
     expect(uploadStart).toBeGreaterThanOrEqual(0);
     expect(uploadEnd).toBeGreaterThan(uploadStart);
     const upload = workflow.slice(uploadStart, uploadEnd);
-    expect(upload).toContain("${{ env.JARVIS_SETUP_EXE }}");
+    expect(upload).toContain("${{ env.CIRCE_SETUP_EXE }}");
     expect(upload).toContain("compression-level: 0");
-    expect(upload).not.toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/Jarvis-Setup.exe");
-    expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.manifest.json");
-    expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.provenance.json");
-    expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.sha256");
-    expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/verify-windows-setup.mjs");
+    expect(upload).not.toContain("${{ env.CIRCE_SETUP_OUTPUT_DIR }}/Circe-Setup.exe");
+    expect(upload).toContain("${{ env.CIRCE_SETUP_OUTPUT_DIR }}/*.manifest.json");
+    expect(upload).toContain("${{ env.CIRCE_SETUP_OUTPUT_DIR }}/*.provenance.json");
+    expect(upload).toContain("${{ env.CIRCE_SETUP_OUTPUT_DIR }}/*.sha256");
+    expect(upload).toContain("${{ env.CIRCE_SETUP_OUTPUT_DIR }}/verify-windows-setup.mjs");
     expect(upload).not.toContain("${{ env.RUNNER_TEMP }}");
   });
 
   it("hashes the final UI payload after controller upgrade and reconstructs the release alias", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/circe-setup-windows.yml"),
       "utf8",
     );
     const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
@@ -333,17 +333,17 @@ describe("standalone Windows setup verifier", () => {
       "if (Test-Path $root) { throw 'Full uninstall left the install root behind.' }",
     );
     expect(cleanJob).toContain("main-window-revealed");
-    expect(cleanJob).toContain("$receipt.version -ne $env:JARVIS_SETUP_VERSION");
-    expect(cleanJob).toContain("Assert-JarvisRegistration -Installed $true -InstallRoot $root");
-    expect(cleanJob).toContain("Assert-JarvisRegistration -Installed $false -InstallRoot $root");
+    expect(cleanJob).toContain("$receipt.version -ne $env:CIRCE_SETUP_VERSION");
+    expect(cleanJob).toContain("Assert-CirceRegistration -Installed $true -InstallRoot $root");
+    expect(cleanJob).toContain("Assert-CirceRegistration -Installed $false -InstallRoot $root");
     expect(cleanJob).toContain("$displayIcon = $displayIcon.Trim().Trim('\"')");
     expect(cleanJob).toContain(
-      "$expectedDisplayIcon = [System.IO.Path]::GetFullPath((Join-Path -Path $InstallRoot -ChildPath 'desktop\\Jarvis.exe'))",
+      "$expectedDisplayIcon = [System.IO.Path]::GetFullPath((Join-Path -Path $InstallRoot -ChildPath 'desktop\\Circe.exe'))",
     );
     expect(cleanJob).toContain(
       "[System.String]::Equals($displayIcon, $expectedDisplayIcon, [System.StringComparison]::OrdinalIgnoreCase)",
     );
-    expect(cleanJob).not.toContain("-notlike '*\\\\desktop\\\\Jarvis.exe'");
+    expect(cleanJob).not.toContain("-notlike '*\\\\desktop\\\\Circe.exe'");
     for (const label of [
       "Full install",
       "Full uninstall",
@@ -381,7 +381,7 @@ describe("standalone Windows setup verifier", () => {
       "Wait-ForInstallRootRemoval -Label 'Full uninstall' -InstallRoot $root",
     );
     const fullUninstallRegistration = cleanJob.indexOf(
-      "Assert-JarvisRegistration -Installed $false -InstallRoot $root",
+      "Assert-CirceRegistration -Installed $false -InstallRoot $root",
       fullUninstall,
     );
     const finalUninstall = cleanJob.indexOf("Invoke-SetupLifecycleProcess -Label 'Uninstall'");
@@ -390,7 +390,7 @@ describe("standalone Windows setup verifier", () => {
       finalUninstall,
     );
     const finalUninstallRegistration = cleanJob.indexOf(
-      "Assert-JarvisRegistration -Installed $false -InstallRoot $root",
+      "Assert-CirceRegistration -Installed $false -InstallRoot $root",
       finalUninstall,
     );
     expect(fullUninstall).toBeGreaterThanOrEqual(0);
@@ -412,16 +412,16 @@ describe("standalone Windows setup verifier", () => {
     expect(workflow).not.toContain("publish-windows-release:");
     expect(workflow).not.toMatch(/gh release|softprops\/action-gh-release/u);
     const coordinator = await NodeFSP.readFile(
-      NodePath.join(repoRoot, ".github/workflows/jarvis-release.yml"),
+      NodePath.join(repoRoot, ".github/workflows/circe-release.yml"),
       "utf8",
     );
     const aliasIndex = coordinator.indexOf(
-      'cp "release-assets/$setup" release-assets/Jarvis-Setup.exe',
+      'cp "release-assets/$setup" release-assets/Circe-Setup.exe',
     );
     const promoteNeedsIndex = coordinator.indexOf(
       "needs: [preflight, build_linux, build_windows, build_mac, build_headless]",
     );
-    const uploadIndex = coordinator.indexOf("scripts/jarvis-release-transaction.ts release-assets");
+    const uploadIndex = coordinator.indexOf("scripts/circe-release-transaction.ts release-assets");
     expect(aliasIndex).toBeGreaterThanOrEqual(0);
     expect(uploadIndex).toBeGreaterThan(aliasIndex);
     expect(uploadIndex).toBeGreaterThan(promoteNeedsIndex);

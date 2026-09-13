@@ -140,7 +140,7 @@ function HostedStaticOnboardingState() {
               </EmptyDescription>
               <EmptyDescription className="mt-2 text-sm leading-relaxed text-muted-foreground/78">
                 {cloudEnabled
-                  ? "Enable T3 Connect on that machine, then open Connections here to sign in with the same account. You can also add the machine using a pairing link."
+                  ? "Enable Circe Connect on that machine, then open Connections here to sign in with the same account. You can also add the machine using a pairing link."
                   : "Open Connections and add that machine using its pairing link. This browser must be able to reach it."}
               </EmptyDescription>
               <div className="mt-6 flex justify-center">

@@ -25,10 +25,10 @@ const config = RelayConfiguration.RelayConfiguration.of({
   apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
   clerkSecretKey: Redacted.make("clerk-secret"),
   clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  clerkJwtAudience: "circe-relay",
   cloudMintPrivateKey: Redacted.make("cloud-private-key"),
   cloudMintPublicKey: "cloud-public-key",
-  managedEndpointBaseDomain: "jarvis.test",
+  managedEndpointBaseDomain: "circe.test",
   managedEndpointNamespace: "dev_julius",
 });
 
@@ -292,7 +292,7 @@ function expectedManagedHostname(environmentId: string, userId = "user_ABC"): st
     .update(`dev_julius:${userId}:${environmentId}`)
     .digest("hex")
     .slice(0, 16);
-  return `dev-julius-${hash}.jarvis.test`;
+  return `dev-julius-${hash}.circe.test`;
 }
 
 function expectedManagedTunnelName(environmentId: string, userId = "user_ABC"): string {
@@ -300,7 +300,7 @@ function expectedManagedTunnelName(environmentId: string, userId = "user_ABC"): 
     .update(`dev_julius:${userId}:${environmentId}`)
     .digest("hex")
     .slice(0, 16);
-  return `jarvisrelay-managedendpoint-dev-julius-${hash}`;
+  return `circerelay-managedendpoint-dev-julius-${hash}`;
 }
 
 describe("ManagedEndpointProvider", () => {
@@ -501,7 +501,7 @@ describe("ManagedEndpointProvider", () => {
           | { readonly name?: string }
           | undefined
       )?.name;
-      expect(requestedName).toMatch(/^jarvisrelay-managedendpoint-dev-julius-[a-f0-9]{16}$/);
+      expect(requestedName).toMatch(/^circerelay-managedendpoint-dev-julius-[a-f0-9]{16}$/);
       const configBody = (
         tunnelCalls.find((call) => call.operation === "putConfiguration")?.input as
           | { readonly tunnelConfig?: unknown }
@@ -510,7 +510,7 @@ describe("ManagedEndpointProvider", () => {
       expect(configBody).toMatchObject({
         ingress: [
           {
-            hostname: expect.stringMatching(/^dev-julius-[a-f0-9]{16}\.jarvis\.test$/),
+            hostname: expect.stringMatching(/^dev-julius-[a-f0-9]{16}\.circe\.test$/),
           },
           { service: "http_status:404" },
         ],

@@ -4,13 +4,13 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Jarvis version to package (for example 1.2.3)"
+        description: "Circe version to package (for example 1.2.3)"
         required: true
         type: string
   workflow_dispatch:
     inputs:
       version:
-        description: "Jarvis version to package (for example 1.2.3)"
+        description: "Circe version to package (for example 1.2.3)"
         required: true
         type: string
 
@@ -52,7 +52,7 @@ jobs:
           package_version="$(node -p "require('./apps/server/package.json').version")"
           requested_version="${REQUESTED_VERSION#v}"
           if [[ ! "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid requested Jarvis version: $requested_version" >&2
+            echo "Invalid requested Circe version: $requested_version" >&2
             exit 1
           fi
           if test "$requested_version" != "$package_version"; then
@@ -100,7 +100,7 @@ jobs:
           SOURCE_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          artifact="release/Jarvis-Headless-Node-$(node -p "require('./apps/server/package.json').version")-linux-${{ matrix.arch }}.tar.gz"
+          artifact="release/Circe-Headless-Node-$(node -p "require('./apps/server/package.json').version")-linux-${{ matrix.arch }}.tar.gz"
           checksum="$artifact.sha256"
           provenance="$artifact.provenance.json"
           test -f "$artifact"
@@ -169,9 +169,9 @@ jobs:
           test -x "$bundled_node"
           test -f "$t3_bin"
           node scripts/smoke-headless-node-runtime.ts "$extracted"
-          T3CODE_HOME="$smoke_home" JARVIS_HEADLESS_HOME="$smoke_home" \
+          T3CODE_HOME="$smoke_home" CIRCE_HEADLESS_HOME="$smoke_home" \
             "$bundled_node" "$t3_bin" --version
-          T3CODE_HOME="$smoke_home" JARVIS_HEADLESS_HOME="$smoke_home" \
+          T3CODE_HOME="$smoke_home" CIRCE_HEADLESS_HOME="$smoke_home" \
             "$bundled_node" "$t3_bin" --help >/dev/null
 
           cat > "$fake_bin/systemctl" <<'SH'
@@ -187,21 +187,21 @@ jobs:
           export SYSTEMCTL_LOG="$smoke_home/systemctl.log"
           export HOME="$smoke_home"
           export PATH="$fake_bin:$PATH"
-          export JARVIS_HEADLESS_HOME="$smoke_home/.jarvis-headless"
+          export CIRCE_HEADLESS_HOME="$smoke_home/.circe-headless"
           "$extracted/install.sh"
-          mkdir -p "$JARVIS_HEADLESS_HOME/userdata/projects"
-          printf 'must-survive-uninstall\n' > "$JARVIS_HEADLESS_HOME/userdata/projects/sentinel"
+          mkdir -p "$CIRCE_HEADLESS_HOME/userdata/projects"
+          printf 'must-survive-uninstall\n' > "$CIRCE_HEADLESS_HOME/userdata/projects/sentinel"
           "$extracted/bin/uninstall.sh"
-          test ! -e "$JARVIS_HEADLESS_HOME/node"
-          test "$(cat "$JARVIS_HEADLESS_HOME/userdata/projects/sentinel")" = must-survive-uninstall
+          test ! -e "$CIRCE_HEADLESS_HOME/node"
+          test "$(cat "$CIRCE_HEADLESS_HOME/userdata/projects/sentinel")" = must-survive-uninstall
 
       - name: Upload artifact, checksum, and provenance
         uses: actions/upload-artifact@v7
         with:
-          name: jarvis-headless-linux-${{ matrix.arch }}
+          name: circe-headless-linux-${{ matrix.arch }}
           path: |
-            release/Jarvis-Headless-Node-*.tar.gz
-            release/Jarvis-Headless-Node-*.tar.gz.sha256
-            release/Jarvis-Headless-Node-*.tar.gz.provenance.json
+            release/Circe-Headless-Node-*.tar.gz
+            release/Circe-Headless-Node-*.tar.gz.sha256
+            release/Circe-Headless-Node-*.tar.gz.provenance.json
           if-no-files-found: error
           retention-days: 14

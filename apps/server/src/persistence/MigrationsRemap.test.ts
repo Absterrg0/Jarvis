@@ -9,29 +9,29 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
 /**
- * IDs 41-58 shipped on the ARIS line and are never renumbered. Upstream
+ * IDs 41-58 shipped on the Circe line and are never renumbered. Upstream
  * migrations that landed after the fork point (upstream 044-050) are
  * re-registered above 58 so every migration applies exactly once.
  */
 const EXPECTED_MANIFEST: ReadonlyArray<readonly [number, string]> = [
-  [41, "JarvisTaskDesks"],
-  [42, "JarvisTaskDeskAttention"],
-  [43, "JarvisTaskDeskClarification"],
-  [44, "JarvisProjectClarification"],
-  [45, "JarvisProjectAliases"],
-  [46, "JarvisReportOutbox"],
+  [41, "CirceTaskDesks"],
+  [42, "CirceTaskDeskAttention"],
+  [43, "CirceTaskDeskClarification"],
+  [44, "CirceProjectClarification"],
+  [45, "CirceProjectAliases"],
+  [46, "CirceReportOutbox"],
   [47, "AuthSessionClientConnection"],
   [48, "ProjectionThreadLinkedPullRequest"],
   [49, "ProjectionThreadsUnsettledAt"],
-  [50, "JarvisWorkStartedCandidates"],
-  [51, "JarvisFollowUpQueue"],
-  [52, "JarvisProjectAliasCurrentState"],
-  [53, "JarvisTaskDeskCurrentState"],
-  [54, "JarvisPresentation"],
-  [55, "JarvisFollowUpQueueIdentity"],
-  [56, "JarvisTaskRefIdentity"],
+  [50, "CirceWorkStartedCandidates"],
+  [51, "CirceFollowUpQueue"],
+  [52, "CirceProjectAliasCurrentState"],
+  [53, "CirceTaskDeskCurrentState"],
+  [54, "CircePresentation"],
+  [55, "CirceFollowUpQueueIdentity"],
+  [56, "CirceTaskRefIdentity"],
   [57, "ProviderResponseFailureReasons"],
-  [58, "JarvisPushRegistrations"],
+  [58, "CircePushRegistrations"],
   [59, "ClearAutomaticProjectModelDefaults"],
   [60, "ProjectionProjectsAutoPull"],
   [61, "RepairAutomaticSettlementTimestamps"],

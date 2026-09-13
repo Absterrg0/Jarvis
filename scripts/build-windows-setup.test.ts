@@ -40,7 +40,7 @@ describe("Windows setup compiler invocation", () => {
       "..",
     );
     const iconPath = windowsSetupIconPath(repoRoot);
-    expect(iconPath).toBe(NodePath.resolve(repoRoot, BRAND_ASSET_PATHS.jarvisWindowsIconIco));
+    expect(iconPath).toBe(NodePath.resolve(repoRoot, BRAND_ASSET_PATHS.circeWindowsIconIco));
     const iconStat = await NodeFSP.stat(iconPath);
     expect(iconStat.isFile()).toBe(true);
   });
@@ -72,7 +72,7 @@ describe("Windows setup compiler invocation", () => {
       "-mta=off",
     ]);
     const sevenZip = await getPath7za();
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-setup-archive-"));
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "circe-setup-archive-"));
     try {
       for (const name of ["desktop", "runtime-win"]) {
         await NodeFSP.mkdir(NodePath.join(root, name), { recursive: true });
@@ -107,7 +107,7 @@ describe("Windows setup compiler invocation", () => {
   });
 
   it("finds the official Electron Builder NSIS Bin cache layout", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-makensis-cache-"));
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "circe-makensis-cache-"));
     const makensis = NodePath.join(
       root,
       "nsis-3.0.4.1",
@@ -157,7 +157,7 @@ describe("Windows setup compiler invocation", () => {
   });
 
   it("prunes UI packages and source-only files from every deployed t3 package", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-runtime-prune-"));
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "circe-runtime-prune-"));
     const exists = async (path: string) => Boolean(await NodeFSP.stat(path).catch(() => undefined));
     const writeJson = async (path: string, value: unknown) => {
       await NodeFSP.mkdir(NodePath.dirname(path), { recursive: true });

@@ -1,12 +1,12 @@
-# T3 Connect setup
+# Circe Connect setup
 
-Deployment and client configuration for T3 Connect. The [architecture note](../internals/t3-connect.md)
+Deployment and client configuration for Circe Connect. The [architecture note](../internals/t3-connect.md)
 explains the trust boundaries; the [relay README](../../infra/relay/README.md#deployment) owns relay
 provisioning instructions.
 
 ## Public application configuration
 
-T3 Connect is disabled in a fresh clone. To build against your relay deployment, copy the
+Circe Connect is disabled in a fresh clone. To build against your relay deployment, copy the
 repository-root example:
 
 ```sh
@@ -16,10 +16,10 @@ cp .env.example .env
 For another deployment, set these values in the repository-root `.env` or `.env.local`:
 
 ```dotenv
-T3CODE_CLERK_PUBLISHABLE_KEY=<publishable key>
-T3CODE_CLERK_JWT_TEMPLATE=<JWT template name>
-T3CODE_CLERK_CLI_OAUTH_CLIENT_ID=<public OAuth application client ID>
-T3CODE_RELAY_URL=https://relay.example.com
+CIRCE_CLERK_PUBLISHABLE_KEY=<publishable key>
+CIRCE_CLERK_JWT_TEMPLATE=<JWT template name>
+CIRCE_CLERK_CLI_OAUTH_CLIENT_ID=<public OAuth application client ID>
+CIRCE_RELAY_URL=https://relay.example.com
 ```
 
 Process variables take precedence over `.env.local`, then `.env`. Use these canonical names;
@@ -41,21 +41,21 @@ In Clerk's OAuth applications settings:
 1. Create a public OAuth application for the T3 CLI, using authorization-code exchange with PKCE.
 2. Allow both redirect URIs: `http://127.0.0.1:34338/callback` and
    `https://app.example.com/connect/callback`. The second is `<your-hosted-app>/connect/callback`
-   from `T3CODE_HOSTED_APP_URL`. Headless and SSH authorization depend on the hosted redirect.
+   from `CIRCE_HOSTED_APP_URL`. Headless and SSH authorization depend on the hosted redirect.
 3. Enable the `openid`, `profile`, and `email` scopes.
-4. Set `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID` to the generated public client ID in local and release
+4. Set `CIRCE_CLERK_CLI_OAUTH_CLIENT_ID` to the generated public client ID in local and release
    build environments.
 
 ## JWT template
 
-Create a Clerk JWT template named `t3-relay` with claims:
+Create a Clerk JWT template named `circe-relay` with claims:
 
 ```json
-{ "aud": "t3-code-relay" }
+{ "aud": "circe-relay" }
 ```
 
-Set `T3CODE_CLERK_JWT_TEMPLATE=t3-relay` for clients and
-`CLERK_JWT_AUDIENCE=t3-code-relay` for the relay. The audience stays the same across relay stages; the relay
+Set `CIRCE_CLERK_JWT_TEMPLATE=circe-relay` for clients and
+`CLERK_JWT_AUDIENCE=circe-relay` for the relay. The audience stays the same across relay stages; the relay
 URL selects the deployment.
 
 ## Desktop OAuth redirects
@@ -77,24 +77,24 @@ persistence and system-browser callback delivery.
 
 Clerk's native Android SDK uses `clerk://<applicationId>.callback`. In the Clerk instance selected by the app's publishable key, add each supported package to **Native applications > Allowlist for mobile SSO redirect**:
 
-| Variant     | Callback                                       |
-| ----------- | ---------------------------------------------- |
-| Development | `clerk://com.abstergo.jarvis.dev.callback`     |
-| Preview     | `clerk://com.abstergo.jarvis.preview.callback` |
-| Production  | `clerk://com.abstergo.jarvis.callback`         |
+| Variant     | Callback                                      |
+| ----------- | --------------------------------------------- |
+| Development | `clerk://com.abstergo.circe.dev.callback`     |
+| Preview     | `clerk://com.abstergo.circe.preview.callback` |
+| Production  | `clerk://com.abstergo.circe.callback`         |
 
 Preserve existing entries. These callbacks are separate from the `t3code-dev` / `t3code-preview` / `t3code` navigation schemes. A private development build using the production Clerk key still needs its development callback allowed by that instance's administrator; rebuilding the same package does not change the allowlist.
 
 ## Desktop passkeys
 
-For a production macOS app with bundle ID `com.abstergo.jarvis`:
+For a production macOS app with bundle ID `com.abstergo.circe`:
 
 1. Create an explicit macOS App ID in the Apple Developer portal with **Associated Domains**.
 2. Create a provisioning profile for that App ID and the distribution signing certificate.
 3. In Clerk's Native API settings, add an iOS app with the same Apple Team ID and bundle ID.
    This setting also configures Electron/macOS passkeys.
 4. Check `https://<frontend-api>/.well-known/apple-app-site-association`. Its
-   `webcredentials.apps` must include `<TEAM_ID>.com.abstergo.jarvis`.
+   `webcredentials.apps` must include `<TEAM_ID>.com.abstergo.circe`.
 5. Configure signing as described in the [release runbook](./release.md#2-apple-signing--notarization-setup-macos).
 
 Local signed builds additionally use:
@@ -103,7 +103,7 @@ Local signed builds additionally use:
 T3CODE_APPLE_TEAM_ID=ABC1234567
 T3CODE_MACOS_PROVISIONING_PROFILE=/absolute/path/to/t3code.provisionprofile
 # Override only when the RP domain differs from the Clerk Frontend API hostname.
-T3CODE_CLERK_PASSKEY_RP_DOMAINS=example.clerk.accounts.dev,clerk.example.com
+CIRCE_CLERK_PASSKEY_RP_DOMAINS=example.clerk.accounts.dev,clerk.example.com
 ```
 
 Without the override, the build derives the RP domain from the Clerk publishable key.

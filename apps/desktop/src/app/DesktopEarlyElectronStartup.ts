@@ -85,8 +85,8 @@ export function resolveEarlyLinuxElectronOptions(
   const isDevelopment = isDevelopmentEnvironment(input.env);
   return {
     isDevelopment,
-    linuxWmClass: isDevelopment ? "jarvis-dev" : "jarvis",
-    linuxDesktopEntryName: isDevelopment ? "jarvis-dev.desktop" : "com.abstergo.jarvis.desktop",
+    linuxWmClass: isDevelopment ? "circe-dev" : "circe",
+    linuxDesktopEntryName: isDevelopment ? "circe-dev.desktop" : "com.abstergo.circe.desktop",
     passwordStore: resolveLinuxPasswordStoreSwitch({
       preference,
       env: input.env,

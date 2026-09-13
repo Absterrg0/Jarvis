@@ -48,7 +48,7 @@ export class DeviceLimits extends Context.Service<
       readonly deviceId: string;
     }) => Effect.Effect<void, DeviceLimitExceeded | DeviceLimitPersistenceError>;
   }
->()("@t3tools/jarvis-relay/agentActivity/DeviceLimits") {}
+>()("@circe/relay/agentActivity/DeviceLimits") {}
 
 export const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;

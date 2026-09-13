@@ -31,8 +31,8 @@ const workspaceFiles = [
   "packages/tailscale/package.json",
   "packages/effect-acp/package.json",
   "packages/effect-codex-app-server/package.json",
-  "packages/jarvis-client-runtime/package.json",
-  "packages/jarvis-core/package.json",
+  "packages/circe-client-runtime/package.json",
+  "packages/circe-core/package.json",
   "scripts/package.json",
 ] as const;
 

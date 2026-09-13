@@ -2,7 +2,7 @@ import type { ExpoConfig } from "expo/config";
 
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
-import { JARVIS_MOBILE_SLUG, resolveExpoOwnership } from "./expo-ownership.ts";
+import { CIRCE_MOBILE_SLUG, resolveExpoOwnership } from "./expo-ownership.ts";
 
 type AppVariant = "development" | "preview" | "production";
 
@@ -39,7 +39,7 @@ const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
-const JARVIS_MICROPHONE_PERMISSION = "Allow ARIS to listen while you hold the voice button.";
+const CIRCE_MICROPHONE_PERMISSION = "Allow Circe to listen while you hold the voice button.";
 // Android layers are rendered by scripts/export-android-icons.ts from the Icon Composer sources.
 // The wordmark sits inside the adaptive safe zone; the variant artwork is a full-bleed background.
 const androidAdaptiveForeground = "./assets/android-icon-foreground.png";
@@ -55,9 +55,9 @@ if (
 }
 
 const DEVELOPMENT_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.circeIosIconPng),
+  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.circeIosIconPng),
+  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.circeIosIconPng),
   androidAdaptiveForeground,
   androidAdaptiveBackgroundColor: "#347FF8",
   androidAdaptiveBackgroundImage: "./assets/android-icon-background-dev.png",
@@ -69,9 +69,9 @@ const DEVELOPMENT_ASSETS = {
 } as const;
 
 const PREVIEW_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.circeIosIconPng),
+  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.circeIosIconPng),
+  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.circeIosIconPng),
   androidAdaptiveForeground,
 
   androidAdaptiveBackgroundColor: "#111533",
@@ -83,9 +83,9 @@ const PREVIEW_ASSETS = {
 } as const;
 
 const RELEASE_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.circeIosIconPng),
+  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.circeIosIconPng),
+  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.circeIosIconPng),
   androidAdaptiveForeground,
 
   androidAdaptiveBackgroundColor: "#000000",
@@ -98,26 +98,26 @@ const RELEASE_ASSETS = {
 
 const VARIANT_CONFIG = {
   development: {
-    appName: "ARIS Dev",
+    appName: "Circe Dev",
     scheme: "t3code-dev",
-    iosBundleIdentifier: "com.abstergo.jarvis.dev",
-    androidPackage: "com.abstergo.jarvis.dev",
+    iosBundleIdentifier: "com.abstergo.circe.dev",
+    androidPackage: "com.abstergo.circe.dev",
     relyingParty: CLERK_RELYING_PARTY,
     assets: DEVELOPMENT_ASSETS,
   },
   preview: {
-    appName: "ARIS Preview",
+    appName: "Circe Preview",
     scheme: "t3code-preview",
-    iosBundleIdentifier: "com.abstergo.jarvis.preview",
-    androidPackage: "com.abstergo.jarvis.preview",
+    iosBundleIdentifier: "com.abstergo.circe.preview",
+    androidPackage: "com.abstergo.circe.preview",
     relyingParty: CLERK_RELYING_PARTY,
     assets: PREVIEW_ASSETS,
   },
   production: {
-    appName: "ARIS",
+    appName: "Circe",
     scheme: "t3code",
-    iosBundleIdentifier: "com.abstergo.jarvis",
-    androidPackage: "com.abstergo.jarvis",
+    iosBundleIdentifier: "com.abstergo.circe",
+    androidPackage: "com.abstergo.circe",
     relyingParty: CLERK_RELYING_PARTY,
     assets: RELEASE_ASSETS,
   },
@@ -163,7 +163,7 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
       {
         name: "AgentActivity",
         displayName: "Agent Activity",
-        description: "Shows the current state of active ARIS tasks.",
+        description: "Shows the current state of active Circe tasks.",
         supportedFamilies: ["systemSmall", "systemMedium", "accessoryRectangular"],
       },
     ],
@@ -202,7 +202,7 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
 
 const config: ExpoConfig = {
   name: variant.appName,
-  slug: JARVIS_MOBILE_SLUG,
+  slug: CIRCE_MOBILE_SLUG,
   platforms: ["ios", "android"],
   scheme: variant.scheme,
   version: "1.1.1",
@@ -216,7 +216,7 @@ const config: ExpoConfig = {
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
   updates: {
-    // OTA must follow the Jarvis-owned EAS project, never a baked-in upstream
+    // OTA must follow the Circe-owned EAS project, never a baked-in upstream
     // endpoint. Without a project there is no channel, so updates stay off.
     enabled:
       repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0" && expoOwnership.updatesUrl !== undefined,
@@ -248,8 +248,8 @@ const config: ExpoConfig = {
         NSAllowsArbitraryLoads: true,
       },
       NSLocalNetworkUsageDescription:
-        "Allow ARIS to connect to your ARIS nodes on your local network or tailnet.",
-      NSPhotoLibraryAddUsageDescription: "Allow ARIS to save images to your photo library.",
+        "Allow Circe to connect to your Circe nodes on your local network or tailnet.",
+      NSPhotoLibraryAddUsageDescription: "Allow Circe to save images to your photo library.",
 
       ITSAppUsesNonExemptEncryption: false,
       // The App Store screenshot harness rotates the iPad interface from
@@ -295,7 +295,7 @@ const config: ExpoConfig = {
     [
       "expo-audio",
       {
-        microphonePermission: JARVIS_MICROPHONE_PERMISSION,
+        microphonePermission: CIRCE_MICROPHONE_PERMISSION,
         recordAudioAndroid: true,
         enableBackgroundRecording: false,
         enableBackgroundPlayback: false,
@@ -361,17 +361,17 @@ const config: ExpoConfig = {
     [
       "expo-camera",
       {
-        cameraPermission: "Allow ARIS to access your camera so you can scan pairing QR codes.",
+        cameraPermission: "Allow Circe to access your camera so you can scan pairing QR codes.",
         microphonePermission: false,
         barcodeScannerEnabled: true,
         recordAudioAndroid: false,
       },
     ],
     // expo-image-picker treats false as a global Android RECORD_AUDIO block, which would
-    // remove the permission requested above by expo-audio and disable ARIS push-to-talk.
+    // remove the permission requested above by expo-audio and disable Circe push-to-talk.
     [
       "expo-image-picker",
-      { photosPermission: false, microphonePermission: JARVIS_MICROPHONE_PERMISSION },
+      { photosPermission: false, microphonePermission: CIRCE_MICROPHONE_PERMISSION },
     ],
     [
       "expo-splash-screen",
@@ -432,7 +432,7 @@ const config: ExpoConfig = {
     appVariant: APP_VARIANT,
     iosPersonalTeamBuild: isIosPersonalTeamBuild,
     relay: {
-      url: repoEnv.T3CODE_RELAY_URL ?? null,
+      url: repoEnv.CIRCE_RELAY_URL ?? null,
     },
     clerk: {
       publishableKey: repoEnv.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? null,

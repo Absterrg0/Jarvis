@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "ARIS",
-  "short_name": "ARIS",
+  "name": "Circe",
+  "short_name": "Circe",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

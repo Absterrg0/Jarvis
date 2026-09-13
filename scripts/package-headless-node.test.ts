@@ -97,7 +97,7 @@ describe("headless node packaging contract", () => {
       }),
     ).toEqual({ target: "../.pnpm/effect", type: "dir" });
 
-    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-deploy-copy-test-"));
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-deploy-copy-test-"));
     const deployDir = Path.join(root, "deploy");
     const stagedDir = Path.join(root, "staged");
     const effectStoreDir = Path.join(
@@ -179,7 +179,7 @@ describe("headless node packaging contract", () => {
 
   it("describes a self-contained Linux archive and its service entrypoint", () => {
     expect(headlessArtifactName("0.0.33", "x64")).toBe(
-      "Jarvis-Headless-Node-0.0.33-linux-x64.tar.gz",
+      "Circe-Headless-Node-0.0.33-linux-x64.tar.gz",
     );
     expect(
       createHeadlessManifest({
@@ -190,7 +190,7 @@ describe("headless node packaging contract", () => {
       }),
     ).toEqual({
       format: 1,
-      product: "Jarvis",
+      product: "Circe",
       nodeType: "headless",
       platform: "linux",
       arch: "arm64",
@@ -207,36 +207,36 @@ describe("headless node packaging contract", () => {
     });
 
     const unit = renderHeadlessSystemdUnit({
-      installRoot: "/home/user/.jarvis-headless",
-      nodePath: "/home/user/.jarvis-headless/node/bin/node",
-      launcherPath: "/home/user/.jarvis-headless/runtime/service-launcher.mjs",
-      logPath: "/home/user/.jarvis-headless/userdata/logs/boot-service.log",
+      installRoot: "/home/user/.circe-headless",
+      nodePath: "/home/user/.circe-headless/node/bin/node",
+      launcherPath: "/home/user/.circe-headless/runtime/service-launcher.mjs",
+      logPath: "/home/user/.circe-headless/userdata/logs/boot-service.log",
     });
-    expect(unit).toContain("Description=ARIS Headless Node");
-    // Service, path, and artifact identities stay Jarvis for upgrades.
-    expect(unit).toContain("Environment=JARVIS_NODE_PRESET=headless");
+    expect(unit).toContain("Description=Circe Headless Node");
+    // Service, path, and artifact identities stay Circe for upgrades.
+    expect(unit).toContain("Environment=CIRCE_NODE_PRESET=headless");
     expect(unit).not.toContain("Description=Jarvis Headless Node");
     expect(unit).toContain(
-      "ExecStart=/home/user/.jarvis-headless/node/bin/node /home/user/.jarvis-headless/runtime/service-launcher.mjs",
+      "ExecStart=/home/user/.circe-headless/node/bin/node /home/user/.circe-headless/runtime/service-launcher.mjs",
     );
-    expect(unit).toContain("Environment=JARVIS_NODE_PRESET=headless");
+    expect(unit).toContain("Environment=CIRCE_NODE_PRESET=headless");
     expect(unit).toContain("Restart=always");
 
     const installScript = renderHeadlessInstallScript();
-    expect(installScript).toContain("JARVIS_HEADLESS_HOME");
-    expect(installScript).toContain("systemctl --user enable --now jarvis-headless.service");
+    expect(installScript).toContain("CIRCE_HEADLESS_HOME");
+    expect(installScript).toContain("systemctl --user enable --now circe-headless.service");
     expect(installScript).toContain("runtime/service-state.json");
     expect(installScript).toContain("userdata, worktrees");
-    expect(installScript).toContain("JARVIS_NODE_PRESET=headless");
-    // User-visible copy is ARIS; service name and paths stay Jarvis identities.
-    expect(installScript).toContain("Description=ARIS Headless Node");
-    expect(installScript).toContain("ARIS Headless Node installed at");
-    expect(installScript).toContain("ARIS Headless Node: restore failed:");
+    expect(installScript).toContain("CIRCE_NODE_PRESET=headless");
+    // User-visible copy is Circe; service name and paths stay Circe identities.
+    expect(installScript).toContain("Description=Circe Headless Node");
+    expect(installScript).toContain("Circe Headless Node installed at");
+    expect(installScript).toContain("Circe Headless Node: restore failed:");
     expect(installScript).not.toContain("Description=Jarvis Headless Node");
     expect(installScript).not.toContain("Jarvis Headless Node installed at");
-    expect(renderHeadlessStatusScript()).toContain("ARIS Headless Node");
+    expect(renderHeadlessStatusScript()).toContain("Circe Headless Node");
     expect(renderHeadlessStatusScript()).not.toContain("Jarvis Headless Node");
-    expect(renderHeadlessUninstallScript()).toContain("Removed ARIS Headless Node");
+    expect(renderHeadlessUninstallScript()).toContain("Removed Circe Headless Node");
     expect(renderHeadlessUninstallScript()).not.toContain("Removed Jarvis Headless Node");
     expect(renderHeadlessStatusScript()).toContain("systemctl --user");
     expect(renderHeadlessUninstallScript()).toContain("--purge-data");
@@ -246,7 +246,7 @@ describe("headless node packaging contract", () => {
   it("creates deterministic provenance and checksum sidecars", () => {
     const sourceCommit = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
     const sha256 = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789";
-    const artifact = "Jarvis-Headless-Node-0.0.33-linux-x64.tar.gz";
+    const artifact = "Circe-Headless-Node-0.0.33-linux-x64.tar.gz";
     expect(
       createHeadlessProvenance({
         artifact,
@@ -280,9 +280,9 @@ describe("headless node packaging contract", () => {
   });
 
   it("preserves the installed runtime when an update archive is malformed", async () => {
-    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-install-test-"));
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-headless-install-test-"));
     const home = Path.join(root, "home");
-    const installRoot = Path.join(home, ".jarvis-headless");
+    const installRoot = Path.join(home, ".circe-headless");
     const systemctl = Path.join(root, "systemctl");
     const archive = Path.join(root, "archive");
     await FileSystem.mkdir(Path.join(installRoot, "node"), { recursive: true });
@@ -323,7 +323,7 @@ describe("headless node packaging contract", () => {
       env: {
         ...process.env,
         HOME: home,
-        JARVIS_HEADLESS_HOME: installRoot,
+        CIRCE_HEADLESS_HOME: installRoot,
         PATH: `${Path.dirname(systemctl)}:${process.env.PATH ?? ""}`,
       },
       encoding: "utf8",
@@ -342,11 +342,9 @@ describe("headless node packaging contract", () => {
   });
 
   it("installs, updates, starts through fake systemd, and uninstalls without removing userdata", async () => {
-    const root = await FileSystem.mkdtemp(
-      Path.join(OS.tmpdir(), "jarvis-headless-lifecycle-test-"),
-    );
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-headless-lifecycle-test-"));
     const home = Path.join(root, "home");
-    const installRoot = Path.join(home, ".jarvis-headless");
+    const installRoot = Path.join(home, ".circe-headless");
     const systemctl = Path.join(root, "systemctl");
     const systemctlLog = Path.join(root, "systemctl.log");
     await FileSystem.writeFile(
@@ -357,7 +355,7 @@ describe("headless node packaging contract", () => {
     const environment = {
       ...process.env,
       HOME: home,
-      JARVIS_HEADLESS_HOME: installRoot,
+      CIRCE_HEADLESS_HOME: installRoot,
       PATH: `${Path.dirname(systemctl)}:${process.env.PATH ?? ""}`,
       SYSTEMCTL_LOG: systemctlLog,
     };
@@ -390,13 +388,13 @@ describe("headless node packaging contract", () => {
     ).toBe("keep\n");
     expect(
       await FileSystem.readFile(
-        Path.join(home, ".config", "systemd", "user", "jarvis-headless.service"),
+        Path.join(home, ".config", "systemd", "user", "circe-headless.service"),
         "utf8",
       ),
-    ).toContain("Environment=JARVIS_NODE_PRESET=headless");
+    ).toContain("Environment=CIRCE_NODE_PRESET=headless");
     const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
-    expect(systemctlCalls).toContain("--user enable --now jarvis-headless.service");
-    expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
+    expect(systemctlCalls).toContain("--user enable --now circe-headless.service");
+    expect(systemctlCalls).toContain("--user stop circe-headless.service");
 
     const uninstall = ChildProcess.spawnSync(Path.join(archiveV2, "bin", "uninstall.sh"), [], {
       cwd: archiveV2,
@@ -412,9 +410,9 @@ describe("headless node packaging contract", () => {
   });
 
   it("reloads and restarts the previous service after a failed update", async () => {
-    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-rollback-test-"));
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-headless-rollback-test-"));
     const home = Path.join(root, "home");
-    const installRoot = Path.join(home, ".jarvis-headless");
+    const installRoot = Path.join(home, ".circe-headless");
     const systemctl = Path.join(root, "systemctl");
     const systemctlLog = Path.join(root, "systemctl.log");
     const failOnce = Path.join(root, "fail-once");
@@ -436,7 +434,7 @@ describe("headless node packaging contract", () => {
       const environment = {
         ...process.env,
         HOME: home,
-        JARVIS_HEADLESS_HOME: installRoot,
+        CIRCE_HEADLESS_HOME: installRoot,
         PATH: `${Path.dirname(systemctl)}:${process.env.PATH ?? ""}`,
         SYSTEMCTL_LOG: systemctlLog,
         SYSTEMCTL_FAIL_ONCE: failOnce,
@@ -449,7 +447,7 @@ describe("headless node packaging contract", () => {
         encoding: "utf8",
       });
       expect(installV1.status).toBe(0);
-      const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+      const unitPath = Path.join(home, ".config", "systemd", "user", "circe-headless.service");
       await FileSystem.writeFile(unitPath, "[Unit]\n# previous-unit\n");
 
       const archiveV2 = await createInstallArchive(root, "v2");
@@ -469,7 +467,7 @@ describe("headless node packaging contract", () => {
       expect(
         systemctlCalls
           .split("\n")
-          .filter((call) => call === "--user enable --now jarvis-headless.service"),
+          .filter((call) => call === "--user enable --now circe-headless.service"),
       ).toHaveLength(3);
       expect(
         systemctlCalls.split("\n").filter((call) => call === "--user daemon-reload"),
@@ -481,10 +479,10 @@ describe("headless node packaging contract", () => {
 
   it("does not restart a service when a first install fails", async () => {
     const root = await FileSystem.mkdtemp(
-      Path.join(OS.tmpdir(), "jarvis-headless-first-install-rollback-test-"),
+      Path.join(OS.tmpdir(), "circe-headless-first-install-rollback-test-"),
     );
     const home = Path.join(root, "home");
-    const installRoot = Path.join(home, ".jarvis-headless");
+    const installRoot = Path.join(home, ".circe-headless");
     const systemctl = Path.join(root, "systemctl");
     const systemctlLog = Path.join(root, "systemctl.log");
     try {
@@ -502,7 +500,7 @@ describe("headless node packaging contract", () => {
       const environment = {
         ...process.env,
         HOME: home,
-        JARVIS_HEADLESS_HOME: installRoot,
+        CIRCE_HEADLESS_HOME: installRoot,
         PATH: `${Path.dirname(systemctl)}:${process.env.PATH ?? ""}`,
         SYSTEMCTL_LOG: systemctlLog,
       };
@@ -518,7 +516,7 @@ describe("headless node packaging contract", () => {
       expect(
         systemctlCalls
           .split("\n")
-          .filter((call) => call === "--user enable --now jarvis-headless.service"),
+          .filter((call) => call === "--user enable --now circe-headless.service"),
       ).toHaveLength(1);
       expect(
         systemctlCalls.split("\n").filter((call) => call === "--user daemon-reload"),
@@ -530,7 +528,7 @@ describe("headless node packaging contract", () => {
   });
 
   it("stages the pinned launcher layout without source or package-manager files", async () => {
-    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-test-"));
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-headless-test-"));
     const deployDir = Path.join(root, "deploy");
     await FileSystem.mkdir(Path.join(deployDir, "dist"), { recursive: true });
     await FileSystem.writeFile(Path.join(deployDir, "dist", "bin.mjs"), "#!/usr/bin/env node\n");
@@ -588,10 +586,10 @@ describe("headless node packaging contract", () => {
       '"nodeType": "headless"',
     );
     expect(await FileSystem.readFile(layout.installScriptPath, "utf8")).toContain(
-      "systemctl --user enable --now jarvis-headless.service",
+      "systemctl --user enable --now circe-headless.service",
     );
     expect(await FileSystem.readFile(layout.statusScriptPath, "utf8")).toContain(
-      "ARIS Headless Node",
+      "Circe Headless Node",
     );
     expect(await FileSystem.readFile(layout.statusScriptPath, "utf8")).not.toContain(
       "Jarvis Headless Node",
@@ -625,17 +623,17 @@ describe("headless node packaging contract", () => {
       "--numeric-owner",
       "--directory",
       root,
-      "jarvis-headless-node-0.0.33-linux-x64",
+      "circe-headless-node-0.0.33-linux-x64",
     ]);
 
     await FileSystem.rm(root, { recursive: true, force: true });
   });
 
   it("never deletes untouched originals when staging mv(runtime) fails", async () => {
-    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-stage-fault-"));
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-headless-stage-fault-"));
     const home = Path.join(root, "home");
-    const installRoot = Path.join(home, ".jarvis-headless");
-    const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+    const installRoot = Path.join(home, ".circe-headless");
+    const unitPath = Path.join(home, ".config", "systemd", "user", "circe-headless.service");
     const fakeBin = Path.join(root, "fakebin");
     const systemctlLog = Path.join(root, "systemctl.log");
     try {
@@ -669,7 +667,7 @@ describe("headless node packaging contract", () => {
         env: {
           ...process.env,
           HOME: home,
-          JARVIS_HEADLESS_HOME: installRoot,
+          CIRCE_HEADLESS_HOME: installRoot,
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           SYSTEMCTL_LOG: systemctlLog,
         },
@@ -693,8 +691,8 @@ describe("headless node packaging contract", () => {
         ),
       ).toBe("keep\n");
       const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
-      expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
-      expect(systemctlCalls).toContain("--user enable --now jarvis-headless.service");
+      expect(systemctlCalls).toContain("--user stop circe-headless.service");
+      expect(systemctlCalls).toContain("--user enable --now circe-headless.service");
       const siblings = await FileSystem.readdir(home);
       expect(siblings.filter((name) => name.includes(".previous."))).toEqual([]);
       expect(siblings.filter((name) => name.includes(".incoming."))).toEqual([]);
@@ -704,10 +702,10 @@ describe("headless node packaging contract", () => {
   });
 
   it("restores every original when a mid-replacement commit mv fails", async () => {
-    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-commit-fault-"));
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-headless-commit-fault-"));
     const home = Path.join(root, "home");
-    const installRoot = Path.join(home, ".jarvis-headless");
-    const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+    const installRoot = Path.join(home, ".circe-headless");
+    const unitPath = Path.join(home, ".config", "systemd", "user", "circe-headless.service");
     const fakeBin = Path.join(root, "fakebin");
     const systemctlLog = Path.join(root, "systemctl.log");
     try {
@@ -741,7 +739,7 @@ describe("headless node packaging contract", () => {
         env: {
           ...process.env,
           HOME: home,
-          JARVIS_HEADLESS_HOME: installRoot,
+          CIRCE_HEADLESS_HOME: installRoot,
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           SYSTEMCTL_LOG: systemctlLog,
         },
@@ -765,8 +763,8 @@ describe("headless node packaging contract", () => {
         ),
       ).toBe("keep\n");
       const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
-      expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
-      expect(systemctlCalls).toContain("--user enable --now jarvis-headless.service");
+      expect(systemctlCalls).toContain("--user stop circe-headless.service");
+      expect(systemctlCalls).toContain("--user enable --now circe-headless.service");
       const siblings = await FileSystem.readdir(home);
       expect(siblings.filter((name) => name.includes(".previous."))).toEqual([]);
       expect(siblings.filter((name) => name.includes(".incoming."))).toEqual([]);
@@ -776,10 +774,10 @@ describe("headless node packaging contract", () => {
   });
 
   it("restores from filesystem backups when a signal lands right after a staging move", async () => {
-    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-stage-signal-"));
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-headless-stage-signal-"));
     const home = Path.join(root, "home");
-    const installRoot = Path.join(home, ".jarvis-headless");
-    const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+    const installRoot = Path.join(home, ".circe-headless");
+    const unitPath = Path.join(home, ".config", "systemd", "user", "circe-headless.service");
     const fakeBin = Path.join(root, "fakebin");
     const systemctlLog = Path.join(root, "systemctl.log");
     try {
@@ -813,7 +811,7 @@ describe("headless node packaging contract", () => {
         env: {
           ...process.env,
           HOME: home,
-          JARVIS_HEADLESS_HOME: installRoot,
+          CIRCE_HEADLESS_HOME: installRoot,
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           SYSTEMCTL_LOG: systemctlLog,
         },
@@ -837,8 +835,8 @@ describe("headless node packaging contract", () => {
         ),
       ).toBe("keep\n");
       const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
-      expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
-      expect(systemctlCalls).toContain("--user enable --now jarvis-headless.service");
+      expect(systemctlCalls).toContain("--user stop circe-headless.service");
+      expect(systemctlCalls).toContain("--user enable --now circe-headless.service");
       const siblings = await FileSystem.readdir(home);
       expect(siblings.filter((name) => name.includes(".previous."))).toEqual([]);
       expect(siblings.filter((name) => name.includes(".incoming."))).toEqual([]);
@@ -848,10 +846,10 @@ describe("headless node packaging contract", () => {
   });
 
   it("keeps the backup untouched and retains it when a restore remove fails", async () => {
-    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-remove-fault-"));
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-headless-remove-fault-"));
     const home = Path.join(root, "home");
-    const installRoot = Path.join(home, ".jarvis-headless");
-    const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+    const installRoot = Path.join(home, ".circe-headless");
+    const unitPath = Path.join(home, ".config", "systemd", "user", "circe-headless.service");
     const fakeBin = Path.join(root, "fakebin");
     const systemctlLog = Path.join(root, "systemctl.log");
     try {
@@ -890,7 +888,7 @@ describe("headless node packaging contract", () => {
         env: {
           ...process.env,
           HOME: home,
-          JARVIS_HEADLESS_HOME: installRoot,
+          CIRCE_HEADLESS_HOME: installRoot,
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           SYSTEMCTL_LOG: systemctlLog,
         },
@@ -921,9 +919,9 @@ describe("headless node packaging contract", () => {
       );
       expect(await FileSystem.readFile(unitPath, "utf8")).toContain("# previous-unit");
       const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
-      expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
+      expect(systemctlCalls).toContain("--user stop circe-headless.service");
       expect(systemctlCalls).not.toContain("--user daemon-reload");
-      expect(systemctlCalls).not.toContain("--user enable --now jarvis-headless.service");
+      expect(systemctlCalls).not.toContain("--user enable --now circe-headless.service");
       expect(
         await FileSystem.readFile(
           Path.join(installRoot, "userdata", "projects", "keep.txt"),
@@ -936,10 +934,10 @@ describe("headless node packaging contract", () => {
   });
 
   it("preserves the untouched unit when a signal lands during service stop", async () => {
-    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-stop-signal-"));
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-headless-stop-signal-"));
     const home = Path.join(root, "home");
-    const installRoot = Path.join(home, ".jarvis-headless");
-    const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+    const installRoot = Path.join(home, ".circe-headless");
+    const unitPath = Path.join(home, ".config", "systemd", "user", "circe-headless.service");
     const fakeBin = Path.join(root, "fakebin");
     const systemctlLog = Path.join(root, "systemctl.log");
     const receipt = Path.join(root, "stop-receipt");
@@ -971,7 +969,7 @@ describe("headless node packaging contract", () => {
         env: {
           ...process.env,
           HOME: home,
-          JARVIS_HEADLESS_HOME: installRoot,
+          CIRCE_HEADLESS_HOME: installRoot,
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           SYSTEMCTL_LOG: systemctlLog,
           STOP_RECEIPT: receipt,
@@ -1017,8 +1015,8 @@ describe("headless node packaging contract", () => {
           ),
         ).toBe("keep\n");
         const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
-        expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
-        expect(systemctlCalls).toContain("--user enable --now jarvis-headless.service");
+        expect(systemctlCalls).toContain("--user stop circe-headless.service");
+        expect(systemctlCalls).toContain("--user enable --now circe-headless.service");
         const siblings = await FileSystem.readdir(home);
         expect(siblings.filter((name) => name.includes(".previous."))).toEqual([]);
         expect(siblings.filter((name) => name.includes(".incoming."))).toEqual([]);
@@ -1032,10 +1030,10 @@ describe("headless node packaging contract", () => {
     }
   });
   it("retains the recoverable backup and reports instead of restarting a partial tree", async () => {
-    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-restore-fault-"));
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "circe-headless-restore-fault-"));
     const home = Path.join(root, "home");
-    const installRoot = Path.join(home, ".jarvis-headless");
-    const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+    const installRoot = Path.join(home, ".circe-headless");
+    const unitPath = Path.join(home, ".config", "systemd", "user", "circe-headless.service");
     const fakeBin = Path.join(root, "fakebin");
     const systemctlLog = Path.join(root, "systemctl.log");
     try {
@@ -1069,7 +1067,7 @@ describe("headless node packaging contract", () => {
         env: {
           ...process.env,
           HOME: home,
-          JARVIS_HEADLESS_HOME: installRoot,
+          CIRCE_HEADLESS_HOME: installRoot,
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           SYSTEMCTL_LOG: systemctlLog,
         },
@@ -1088,8 +1086,8 @@ describe("headless node packaging contract", () => {
         await FileSystem.readFile(Path.join(home, firstRetained, "runtime", "version"), "utf8"),
       ).toBe("previous\n");
       const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
-      expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
-      expect(systemctlCalls).not.toContain("--user enable --now jarvis-headless.service");
+      expect(systemctlCalls).toContain("--user stop circe-headless.service");
+      expect(systemctlCalls).not.toContain("--user enable --now circe-headless.service");
       expect(
         await FileSystem.readFile(
           Path.join(installRoot, "userdata", "projects", "keep.txt"),

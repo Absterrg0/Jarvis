@@ -222,7 +222,7 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
       version: null,
       status: "disabled",
       auth: { status: "unknown" },
-      message: "Codex is disabled in ARIS settings.",
+      message: "Codex is disabled in Circe settings.",
     });
 
     assert.deepStrictEqual(

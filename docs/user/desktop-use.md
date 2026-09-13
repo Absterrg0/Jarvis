@@ -1,6 +1,6 @@
 # Desktop use
 
-Desktop use lets ARIS see and control the desktop of the machine a node runs on. The agent can take
+Desktop use lets Circe see and control the desktop of the machine a node runs on. The agent can take
 a screenshot, move the pointer, click, drag, scroll, type, press keys, list windows, and focus a
 window. Because a node only ever controls its own display, this works for a real device in your mesh
 rather than a cloud virtual machine.
@@ -24,7 +24,7 @@ position when the platform exposes it.
 
 ## Controlling a remote node
 
-A node controls the desktop of the machine it runs on. When you talk to ARIS from a controller
+A node controls the desktop of the machine it runs on. When you talk to Circe from a controller
 device, the request runs on the execution node and desktop use acts on that node, not on the
 controller. There is no cloud VM and no moving work to a different machine.
 
@@ -66,7 +66,7 @@ selected display are refused. Text, scrolling, drag duration and pending request
 
 - "Desktop use is unavailable": no capture tool was found, or the node has no graphical session.
   `desktop_status` gives the reason.
-- Wayland capture is unavailable: check the compositor-specific helpers above. ARIS does not use
+- Wayland capture is unavailable: check the compositor-specific helpers above. Circe does not use
   XWayland screenshots as a fallback for native Wayland windows.
 - The agent clicks the wrong place: ask for a screenshot first, then target by the coordinates it
   reports.
