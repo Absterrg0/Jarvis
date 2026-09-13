@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -312,6 +313,20 @@ export const RelayEnvironmentLinkRequest = Schema.Struct({
 }).annotate({ description: "Links an authenticated cloud user to a T3 environment." });
 export type RelayEnvironmentLinkRequest = typeof RelayEnvironmentLinkRequest.Type;
 
+export const RelaySetEnvironmentEnabledRequest = Schema.Struct({
+  enabled: Schema.Boolean.annotate({
+    description: "Whether this linked device may be used from any other device.",
+  }),
+}).annotate({ description: "Enables or disables one linked device for the account." });
+export type RelaySetEnvironmentEnabledRequest = typeof RelaySetEnvironmentEnabledRequest.Type;
+
+export const RelaySetEnvironmentEnabledResponse = Schema.Struct({
+  ok: Schema.Boolean,
+  /** A different device the relay turned off to stay within the cap. */
+  autoDisabledEnvironmentId: Schema.optional(EnvironmentId),
+}).annotate({ description: "Result of enabling or disabling one linked device." });
+export type RelaySetEnvironmentEnabledResponse = typeof RelaySetEnvironmentEnabledResponse.Type;
+
 export const RelayEnvironmentLinkResponse = Schema.Struct({
   ok: Schema.Boolean,
   cloudUserId: TrimmedNonEmptyString,
@@ -429,6 +444,7 @@ export class RelayEnvironmentLinkProofInvalidError extends Schema.TaggedError<Re
 export const RelayEnvironmentConnectNotAuthorizedReason = Schema.Literals([
   "client_proof_key_thumbprint_missing",
   "environment_link_not_found",
+  "environment_disabled",
   "endpoint_provider_not_managed",
   "managed_endpoint_allocation_not_found",
   "managed_endpoint_base_domain_not_configured",
@@ -526,6 +542,19 @@ export class RelayEnvironmentLinkLimitExceededError extends Schema.TaggedError<R
   }
 }
 
+export class RelayEnvironmentLinkNotFoundError extends Schema.TaggedError<RelayEnvironmentLinkNotFoundError>()(
+  "RelayEnvironmentLinkNotFoundError",
+  {
+    code: Schema.Literal("environment_link_not_found"),
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 404 },
+) {
+  override get message(): string {
+    return "No active environment link for that device";
+  }
+}
+
 export class RelayDeviceLimitExceededError extends Schema.TaggedError<RelayDeviceLimitExceededError>()(
   "RelayDeviceLimitExceededError",
   {
@@ -576,6 +605,19 @@ export class RelayLiveVoiceUpstreamError extends Schema.TaggedError<RelayLiveVoi
 ) {
   override get message(): string {
     return "The cloud live conversation could not be created";
+  }
+}
+
+export class RelayLiveVoiceEnvironmentDisabledError extends Schema.TaggedError<RelayLiveVoiceEnvironmentDisabledError>()(
+  "RelayLiveVoiceEnvironmentDisabledError",
+  {
+    code: Schema.Literal("live_voice_environment_disabled"),
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 403 },
+) {
+  override get message(): string {
+    return "This device is turned off for the account";
   }
 }
 
@@ -643,8 +685,10 @@ export const RelayProtectedError = Schema.Union([
   RelayEnvironmentLinkFailedError,
   RelayEnvironmentLinkUnavailableError,
   RelayEnvironmentLinkLimitExceededError,
+  RelayEnvironmentLinkNotFoundError,
   RelayDeviceLimitExceededError,
   RelayLiveVoiceNotConfiguredError,
+  RelayLiveVoiceEnvironmentDisabledError,
   RelayLiveVoiceSessionInUseError,
   RelayLiveVoiceUsageLimitError,
   RelayLiveVoiceUpstreamError,
@@ -687,6 +731,12 @@ const RelayAgentActivityPublishErrors = [
   RelayInternalError,
 ] as const;
 
+const RelaySetEnvironmentEnabledErrors = [
+  RelayAuthInvalidError,
+  RelayEnvironmentLinkNotFoundError,
+  RelayInternalError,
+] as const;
+
 const RelayLiveVoiceReleaseErrors = [
   RelayAuthInvalidError,
   RelayLiveVoiceUpstreamError,
@@ -696,6 +746,7 @@ const RelayLiveVoiceReleaseErrors = [
 const RelayLiveVoiceSessionErrors = [
   RelayAuthInvalidError,
   RelayLiveVoiceNotConfiguredError,
+  RelayLiveVoiceEnvironmentDisabledError,
   RelayLiveVoiceSessionInUseError,
   RelayLiveVoiceUsageLimitError,
   RelayLiveVoiceUpstreamError,
@@ -770,11 +821,20 @@ export const RelayClientEnvironmentRecord = Schema.Struct({
   label: TrimmedNonEmptyString,
   endpoint: RelayManagedEndpoint,
   linkedAt: TrimmedNonEmptyString,
+  /** Missing on relays deployed before device enablement; treat as enabled. */
+  enabled: Schema.optional(Schema.Boolean),
 });
 export type RelayClientEnvironmentRecord = typeof RelayClientEnvironmentRecord.Type;
 
+/** Enabled devices an account may use at once unless an operator overrides it. */
+export const RELAY_DEFAULT_ENABLED_DEVICE_LIMIT = 5;
+
 export const RelayListEnvironmentsResponse = Schema.Struct({
   environments: Schema.Array(RelayClientEnvironmentRecord),
+  /** Maximum enabled devices per account. Older relays omit it; use the default. */
+  enabledLimit: Schema.Number.pipe(
+    Schema.withDecodingDefault(Effect.succeed(RELAY_DEFAULT_ENABLED_DEVICE_LIMIT)),
+  ),
 });
 export type RelayListEnvironmentsResponse = typeof RelayListEnvironmentsResponse.Type;
 
@@ -1132,6 +1192,17 @@ const RelayClientGroup = HttpApiGroup.make("client")
       success: RelayOkResponse,
       error: RelayAuthAndInternalErrors,
     }).annotate(OpenApi.Summary, "Unlink an environment"),
+    HttpApiEndpoint.post(
+      "setEnvironmentEnabled",
+      "/v1/client/environment-links/:environmentId/enabled",
+      {
+        headers: RelayBearerRequestHeaders,
+        params: RelayEnvironmentUnlinkParams,
+        payload: RelaySetEnvironmentEnabledRequest,
+        success: RelaySetEnvironmentEnabledResponse,
+        error: RelaySetEnvironmentEnabledErrors,
+      },
+    ).annotate(OpenApi.Summary, "Enable or disable a linked device"),
     HttpApiEndpoint.delete(
       "releaseEnvironmentTunnel",
       "/v1/client/environment-links/:environmentId/tunnel",

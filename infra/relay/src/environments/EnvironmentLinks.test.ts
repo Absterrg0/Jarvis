@@ -7,6 +7,15 @@ import * as RelayDb from "../db.ts";
 import { relayEnvironmentLinks } from "../persistence/schema.ts";
 import * as EnvironmentLinks from "./EnvironmentLinks.ts";
 
+const testDbLayer = (db: RelayDb.RelayDb["Service"]) =>
+  Layer.mergeAll(
+    Layer.succeed(RelayDb.RelayDb, db),
+    Layer.succeed(
+      RelayDb.RelayTransactions,
+      RelayDb.RelayTransactions.of({ withTransaction: (effect) => effect }),
+    ),
+  );
+
 describe("EnvironmentLinks", () => {
   it.effect("retains link lookup failures with user and environment identity", () => {
     const cause = new Error("database unavailable");
@@ -35,11 +44,7 @@ describe("EnvironmentLinks", () => {
         environmentId: "env-1",
       });
       expect(error.cause).toBe(cause);
-    }).pipe(
-      Effect.provide(
-        EnvironmentLinks.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb))),
-      ),
-    );
+    }).pipe(Effect.provide(EnvironmentLinks.layer.pipe(Layer.provide(testDbLayer(fakeDb)))));
   });
 
   it.effect("identifies delivery-user list failures without retaining key material", () => {
@@ -71,11 +76,7 @@ describe("EnvironmentLinks", () => {
       });
       expect(error.cause).toBe(cause);
       expect(error).not.toHaveProperty("environmentPublicKey");
-    }).pipe(
-      Effect.provide(
-        EnvironmentLinks.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb))),
-      ),
-    );
+    }).pipe(Effect.provide(EnvironmentLinks.layer.pipe(Layer.provide(testDbLayer(fakeDb)))));
   });
 
   it.effect("selects users when either notifications or Live Activities are enabled", () => {
@@ -109,11 +110,7 @@ describe("EnvironmentLinks", () => {
       expect(query.sql).toContain('"relay_environment_links"."live_activities_enabled" = $3');
       expect(query.sql).toContain(" or ");
       expect(query.params).toEqual(["env-1", true, true]);
-    }).pipe(
-      Effect.provide(
-        EnvironmentLinks.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb))),
-      ),
-    );
+    }).pipe(Effect.provide(EnvironmentLinks.layer.pipe(Layer.provide(testDbLayer(fakeDb)))));
   });
 
   it.effect("revokes only the active link owned by the requesting user", () => {
@@ -160,10 +157,6 @@ describe("EnvironmentLinks", () => {
       expect(query.sql).toContain('"relay_environment_links"."environment_id" = $2');
       expect(query.sql).toContain('"relay_environment_links"."revoked_at" is null');
       expect(query.params).toEqual(["user-1", "env-1"]);
-    }).pipe(
-      Effect.provide(
-        EnvironmentLinks.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb))),
-      ),
-    );
+    }).pipe(Effect.provide(EnvironmentLinks.layer.pipe(Layer.provide(testDbLayer(fakeDb)))));
   });
 });

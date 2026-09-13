@@ -1,0 +1,1 @@
+ALTER TABLE "relay_environment_links" ADD COLUMN "last_used_at" varchar(64);

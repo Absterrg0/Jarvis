@@ -631,3 +631,43 @@
 .jarvis-composer-footer [data-slot="button"]::before {
   box-shadow: none;
 }
+
+.jarvis-device-access {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  background: var(--jc-surface);
+  border: 1px solid var(--jc-line);
+  border-radius: 12px;
+}
+.jarvis-device-access .jarvis-muted-note {
+  margin: 0;
+}
+.jarvis-device-access-list {
+  display: flex;
+  flex-direction: column;
+}
+.jarvis-device-access-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+}
+.jarvis-device-access-row + .jarvis-device-access-row {
+  border-top: 1px solid var(--jc-line);
+}
+.jarvis-device-access-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--jc-text);
+  font-size: 13px;
+}
+.jarvis-device-access-error {
+  margin: 0;
+  color: #c07168;
+  font-size: 11px;
+}

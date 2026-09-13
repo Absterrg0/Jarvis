@@ -54,6 +54,12 @@ function relayProtectedError(error: RelayProtectedError): ConnectionAttemptError
         detail: relayProtectedErrorMessage(error),
         traceId: error.traceId,
       });
+    case "RelayEnvironmentLinkNotFoundError":
+      return new ConnectionBlockedError({
+        reason: "configuration",
+        detail: relayProtectedErrorMessage(error),
+        traceId: error.traceId,
+      });
     case "RelayEnvironmentEndpointTimedOutError":
       return new ConnectionTransientError({
         reason: "timeout",
@@ -81,6 +87,12 @@ function relayProtectedError(error: RelayProtectedError): ConnectionAttemptError
         traceId: error.traceId,
       });
     case "RelayLiveVoiceSessionInUseError":
+      return new ConnectionBlockedError({
+        reason: "permission",
+        detail: relayProtectedErrorMessage(error),
+        traceId: error.traceId,
+      });
+    case "RelayLiveVoiceEnvironmentDisabledError":
       return new ConnectionBlockedError({
         reason: "permission",
         detail: relayProtectedErrorMessage(error),

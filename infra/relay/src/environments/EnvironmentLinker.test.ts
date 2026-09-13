@@ -130,11 +130,13 @@ function testLayer(input?: {
           upsert: input?.upsert ?? (() => Effect.void),
           listUsersForEnvironment: () => Effect.succeed([]),
           listOwnersForEnvironment: () => Effect.succeed([]),
+          recordUse: () => Effect.void,
           listDeliveryUsersForEnvironment: () => Effect.succeed([]),
           listPublicKeysForEnvironment: () => Effect.succeed([]),
           listForUser: () => Effect.succeed([]),
           getForUser: () => Effect.succeed(null),
           revokeForUser: () => Effect.succeed(false),
+          setEnabled: () => Effect.succeed({ autoDisabledEnvironmentId: null }),
         }),
         Layer.succeed(EnvironmentCredentials.EnvironmentCredentials, {
           create: () => Effect.succeed("t3env_credential_secret"),

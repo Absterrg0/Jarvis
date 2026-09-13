@@ -294,6 +294,7 @@ function relayUnlinkTestLayer(input?: {
   readonly withTransaction?: RelayDb.RelayTransactions["Service"]["withTransaction"];
   readonly getForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["getForUser"];
   readonly revokeForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["revokeForUser"];
+  readonly setEnabled?: EnvironmentLinks.EnvironmentLinks["Service"]["setEnabled"];
   readonly revokeCredential?: EnvironmentCredentials.EnvironmentCredentials["Service"]["revokeForEnvironmentPublicKey"];
   readonly prepareDeprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["prepareDeprovision"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
@@ -311,11 +312,14 @@ function relayUnlinkTestLayer(input?: {
         upsert: () => Effect.die("unused upsert"),
         listUsersForEnvironment: () => Effect.die("unused listUsersForEnvironment"),
         listOwnersForEnvironment: () => Effect.succeed([]),
+        recordUse: () => Effect.void,
         listDeliveryUsersForEnvironment: () => Effect.die("unused listDeliveryUsersForEnvironment"),
         listPublicKeysForEnvironment: () => Effect.die("unused listPublicKeysForEnvironment"),
         listForUser: () => Effect.die("unused listForUser"),
         getForUser: input?.getForUser ?? (() => Effect.succeed(null)),
         revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
+        setEnabled:
+          input?.setEnabled ?? (() => Effect.succeed({ autoDisabledEnvironmentId: null })),
       }),
     ),
     Layer.succeed(
@@ -348,6 +352,7 @@ const linkedEnvironmentRecord = {
   },
   environmentPublicKey: "public-key",
   linkedAt: "2026-07-28T00:00:00.000Z",
+  enabled: true,
 } as const;
 
 describe("relay environment unlink", () => {

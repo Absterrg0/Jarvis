@@ -470,6 +470,7 @@ const makeClientLayer = () => {
     createEnvironmentLinkChallenge: unavailable,
     linkEnvironment: unavailable,
     unlinkEnvironment: unavailable,
+    setEnvironmentEnabled: unavailable,
     getEnvironmentStatus: unavailable,
     connectEnvironment: unavailable,
     registerDevice: unavailable,

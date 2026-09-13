@@ -46,15 +46,18 @@ import {
   RelayEnvironmentLinkProofInvalidError,
   RelayEnvironmentLinkUnavailableError,
   RelayEnvironmentLinkLimitExceededError,
+  RelayEnvironmentLinkNotFoundError,
   RelayEnvironmentPrincipal,
   RelayLiveVoiceNotConfiguredError,
   RelayLiveVoiceSessionInUseError,
   RelayLiveVoiceUpstreamError,
+  RelayLiveVoiceEnvironmentDisabledError,
   RelayLiveVoiceUsageLimitError,
   type RelayEnvironmentConnectRequest,
   type RelayDpopAccessTokenScope,
   RelayInternalError,
 } from "@t3tools/contracts/relay";
+import { EnvironmentId } from "@t3tools/contracts";
 import { normalizeRelayIssuer } from "@t3tools/shared/relayJwt";
 
 import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
@@ -558,8 +561,44 @@ export const clientApi = HttpApiBuilder.group(
         Effect.fn("relay.api.client.listEnvironments")(function* () {
           const { userId } = yield* RelayClientPrincipal;
           const environments = yield* links.listForUser({ userId });
-          return { environments };
+          return { environments, enabledLimit: EnvironmentLinks.DEFAULT_ENABLED_DEVICE_LIMIT };
         }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "setEnvironmentEnabled",
+        Effect.fn("relay.api.client.setEnvironmentEnabled")(
+          function* (args) {
+            const { userId } = yield* RelayClientPrincipal;
+            const { params, payload } = args;
+            const result = yield* links.setEnabled({
+              userId,
+              environmentId: params.environmentId,
+              enabled: payload.enabled,
+            });
+            return {
+              ok: true,
+              ...(result.autoDisabledEnvironmentId === null
+                ? {}
+                : {
+                    autoDisabledEnvironmentId: EnvironmentId.make(result.autoDisabledEnvironmentId),
+                  }),
+            };
+          },
+          mapErrorTags({
+            EnvironmentLinkNotFound: (_error, traceId) =>
+              new RelayEnvironmentLinkNotFoundError({
+                code: "environment_link_not_found",
+                traceId,
+              }),
+            EnvironmentLinkSetEnabledPersistenceError: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "persistence_failed",
+                traceId,
+              }),
+          }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
       )
       .handle(
         "listDevices",
@@ -1072,6 +1111,11 @@ export const serverApi = HttpApiBuilder.group(
                 code: "live_voice_session_in_use",
                 traceId,
               }),
+            LiveVoiceEnvironmentDisabled: (_error, traceId) =>
+              new RelayLiveVoiceEnvironmentDisabledError({
+                code: "live_voice_environment_disabled",
+                traceId,
+              }),
             LiveVoiceUsageLimitExceeded: (_error, traceId) =>
               new RelayLiveVoiceUsageLimitError({
                 code: "live_voice_usage_limit",
@@ -1127,6 +1171,12 @@ export const serverApi = HttpApiBuilder.group(
                 traceId,
               }),
             LiveVoiceSessionInUse: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            LiveVoiceEnvironmentDisabled: (_error, traceId) =>
               new RelayInternalError({
                 code: "internal_error",
                 reason: "internal_error",

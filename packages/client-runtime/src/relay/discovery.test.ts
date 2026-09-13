@@ -31,6 +31,7 @@ const environments = [
       providerKind: "cloudflare_tunnel",
     },
     linkedAt: "2026-06-01T00:00:00.000Z",
+    enabled: true,
   },
   {
     environmentId: EnvironmentId.make("environment-2"),
@@ -110,6 +111,7 @@ const makeHarness = Effect.fn("RelayDiscoveryTest.makeHarness")(function* () {
     createEnvironmentLinkChallenge: () => Effect.die("unused"),
     linkEnvironment: () => Effect.die("unused"),
     unlinkEnvironment: () => Effect.die("unused"),
+    setEnvironmentEnabled: () => Effect.die("unused setEnvironmentEnabled"),
     connectEnvironment: () => Effect.die("unused"),
     registerDevice: () => Effect.die("unused"),
     unregisterDevice: () => Effect.die("unused"),
@@ -277,6 +279,7 @@ describe("RelayEnvironmentDiscovery", () => {
         createEnvironmentLinkChallenge: () => Effect.die("unused"),
         linkEnvironment: () => Effect.die("unused"),
         unlinkEnvironment: () => Effect.die("unused"),
+        setEnvironmentEnabled: () => Effect.die("unused setEnvironmentEnabled"),
         connectEnvironment: () => Effect.die("unused"),
         registerDevice: () => Effect.die("unused"),
         unregisterDevice: () => Effect.die("unused"),

@@ -84,3 +84,12 @@ redirect. The [shared flow](../../packages/shared/src/connectAuth.ts) preserves
 PKCE and state for both loopback and pasted-code callbacks. SSH and headless
 sessions use the pasted-code flow because the browser cannot ordinarily reach a
 listener on the remote machine.
+
+## What disabling a device does
+
+A linked device has an `enabled` flag. Disabling it stops new managed relay
+connections, cloud voice creation, and the connect and status operations the
+relay brokers for that account on that environment. It does not revoke an
+already-issued environment session, close an existing socket, or affect direct,
+LAN, Tailscale, or SSH routes, which do not consult the relay. Treat the flag as
+account-level access policy at the relay boundary, not as session revocation.

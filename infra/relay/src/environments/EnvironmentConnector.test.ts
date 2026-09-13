@@ -211,6 +211,7 @@ function makeLinks(
     upsert: () => Effect.void,
     listUsersForEnvironment: () => Effect.succeed([]),
     listOwnersForEnvironment: () => Effect.succeed([]),
+    recordUse: () => Effect.void,
     listDeliveryUsersForEnvironment: () => Effect.succeed([]),
     listPublicKeysForEnvironment: () => Effect.succeed([environmentKeyPair.publicKey]),
     listForUser: () => Effect.succeed([]),
@@ -225,9 +226,11 @@ function makeLinks(
         },
         linkedAt: "2026-05-25T00:00:00.000Z",
         environmentPublicKey: environmentKeyPair.publicKey,
+        enabled: true,
         ...overrides,
       }),
     revokeForUser: () => Effect.succeed(false),
+    setEnabled: () => Effect.succeed({ autoDisabledEnvironmentId: null }),
   };
 }
 

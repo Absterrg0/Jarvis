@@ -86,6 +86,7 @@ function makeEnvironmentLinks(
     upsert: () => Effect.void,
     listUsersForEnvironment: () => Effect.succeed(["dev:julius"]),
     listOwnersForEnvironment: () => Effect.succeed([]),
+    recordUse: () => Effect.void,
     listDeliveryUsersForEnvironment: () =>
       Effect.succeed([
         {
@@ -98,6 +99,7 @@ function makeEnvironmentLinks(
     listForUser: () => Effect.succeed([]),
     getForUser: () => Effect.succeed(null),
     revokeForUser: () => Effect.succeed(false),
+    setEnabled: () => Effect.succeed({ autoDisabledEnvironmentId: null }),
     ...overrides,
   };
 }

@@ -46,6 +46,11 @@ export class LiveVoiceEnvironmentAmbiguous extends Schema.TaggedError<LiveVoiceE
   { environmentId: Schema.String, owners: Schema.Number },
 ) {}
 
+export class LiveVoiceEnvironmentDisabled extends Schema.TaggedError<LiveVoiceEnvironmentDisabled>()(
+  "LiveVoiceEnvironmentDisabled",
+  { environmentId: Schema.String, userId: Schema.String },
+) {}
+
 export class LiveVoiceSessionInUse extends Schema.TaggedError<LiveVoiceSessionInUse>()(
   "LiveVoiceSessionInUse",
   { userId: Schema.String },
@@ -70,6 +75,7 @@ export type LiveVoiceSessionsError =
   | LiveVoiceNotConfigured
   | LiveVoiceEnvironmentNotLinked
   | LiveVoiceEnvironmentAmbiguous
+  | LiveVoiceEnvironmentDisabled
   | LiveVoiceSessionInUse
   | LiveVoiceUsageLimitExceeded
   | LiveVoiceUpstreamFailed
@@ -102,20 +108,31 @@ export const make = Effect.gen(function* () {
 
   // Cloud voice is account-scoped. Resolve ownership from every non-revoked
   // link, independent of notification preferences, and reject shared
-  // environments instead of guessing which account pays.
-  const resolveUserId = (environmentId: string) =>
+  // environments instead of guessing which account pays. Creation requires the
+  // owning link to be enabled; release must still work to clean up a session
+  // after the device is disabled.
+  const resolveUserId = (environmentId: string, requireEnabled: boolean) =>
     Effect.gen(function* () {
       const owners = yield* links
         .listOwnersForEnvironment({ environmentId })
         .pipe(Effect.mapError(persistence("list-owners")));
-      if (owners.length === 1) return owners[0] as string;
-      if (owners.length === 0) {
+      const owner = owners[0];
+      if (owner === undefined) {
         return yield* new LiveVoiceEnvironmentNotLinked({ environmentId });
       }
-      return yield* new LiveVoiceEnvironmentAmbiguous({
-        environmentId,
-        owners: owners.length,
-      });
+      if (owners.length > 1) {
+        return yield* new LiveVoiceEnvironmentAmbiguous({
+          environmentId,
+          owners: owners.length,
+        });
+      }
+      if (requireEnabled && !owner.enabled) {
+        return yield* new LiveVoiceEnvironmentDisabled({
+          environmentId,
+          userId: owner.userId,
+        });
+      }
+      return owner.userId;
     });
 
   const reservationIdentity = (userId: string, reservationId: string) =>
@@ -141,7 +158,7 @@ export const make = Effect.gen(function* () {
       }
       const model = liveVoice?.model ?? JARVIS_LIVE_VOICE_DEFAULT_MODEL;
       const voice = liveVoice?.voice ?? JARVIS_LIVE_VOICE_DEFAULT_VOICE;
-      const userId = yield* resolveUserId(input.environmentId);
+      const userId = yield* resolveUserId(input.environmentId, true);
       const now = yield* DateTime.now;
       const nowIso = DateTime.formatIso(now);
       const expiresAt = DateTime.formatIso(
@@ -319,7 +336,7 @@ export const make = Effect.gen(function* () {
       if (publicKey === null) {
         return yield* new LiveVoiceNotConfigured();
       }
-      const userId = yield* resolveUserId(input.environmentId);
+      const userId = yield* resolveUserId(input.environmentId, false);
       const rows = yield* db
         .select({
           reservationId: relayLiveVoiceSessions.reservationId,

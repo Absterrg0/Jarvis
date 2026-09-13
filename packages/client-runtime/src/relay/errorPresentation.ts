@@ -43,6 +43,9 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
       if (error.reason === "environment_link_not_found") {
         return "Relay has no active link for this environment. The environment server may not have re-established its link yet.";
       }
+      if (error.reason === "environment_disabled") {
+        return "This device is turned off for your account. Enable it from another device to use it.";
+      }
       return error.reason
         ? `Relay rejected the environment connection request (${error.reason}).`
         : "Relay rejected the environment connection request.";
@@ -56,6 +59,8 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
       return `Relay cannot provision the managed endpoint (${error.reason}).`;
     case "RelayEnvironmentLinkLimitExceededError":
       return `Relay refused the link: this account already has its maximum of ${error.maxTunnels} managed tunnels. Unlink an environment to free one up.`;
+    case "RelayEnvironmentLinkNotFoundError":
+      return "Relay has no active link for that device. Refresh and try again.";
     case "RelayDeviceLimitExceededError":
       return `Relay refused the device registration: this account already has its maximum of ${error.maxDevices} devices. Remove a device to free one up.`;
     case "RelayAgentActivityPublishProofExpiredError":
@@ -66,6 +71,8 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
       return "Cloud live voice is not configured on this relay.";
     case "RelayLiveVoiceSessionInUseError":
       return "Another of your devices already has an active live conversation. End it before starting a new one.";
+    case "RelayLiveVoiceEnvironmentDisabledError":
+      return "This device is turned off for your account. Enable it from another device to use cloud voice.";
     case "RelayLiveVoiceUpstreamError":
       return "Relay could not create the cloud live conversation.";
     case "RelayLiveVoiceUsageLimitError":
