@@ -66,10 +66,15 @@ jobs:
               core.setOutput('has_changes', await shouldReleaseNightly({ github, context, core }));
               core.setOutput('ref', context.sha);
             } else if (context.eventName === 'workflow_dispatch' && process.env.DISPATCH_CHANNEL !== 'nightly') {
-              const { tag, sha, version } = await resolveLatestNightlyCommit({ github, context, core });
-              core.notice(`Stable release builds ${sha}, the commit shipped by ${tag}.`);
-              core.setOutput('ref', sha);
-              core.setOutput('nightly_version', version);
+              try {
+                const { tag, sha, version } = await resolveLatestNightlyCommit({ github, context, core });
+                core.notice(`Stable release builds ${sha}, the commit shipped by ${tag}.`);
+                core.setOutput('ref', sha);
+                core.setOutput('nightly_version', version);
+              } catch {
+                core.notice(`No published nightly found; building the dispatched commit ${context.sha}.`);
+                core.setOutput('ref', context.sha);
+              }
             } else {
               core.setOutput('ref', context.sha);
             }
