@@ -28,7 +28,7 @@ on:
 # newest-wins single slot, so a queued stable tag can never be silently
 # dropped. Automatic nightlies recheck the release gap after leaving the queue.
 concurrency:
-  group: release-${{ (github.event_name == 'schedule' || inputs.channel == 'nightly') && 'nightly' || 'stable' }}
+  group: release-${{ inputs.preflight_only && format('preflight-{0}', github.ref) || ((github.event_name == 'schedule' || inputs.channel == 'nightly') && 'nightly' || 'stable') }}
   cancel-in-progress: false
   queue: max
 
@@ -887,6 +887,8 @@ jobs:
         run: npm install --global npm@11.11.0 && npm --version
 
       - name: Publish CLI package
+        env:
+          NPM_CONFIG_LOGLEVEL: verbose
         run: node apps/server/scripts/cli.ts publish --tag "${{ needs.preflight.outputs.cli_dist_tag }}" --app-version "${{ needs.preflight.outputs.version }}" --verbose
 
   release:

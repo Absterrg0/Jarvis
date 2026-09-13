@@ -2,8 +2,10 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
-This document covers the Circe release coordinator. The upstream T3 release graph is retained
-below as a disabled reference only; it is not a second Circe release path.
+This repository currently exposes two manual coordinators. `Release` (`release.yml`) publishes
+`@absterrg0/circe` to npm before desktop artifacts and optional hosted deployments. `Circe core
+release` (`circe-release.yml`) packages the Full/Headless installers described below. They have
+separate concurrency groups; do not dispatch both for the same version.
 
 ## Voice release scope
 
@@ -89,9 +91,9 @@ publication steps described above.
 
 ## Disabled upstream T3 release workflow (reference only)
 
-The following sections describe the upstream `.github/workflows/release.yml` graph from T3 Code.
-That workflow is disabled for this fork and must not be used to publish Circe artifacts. Circe
-releases use only `.github/workflows/circe-release.yml` and its reusable component workflows above.
+The following sections describe `.github/workflows/release.yml`, the active npm and desktop
+release graph adapted from T3 Code. It is manual-only. Its npm authentication check runs before
+release builds and can also run alone.
 
 - Workflow: `.github/workflows/release.yml`
 - Triggers:
@@ -380,24 +382,40 @@ blockmaps, with a 60 MB maximum for a representative sidecar-to-sidecar update.
 
 ## 0) npm OIDC trusted publishing setup (CLI)
 
-The workflow invokes `node apps/server/scripts/cli.ts publish` after aligning package versions. That
-script temporarily prepares the `circe` package, then runs `vp pm publish --filter @absterrg0/circe ...` from the
-repository root so workspace publish configuration is applied correctly.
+Configure Trusted Publisher on the npm package **`@absterrg0/circe`**. The unscoped `circe`
+package belongs to another project. Enter these case-sensitive values:
 
-Checklist:
+- Provider: GitHub Actions
+- Organization or user: `Absterrg0`
+- Repository: `circe`
+- Workflow filename: `release.yml` (no `.github/workflows/` prefix)
+- Environment: leave empty; the publishing job does not declare one
 
-1. Confirm npm org/user owns package `circe` (or rename package first if needed).
-2. In npm package settings, configure Trusted Publisher:
-   - Provider: GitHub Actions
-   - Repository: this repo
-   - Workflow file: `.github/workflows/release.yml`
-   - Environment (if used): match your npm trusted publishing config
-3. Ensure npm account and org policies allow trusted publishing for the package.
-4. Create release tag `vX.Y.Z` and push; workflow will:
-   - align the release package versions to `X.Y.Z`
-   - build web + server
-   - invoke the CLI publish script with npm dist-tag `latest`
-5. Nightly runs invoke the same publish script with npm dist-tag `nightly`.
+The publishing job uses npm 11.11.0 and `id-token: write`. The CLI prepares concrete package
+metadata in `apps/server` and invokes native `npm publish` there. It restores the original
+metadata and icons afterward.
+
+Verify the saved trust settings without building or publishing:
+
+```sh
+gh workflow run release.yml --repo Absterrg0/circe --ref main \
+  -F preflight_only=true -f version=0.0.52
+```
+
+Use the intended, unpublished version. Omit `version` to check authentication alone. This mode
+uses the same workflow identity as publication, runs npm's OIDC exchange on a disposable package,
+and skips every build and deployment. It has a separate concurrency group so an active release
+does not delay the check. A normal release also runs this check before starting expensive jobs.
+
+`npm publish --dry-run` alone is insufficient: npm can return success after authentication fails.
+The check requires npm's explicit successful OIDC exchange as well as a successful exit. It reports
+the exchange rejection and discards the temporary package. A green check proves authentication and,
+when supplied, version availability; it does not prove that built artifacts work.
+
+If npm reports `OIDC token exchange error - package not found` while `npm view @absterrg0/circe`
+succeeds, inspect the saved publisher fields before rerunning any build. npm does not validate
+those fields when they are saved. A separate diagnostic workflow has a different identity and
+cannot validate a trust entry for `release.yml`.
 
 ## 1) Release validation and unsigned builds
 
@@ -407,8 +425,8 @@ There is no dry-run tag path. Pushing any accepted non-nightly tag, including
 `app.example.com`, and can commit a version bump to `main` in the finalize job. Do not push a test tag
 to validate the workflow.
 
-The workflow has no non-publishing `workflow_dispatch` mode. Use normal CI or local quality gates to
-validate checks and builds without shipping. To exercise the complete release graph at lower stable
+Use `preflight_only=true` for authentication checks without publication. Use normal CI or local
+quality gates to validate checks and builds without shipping. To exercise the complete release graph at lower stable
 risk, manually dispatch `channel=nightly`; this still publishes a real nightly npm package, GitHub
 prerelease, desktop updater release, hosted nightly alias, and marketing site, but it does not update stable app aliases or
 commit a version bump to `main`. Only run it when a real nightly release is acceptable.

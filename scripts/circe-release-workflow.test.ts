@@ -151,6 +151,34 @@ describe("Circe release workflow contracts", () => {
     assert.include(workflow, "name: Release quality checks");
   });
 
+  it("checks npm trust before any release builds and supports a check-only dispatch", () => {
+    const workflow = readWorkflow("release.yml");
+    const npmPreflight = workflow.slice(
+      workflow.indexOf("\n  npm_preflight:"),
+      workflow.indexOf("\n  resolve_commit:"),
+    );
+    assert.include(npmPreflight, "id-token: write");
+    assert.include(npmPreflight, "timeout-minutes: 3");
+    assert.include(npmPreflight, "node scripts/check-npm-publish.mjs");
+    assert.notInclude(npmPreflight, "run-install:");
+    assert.include(workflow, "preflight_only:");
+    assert.include(workflow, "format('preflight-{0}', github.ref)");
+    assert.include(workflow, "needs: [npm_preflight]\n    if: ${{ !inputs.preflight_only }}");
+    for (const job of ["relay_public_config", "build_wsl_node_pty"]) {
+      const section = workflow.slice(workflow.indexOf(`\n  ${job}:`) + 1);
+      assert.include(section.split(/\n  [a-z_]+:/)[0] ?? "", "needs: [resolve_commit]");
+    }
+  });
+
+  it("uses the same pinned npm for preflight and publication and exposes exchange errors", () => {
+    const workflow = readWorkflow("release.yml");
+    const versions = [...workflow.matchAll(/npm install --global npm@([^\s]+)/g)].map(
+      (match) => match[1],
+    );
+    assert.deepEqual(versions, ["11.11.0", "11.11.0"]);
+    assert.include(workflow, "NPM_CONFIG_LOGLEVEL: verbose");
+  });
+
   it("uses a shallow checkout for headless packaging", () => {
     const workflow = readWorkflow("headless-node-release.yml");
     assert.include(workflow, "fetch-depth: 1");
