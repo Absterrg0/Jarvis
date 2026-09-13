@@ -1,0 +1,29 @@
+name: OIDC diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Node, npm, and OIDC environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "node: $(node --version)"
+          echo "npm: $(npm --version)"
+          echo "OIDC request url set: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}"
+          echo "OIDC request token set: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}"
+          echo "GITHUB_REPOSITORY: $GITHUB_REPOSITORY"
+          echo "GITHUB_WORKFLOW_REF: $GITHUB_WORKFLOW_REF"
+          code="$(curl -sS -o "$RUNNER_TEMP/oidc.json" -w '%{http_code}' \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org")"
+          echo "token endpoint http: $code"
+          node -e 'const t=require(process.env.RUNNER_TEMP+"/oidc.json");const p=JSON.parse(Buffer.from(t.value.split(".")[1],"base64url"));console.log(JSON.stringify({aud:p.aud,repository:p.repository,repository_owner:p.repository_owner,workflow_ref:p.workflow_ref,ref:p.ref,event_name:p.event_name},null,2))'
