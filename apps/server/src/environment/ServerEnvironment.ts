@@ -279,6 +279,10 @@ export const make = Effect.gen(function* () {
           }
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
+      ...(presetCapabilities.preset !== "headless" &&
+      (hostPlatform === "linux" || hostPlatform === "darwin" || hostPlatform === "win32")
+        ? { desktopUse: true }
+        : {}),
     },
   };
 

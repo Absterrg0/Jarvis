@@ -16,11 +16,21 @@ const makeFakeHttpServer = (hostname: string, port = 43123) =>
 const fakeHttpServer = makeFakeHttpServer("127.0.0.1");
 const fakeEnvironment = ServerEnvironment.ServerEnvironment.of({
   getEnvironmentId: Effect.succeed(environmentId),
-  getDescriptor: Effect.die("unused"),
+  getDescriptor: Effect.succeed({
+    environmentId,
+    label: "Test",
+    platform: { os: "linux", arch: "x64" },
+    serverVersion: "test",
+    capabilities: { repositoryIdentity: true, desktopUse: true },
+  }),
   setLabel: () => Effect.die("unused"),
 });
 
-const makeRegistry = (now: () => number, httpServer = fakeHttpServer) =>
+const makeRegistry = (
+  now: () => number,
+  httpServer = fakeHttpServer,
+  environment = fakeEnvironment,
+) =>
   McpSessionRegistry.__testing
     .make({
       now,
@@ -28,7 +38,7 @@ const makeRegistry = (now: () => number, httpServer = fakeHttpServer) =>
     })
     .pipe(
       Effect.provideService(HttpServer.HttpServer, httpServer),
-      Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
+      Effect.provideService(ServerEnvironment.ServerEnvironment, environment),
       Effect.provide(NodeServices.layer),
     );
 
@@ -74,8 +84,8 @@ it.effect("always grants pull-requests and gates preview on the request", () =>
         .resolve(issued.config.authorizationHeader.replace(/^Bearer\s+/, ""))
         .pipe(Effect.map((scope) => [...(scope?.capabilities ?? [])].sort()));
 
-    expect(yield* capabilitiesOf(withPreview)).toEqual(["preview", "pull-requests"]);
-    expect(yield* capabilitiesOf(withoutPreview)).toEqual(["pull-requests"]);
+    expect(yield* capabilitiesOf(withPreview)).toEqual(["desktop-use", "preview", "pull-requests"]);
+    expect(yield* capabilitiesOf(withoutPreview)).toEqual(["desktop-use", "pull-requests"]);
   }),
 );
 
@@ -154,5 +164,25 @@ it.effect("does not keep credentials of other threads alive", () =>
     timestamp += 2;
 
     expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("does not grant desktop tools when the node does not advertise them", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1000, fakeHttpServer, {
+      ...fakeEnvironment,
+      getDescriptor: fakeEnvironment.getDescriptor.pipe(
+        Effect.map((d) => ({ ...d, capabilities: { repositoryIdentity: true } })),
+      ),
+    });
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("headless"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      preview: false,
+    });
+    const scope = yield* registry.resolve(
+      issued.config.authorizationHeader.replace(/^Bearer\s+/, ""),
+    );
+    expect(scope?.capabilities.has("desktop-use")).toBe(false);
   }),
 );

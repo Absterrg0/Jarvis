@@ -12,6 +12,8 @@ import { WorkerPoolManager, type WorkerRequest, type WorkerResponse } from "@pie
 import * as NodeWorkerThreads from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { stubAnimationFrames } from "../../test/stubAnimationFrames";
+
 type DocumentChange = NonNullable<ReturnType<TextDocument<unknown>["applyEdits"]>>;
 interface Tokenizer {
   readonly themeType: "light" | "dark";
@@ -64,7 +66,7 @@ let renderer: FileRenderer;
 let tokenizer: Tokenizer;
 let file: FileContents;
 let document: TextDocument<unknown>;
-const animationFrames = new Set<ReturnType<typeof setImmediate>>();
+let clearAnimationFrames: (() => void) | undefined;
 
 function nextResponse(): Promise<HeldResponse> {
   const response = responses.shift();
@@ -148,18 +150,7 @@ beforeEach(async () => {
   responses = [];
   responseWaiters = [];
   terminationPromises = [];
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    const frame = setImmediate(() => {
-      animationFrames.delete(frame);
-      callback(0);
-    });
-    animationFrames.add(frame);
-    return frame;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (frame: ReturnType<typeof setImmediate>) => {
-    animationFrames.delete(frame);
-    clearImmediate(frame);
-  });
+  clearAnimationFrames = stubAnimationFrames();
   vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
   pool = new WorkerPoolManager(
     // Adapt browser transport only; Pierre's real worker produces each response.
@@ -191,8 +182,7 @@ async function cleanUpFixture() {
   pool?.terminate();
   await Promise.all(terminationPromises);
   // Pool termination can queue a final broadcast after its workers have exited.
-  for (const frame of animationFrames) clearImmediate(frame);
-  animationFrames.clear();
+  clearAnimationFrames?.();
   vi.unstubAllGlobals();
 }
 

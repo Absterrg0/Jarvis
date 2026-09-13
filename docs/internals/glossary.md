@@ -106,6 +106,10 @@ A cross-node identifier that includes the owning node instead of relying on a lo
 
 The client-runtime catalog and lifecycle owner for paired environments. `EnvironmentRegistry` persists connection targets and credentials, supervises connect/reconnect state, routes an operation to one environment, and removes its local cache when a saved environment is removed. It is a client-side directory, not a central Jarvis authority.
 
+#### Desktop use
+
+The in-house capability that lets a node capture its own display and inject pointer and keyboard events. A node drives only the machine it runs on; there is no cloud or virtual-desktop execution path. Agents reach it through the `t3-code` MCP toolkit and controllers reach it through the `desktopUse.*` WebSocket RPCs. See [desktop-use.md](./desktop-use.md).
+
 #### Multi-node catalog
 
 The client-side presentation of per-node project and provider reads. Catalog entries retain their node reference and label. Equal names are grouped as separate candidates and require clarification; provider readiness is reported from the node that owns the provider.

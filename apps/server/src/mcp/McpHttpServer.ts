@@ -16,6 +16,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
+import * as DesktopUse from "../jarvis/desktopUse/DesktopUse.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -30,6 +31,8 @@ import {
 } from "./toolkits/preview/tools.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
+import { DesktopUseToolkitHandlersLive } from "./toolkits/desktopUse/handlers.ts";
+import { DesktopScreenshotTool, DesktopUseToolkit } from "./toolkits/desktopUse/tools.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -426,6 +429,99 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
   });
 });
 
+const desktopScreenshotFailure = <E>(cause: Cause.Cause<E>) => {
+  if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
+    return Effect.failCause(cause).pipe(Effect.orDie);
+  }
+  const first = cause.reasons.find(Cause.isFailReason)?.error;
+  const errorTag =
+    typeof first === "object" && first !== null && "_tag" in first && typeof first._tag === "string"
+      ? first._tag
+      : "DesktopUseError";
+  const result = new McpSchema.CallToolResult({
+    isError: true,
+    structuredContent: { error: { _tag: errorTag, operation: "screenshot" } },
+    content: [{ type: "text", text: `Desktop screenshot failed: ${errorTag}.` }],
+  });
+  return Effect.logWarning("desktop screenshot failed", {
+    operation: "screenshot",
+    errorTag,
+  }).pipe(Effect.as(result));
+};
+
+const registerDesktopScreenshot = Effect.fn("McpHttpServer.registerDesktopScreenshot")(
+  function* () {
+    const server = yield* McpServer.McpServer;
+    const desktopUse = yield* DesktopUse.DesktopUse;
+    const tool = DesktopScreenshotTool;
+    yield* server.addTool({
+      tool: new McpSchema.Tool({
+        name: tool.name,
+        description: Tool.getDescription(tool),
+        inputSchema: Tool.getJsonSchema(tool),
+        annotations: {
+          ...Context.getOption(tool.annotations, Tool.Title).pipe(
+            Option.map((title) => ({ title })),
+            Option.getOrUndefined,
+          ),
+          readOnlyHint: Context.get(tool.annotations, Tool.Readonly),
+          destructiveHint: Context.get(tool.annotations, Tool.Destructive),
+          idempotentHint: Context.get(tool.annotations, Tool.Idempotent),
+          openWorldHint: Context.get(tool.annotations, Tool.OpenWorld),
+        },
+      }),
+      annotations: tool.annotations,
+      handle: (payload) =>
+        Effect.withFiber((fiber) => {
+          const invocation = Context.getUnsafe(
+            fiber.context,
+            McpInvocationContext.McpInvocationContext,
+          );
+          return McpInvocationContext.requireMcpCapability("desktop-use").pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+            Effect.andThen(desktopUse.capture({ displayId: payload?.displayId })),
+            Effect.map((frame) => {
+              const png = new Uint8Array(Buffer.from(frame.data, "base64"));
+              const { data: _data, ...metadata } = frame;
+              const pointer =
+                frame.cursor === undefined
+                  ? ""
+                  : `; pointer at ${Math.round(frame.cursor.x)},${Math.round(frame.cursor.y)}`;
+              return new McpSchema.CallToolResult({
+                isError: false,
+                structuredContent: metadata,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: `Desktop screenshot ${frame.width}x${frame.height} on display ${frame.displayId}${pointer}.`,
+                  },
+                  { type: "image" as const, data: png, mimeType: frame.mimeType },
+                ],
+              });
+            }),
+            Effect.matchCauseEffect({
+              onFailure: desktopScreenshotFailure,
+              onSuccess: Effect.succeed,
+            }),
+          );
+        }),
+    });
+  },
+);
+
+const DesktopUseToolkitRegistrationLive = McpServer.toolkit(DesktopUseToolkit).pipe(
+  Layer.provide(DesktopUseToolkitHandlersLive),
+);
+
+const DesktopScreenshotRegistrationLive = Layer.effectDiscard(registerDesktopScreenshot()).pipe(
+  Layer.provide(DesktopUseToolkitHandlersLive),
+);
+
+export const DesktopUseToolkitRegistration = Layer.mergeAll(
+  DesktopUseToolkitRegistrationLive,
+  DesktopScreenshotRegistrationLive,
+);
+
 const PreviewStandardToolkitRegistrationLive = McpServer.toolkit(PreviewStandardToolkit).pipe(
   Layer.provide(PreviewStandardToolkitHandlersLive),
 );
@@ -453,4 +549,5 @@ const McpTransportLive = McpServer.layerHttp({
 export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   PullRequestsToolkitRegistrationLive,
+  DesktopUseToolkitRegistration,
 ).pipe(Layer.provideMerge(McpTransportLive));

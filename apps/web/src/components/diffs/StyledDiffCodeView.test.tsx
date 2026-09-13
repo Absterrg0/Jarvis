@@ -21,6 +21,8 @@ import {
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { stubAnimationFrames } from "../../test/stubAnimationFrames";
+
 const testState = vi.hoisted(() => ({
   workers: [] as NodeWorkerThreads.Worker[],
   terminations: [] as Promise<number>[],
@@ -155,6 +157,7 @@ function renderViews(count: number) {
 
 describe("code-view worker lifecycle", () => {
   let renderer: ReactTestRenderer | undefined;
+  let clearAnimationFrames: (() => void) | undefined;
 
   beforeEach(() => {
     testState.workers = [];
@@ -170,10 +173,7 @@ describe("code-view worker lifecycle", () => {
     vi.stubGlobal("navigator", { hardwareConcurrency: 2 });
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
-      setImmediate(() => callback(0)),
-    );
-    vi.stubGlobal("cancelAnimationFrame", clearImmediate);
+    clearAnimationFrames = stubAnimationFrames();
     const initialize = WorkerPoolManager.prototype.initialize;
     vi.spyOn(WorkerPoolManager.prototype, "initialize").mockImplementation(function (
       this: WorkerPoolManager,
@@ -190,6 +190,7 @@ describe("code-view worker lifecycle", () => {
     renderer = undefined;
     await vi.runOnlyPendingTimersAsync();
     await Promise.all(testState.terminations);
+    clearAnimationFrames?.();
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
