@@ -25,7 +25,7 @@ export function runServicePreflight(input: {
       status: "blocked",
       version,
       reason:
-        "This release requires a newer ARIS service launcher. Update it on the server machine.",
+        "This release requires a newer Circe service launcher. Update it on the server machine.",
     };
   }
 

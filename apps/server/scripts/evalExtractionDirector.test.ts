@@ -12,17 +12,17 @@ import {
 const startRow: ExtractionDirectorFixtureRow = {
   id: "ext-start-01",
   // Explicit destination: with the focused Release docs task in context a
-  // bare instruction continues it, so the happy-path start names Jarvis.
-  source: "Fix authentication in Jarvis.",
+  // bare instruction continues it, so the happy-path start names Beacon.
+  source: "Fix authentication in Beacon.",
   prediction: {
-    text: "Fix authentication in Jarvis.",
+    text: "Fix authentication in Beacon.",
     action: "start",
     spans: [{ start: 18, end: 28, label: "DESTINATION" }],
   },
   expected: {
     action: "start",
     dispatchScope: "local",
-    project: "Jarvis",
+    project: "Beacon",
     task: null,
     instruction: "Fix authentication.",
     provider: "Codex",
@@ -38,7 +38,7 @@ describe("extraction-to-Director offline eval", () => {
     expect(scored.wrong).toBe(false);
     expect(scored.actualAction).toBe("start");
     expect(scored.actualDispatchScope).toBe("local");
-    expect(scored.actualProject).toBe("Jarvis");
+    expect(scored.actualProject).toBe("Beacon");
     expect(scored.actualTask).toBeNull();
     expect(scored.actualInstruction).toBe("Fix authentication.");
     expect(scored.actualProvider).toBe("Codex");
@@ -61,7 +61,7 @@ describe("extraction-to-Director offline eval", () => {
     expect(scored.useful).toBe(false);
     expect(scored.wrong).toBe(true);
     expect(scored.projectCorrect).toBe(false);
-    expect(scored.actualProject).toBe("Jarvis");
+    expect(scored.actualProject).toBe("Beacon");
   });
 
   it("refuses node routing instead of dispatching", () => {

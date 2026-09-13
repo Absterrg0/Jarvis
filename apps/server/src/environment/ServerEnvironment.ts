@@ -1,7 +1,7 @@
 import {
   EnvironmentId,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
-  jarvisNodeCapabilitiesForPreset,
+  circeNodeCapabilitiesForPreset,
   type ExecutionEnvironmentDescriptor,
 } from "@t3tools/contracts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -233,9 +233,7 @@ export const make = Effect.gen(function* () {
   // the fd and correctly do not advertise.
   const desktopAppUpdate =
     serverSelfUpdate === "desktop-managed" && serverConfig.desktopTelemetryControlFd !== undefined;
-  const presetCapabilities = jarvisNodeCapabilitiesForPreset(
-    serverConfig.jarvisNodePreset ?? "full",
-  );
+  const presetCapabilities = circeNodeCapabilitiesForPreset(serverConfig.circeNodePreset ?? "full");
 
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
@@ -248,7 +246,7 @@ export const make = Effect.gen(function* () {
     serverVersion: packageJson.version,
     capabilities: {
       repositoryIdentity: true,
-      jarvisNode: {
+      circeNode: {
         ...presetCapabilities,
       },
       connectionProbe: true,

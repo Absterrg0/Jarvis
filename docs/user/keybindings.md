@@ -41,7 +41,7 @@ Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 
 Combine keys with `!` for not, `&&` for and, `||` for or, and parentheses:
 
-ARIS uses `Command+Shift+J` on macOS and `Ctrl+Shift+J` elsewhere. In the desktop app this is
+Circe uses `Command+Shift+J` on macOS and `Ctrl+Shift+J` elsewhere. In the desktop app this is
 registered with the operating system as `CommandOrControl+Shift+J` so it can reveal T3 while another application is
 focused. The shortcut toggles the live conversation session. This fixed global accelerator is not
 currently part of the server keybinding file; the

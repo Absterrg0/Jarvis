@@ -288,27 +288,27 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("switches desktop packaging product names to nightly for nightly builds", () => {
-    assert.equal(resolveDesktopProductName("0.0.17"), "ARIS");
-    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "ARIS (Nightly)");
+    assert.equal(resolveDesktopProductName("0.0.17"), "Circe");
+    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "Circe (Nightly)");
   });
 
-  it("uses the ARIS icon family for official desktop builds on both channels", () => {
+  it("uses the Circe icon family for official desktop builds on both channels", () => {
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17"), {
-      macIconPng: BRAND_ASSET_PATHS.jarvisMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.jarvisLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.jarvisWindowsIconIco,
+      macIconPng: BRAND_ASSET_PATHS.circeMacIconPng,
+      linuxIconPng: BRAND_ASSET_PATHS.circeLinuxIconPng,
+      windowsIconIco: BRAND_ASSET_PATHS.circeWindowsIconIco,
     });
 
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17-nightly.20260413.42"), {
-      macIconPng: BRAND_ASSET_PATHS.jarvisMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.jarvisLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.jarvisWindowsIconIco,
+      macIconPng: BRAND_ASSET_PATHS.circeMacIconPng,
+      linuxIconPng: BRAND_ASSET_PATHS.circeLinuxIconPng,
+      windowsIconIco: BRAND_ASSET_PATHS.circeWindowsIconIco,
     });
   });
 
   it("switches the bundled splash and favicon branding for nightly versions", () => {
-    assert.equal(resolveDesktopWebAssetBrand("0.0.17"), "jarvis");
-    assert.equal(resolveDesktopWebAssetBrand("0.0.17-nightly.20260413.42"), "jarvis");
+    assert.equal(resolveDesktopWebAssetBrand("0.0.17"), "circe");
+    assert.equal(resolveDesktopWebAssetBrand("0.0.17-nightly.20260413.42"), "circe");
   });
 
   it.effect("resolves GitHub desktop publish config from Effect config", () =>
@@ -765,8 +765,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           to: "resource-monitor",
         },
         {
-          from: "apps/desktop/resources/jarvis-official-release.json",
-          to: "jarvis-official-release.json",
+          from: "apps/desktop/resources/circe-official-release.json",
+          to: "circe-official-release.json",
         },
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
         ...WSL_RUNTIME_EXTRA_RESOURCES,
@@ -786,7 +786,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "**/node_modules/.bin/**",
       ]);
       assert.deepStrictEqual(mac.dmg, {
-        title: "ARIS 1.2.3 Installer",
+        title: "Circe 1.2.3 Installer",
         background: "dmg/dmg-background-latest.png",
         window: { width: 640, height: 432 },
         contents: [
@@ -797,9 +797,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         iconTextSize: 12,
       });
       // Linux must register the renderer schemes so the generated .desktop
-      // entry advertises MimeType=x-scheme-handler/jarvis; for OAuth deep links.
+      // entry advertises MimeType=x-scheme-handler/circe; for OAuth deep links.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
-        { name: "ARIS", schemes: ["jarvis", "jarvis-dev"] },
+        { name: "Circe", schemes: ["circe", "circe-dev"] },
       ]);
       assert.deepStrictEqual(mac.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
       assert.deepStrictEqual(linux.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
@@ -1704,7 +1704,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const path = yield* Path.Path;
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
         yield* fs.writeFileString(
-          path.join(fixture.packagedAppDir, "resources/jarvis-official-release.json"),
+          path.join(fixture.packagedAppDir, "resources/circe-official-release.json"),
           '{"official":true}',
         );
 
@@ -1716,7 +1716,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
         assert.include(
           result.manifest.map((file) => file.path),
-          "resources/jarvis-official-release.json",
+          "resources/circe-official-release.json",
         );
       }),
     ),
@@ -1733,7 +1733,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         bytes: 200 * megabyte,
       },
       { path: WINDOWS_ELECTRON_RUNTIME_FILES[0], bytes: 100 * megabyte },
-      { path: "Jarvis.exe", bytes: 100 * megabyte },
+      { path: "Circe.exe", bytes: 100 * megabyte },
     ];
     const breakdown = windowsPackagedPayloadByteBreakdown(files);
 
@@ -1912,11 +1912,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     const configuration = resolveMacPasskeySigningConfiguration({
       T3CODE_APPLE_TEAM_ID: "abc1234567",
       T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PUBLISHABLE_KEY: `pk_test_${btoa("example.clerk.accounts.dev$")}`,
+      CIRCE_CLERK_PUBLISHABLE_KEY: `pk_test_${btoa("example.clerk.accounts.dev$")}`,
     });
 
     assert.deepStrictEqual(configuration, {
-      appId: "com.abstergo.jarvis",
+      appId: "com.abstergo.circe",
       teamId: "ABC1234567",
       rpDomains: ["example.clerk.accounts.dev"],
       provisioningProfilePath: "/tmp/t3code.provisionprofile",
@@ -1927,7 +1927,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     const configuration = resolveMacPasskeySigningConfiguration({
       T3CODE_APPLE_TEAM_ID: "ABC1234567",
       T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS:
+      CIRCE_CLERK_PASSKEY_RP_DOMAINS:
         " Clerk.Example.com,example.clerk.accounts.dev,clerk.example.com ",
     });
     const entitlements = renderMacPasskeyEntitlements(configuration);
@@ -1936,7 +1936,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "clerk.example.com",
       "example.clerk.accounts.dev",
     ]);
-    assert.include(entitlements, "<string>ABC1234567.com.abstergo.jarvis</string>");
+    assert.include(entitlements, "<string>ABC1234567.com.abstergo.circe</string>");
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
@@ -1954,7 +1954,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
     const missingProfileError = captureError({
       T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
+      CIRCE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
     });
     assert.instanceOf(missingProfileError, MissingMacPasskeyProvisioningProfileError);
     assert.equal(
@@ -1967,7 +1967,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     const invalidDomainError = captureError({
       T3CODE_APPLE_TEAM_ID: "ABC1234567",
       T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS: unsafeDomain,
+      CIRCE_CLERK_PASSKEY_RP_DOMAINS: unsafeDomain,
     });
     assert.instanceOf(invalidDomainError, InvalidMacPasskeyRpDomainError);
     assert.equal(invalidDomainError.reason, "scheme-not-allowed");
@@ -1985,18 +1985,18 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         resolveMacPasskeySigningConfiguration({
           T3CODE_APPLE_TEAM_ID: "ABC1234567",
           T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-          T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev:8443",
+          CIRCE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev:8443",
         }),
       /Invalid passkey RP domain/u,
     );
     const invalidPublishableKeyError = captureError({
       T3CODE_APPLE_TEAM_ID: "ABC1234567",
       T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PUBLISHABLE_KEY: "pk_test_%",
+      CIRCE_CLERK_PUBLISHABLE_KEY: "pk_test_%",
     });
     assert.instanceOf(invalidPublishableKeyError, InvalidMacPasskeyPublishableKeyError);
     assert.ok(invalidPublishableKeyError.cause);
-    assert.equal(invalidPublishableKeyError.message, "T3CODE_CLERK_PUBLISHABLE_KEY is invalid.");
+    assert.equal(invalidPublishableKeyError.message, "CIRCE_CLERK_PUBLISHABLE_KEY is invalid.");
     assert.notProperty(invalidPublishableKeyError, "publishableKey");
     assert.notInclude(invalidPublishableKeyError.message, "pk_test_%");
   });
@@ -2040,11 +2040,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
 
       const mac = config.mac as Record<string, unknown>;
-      assert.equal(config.appId, "com.abstergo.jarvis");
+      assert.equal(config.appId, "com.abstergo.circe");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.match(String(mac.sign), /[\\/]scripts[\\/]sign-macos\.ts$/);
-      assert.deepStrictEqual(mac.protocols, [{ name: "ARIS", schemes: ["jarvis", "jarvis-dev"] }]);
+      assert.deepStrictEqual(mac.protocols, [{ name: "Circe", schemes: ["circe", "circe-dev"] }]);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
@@ -2120,8 +2120,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         to: "resource-monitor",
       },
       {
-        from: "apps/desktop/resources/jarvis-official-release.json",
-        to: "jarvis-official-release.json",
+        from: "apps/desktop/resources/circe-official-release.json",
+        to: "circe-official-release.json",
       },
     ]);
     assert.deepStrictEqual(resolveResourceMonitorRustTargets("mac", "universal"), [
@@ -2339,7 +2339,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it("keeps a packaged GUI smoke on the Linux AppImage wrapper", () => {
     const workflow = NodeFS.readFileSync(
-      new URL("../.github/workflows/jarvis-desktop-linux.yml", import.meta.url),
+      new URL("../.github/workflows/circe-desktop-linux.yml", import.meta.url),
       "utf8",
     );
     assert.include(workflow, "Smoke Linux AppImage GUI startup");
@@ -2351,8 +2351,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "setsid");
     assert.include(workflow, 'x_display=":99"');
     assert.include(workflow, 'x_socket="/tmp/.X11-unix/X${x_display#:}"');
-    assert.include(workflow, 'xvfb_log="$RUNNER_TEMP/jarvis-xvfb.log"');
-    assert.include(workflow, 'openbox_log="$RUNNER_TEMP/jarvis-openbox.log"');
+    assert.include(workflow, 'xvfb_log="$RUNNER_TEMP/circe-xvfb.log"');
+    assert.include(workflow, 'openbox_log="$RUNNER_TEMP/circe-openbox.log"');
     assert.include(workflow, 'chmod 700 "$smoke_root/xdg-runtime"');
     assert.include(workflow, "sudo install -d -m 1777 /tmp/.X11-unix");
     assert.include(workflow, "Refusing to reuse an existing X11 socket");
@@ -2363,7 +2363,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.notInclude(workflow, "WAYLAND");
     assert.notInclude(workflow, "--headless");
     assert.include(workflow, "inotifywait -q -e create,moved_to");
-    assert.include(workflow, 'smoke_root="$RUNNER_TEMP/jarvis-gui-smoke-home"');
+    assert.include(workflow, 'smoke_root="$RUNNER_TEMP/circe-gui-smoke-home"');
     assert.include(
       workflow,
       'mkdir -p "$smoke_root/t3-home" "$smoke_root/xdg-config" "$smoke_root/xdg-data" "$smoke_root/xdg-cache"',
@@ -2380,11 +2380,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "APPIMAGE_EXTRACT_AND_RUN=1");
     assert.include(
       workflow,
-      '"$appimage" --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
+      '"$appimage" --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --circe-startup-probe="$probe_file"',
     );
     assert.notInclude(workflow, '"$app" --ozone-platform=x11 --no-sandbox');
     assert.include(workflow, "ELECTRON_ENABLE_LOGGING=1");
-    assert.include(workflow, "JARVIS_STARTUP_PROBE_FILE");
+    assert.include(workflow, "CIRCE_STARTUP_PROBE_FILE");
     assert.include(workflow, "inotifywait");
     const startupGate = workflow.slice(
       workflow.indexOf("# Arm the watcher before launching the app."),
@@ -2466,7 +2466,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     };
     assert.doesNotThrow(() =>
       assertDesktopArtifactStageIsolated({
-        repoRoot: "D:\\a\\Jarvis",
+        repoRoot: "D:\\a\\Circe",
         stageRoot: "C:\\runner-temp\\stage",
         path: windowsPath,
       }),

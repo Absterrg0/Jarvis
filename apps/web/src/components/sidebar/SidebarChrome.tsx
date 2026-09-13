@@ -28,7 +28,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
-import { JARVIS_MARK_SRC } from "../jarvis/JarvisBrand";
+import { CIRCE_MARK_SRC } from "../circe/CirceBrand";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -70,9 +70,9 @@ function SidebarBrand() {
       className="relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center gap-2 overflow-hidden rounded-[var(--control-radius)] text-foreground outline-hidden ring-ring focus-visible:ring-2 md:flex"
       to="/"
     >
-      <img alt="" className="size-4 shrink-0 rounded-[2px]" src={JARVIS_MARK_SRC} />
+      <img alt="" className="size-4 shrink-0 rounded-[2px]" src={CIRCE_MARK_SRC} />
       <span className="truncate font-mono text-[11px] font-bold uppercase tracking-[0.12em] text-foreground">
-        ARIS
+        Circe
       </span>
     </Link>
   );
@@ -115,8 +115,8 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           ? "project-settings"
           : location.pathname === "/usage"
             ? "usage"
-            : location.pathname === "/jarvis"
-              ? "jarvis"
+            : location.pathname === "/circe"
+              ? "circe"
               : location.pathname === "/pull-requests"
                 ? "pull-requests"
                 : null,
@@ -144,9 +144,9 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/settings" });
   }, [closeMobileSidebar, navigate]);
 
-  const handleJarvisClick = useCallback(() => {
+  const handleCirceClick = useCallback(() => {
     closeMobileSidebar();
-    void navigate({ to: "/jarvis" });
+    void navigate({ to: "/circe" });
   }, [closeMobileSidebar, navigate]);
 
   const handleUsageClick = useCallback(() => {
@@ -177,9 +177,9 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       ) : (
         <>
           <SidebarUtilityItem
-            icon={<img alt="" className="size-4 rounded-sm" src={JARVIS_MARK_SRC} />}
-            label="ARIS Control Center"
-            onClick={handleJarvisClick}
+            icon={<img alt="" className="size-4 rounded-sm" src={CIRCE_MARK_SRC} />}
+            label="Circe Control Center"
+            onClick={handleCirceClick}
           />
           <SidebarUtilityItem
             icon={<SettingsIcon />}

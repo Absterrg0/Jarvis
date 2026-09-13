@@ -32,7 +32,7 @@ export class FcmAssertionSigner extends Context.Service<
       readonly issuedAt: number;
     }) => Effect.Effect<string, FcmAssertionSigningError>;
   }
->()("@t3tools/jarvis-relay/agentActivity/FcmAssertionSigner") {}
+>()("@circe/relay/agentActivity/FcmAssertionSigner") {}
 
 export const make = Effect.gen(function* () {
   const { subtle } = yield* WebCrypto.WebCrypto;

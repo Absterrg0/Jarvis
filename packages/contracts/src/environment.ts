@@ -63,13 +63,13 @@ export const ExecutionEnvironmentPlatform = Schema.Struct({
   machine: ForwardCompatibleOptional(EnvironmentMachineKind),
 });
 
-/** Jarvis installation presets share one runtime architecture. */
-export const JarvisNodePreset = Schema.Literals(["full", "controller", "headless"]);
-export type JarvisNodePreset = typeof JarvisNodePreset.Type;
+/** Circe installation presets share one runtime architecture. */
+export const CirceNodePreset = Schema.Literals(["full", "controller", "headless"]);
+export type CirceNodePreset = typeof CirceNodePreset.Type;
 
-/** Canonical capabilities advertised by a Jarvis node. */
-export const JarvisNodeCapabilities = Schema.Struct({
-  preset: JarvisNodePreset,
+/** Canonical capabilities advertised by a Circe node. */
+export const CirceNodeCapabilities = Schema.Struct({
+  preset: CirceNodePreset,
   ui: Schema.Boolean,
   execution: Schema.Boolean,
   projects: Schema.Boolean,
@@ -77,9 +77,9 @@ export const JarvisNodeCapabilities = Schema.Struct({
   /** This node can send best-effort Expo Push notifications for local tasks. */
   pushNotifications: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
-export type JarvisNodeCapabilities = typeof JarvisNodeCapabilities.Type;
+export type CirceNodeCapabilities = typeof CirceNodeCapabilities.Type;
 
-export function jarvisNodeCapabilitiesForPreset(preset: JarvisNodePreset): JarvisNodeCapabilities {
+export function circeNodeCapabilitiesForPreset(preset: CirceNodePreset): CirceNodeCapabilities {
   switch (preset) {
     case "controller":
       return {
@@ -141,8 +141,8 @@ export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  /** Optional for compatibility with servers predating Jarvis node presets. */
-  jarvisNode: Schema.optionalKey(JarvisNodeCapabilities),
+  /** Optional for compatibility with servers predating Circe node presets. */
+  circeNode: Schema.optionalKey(CirceNodeCapabilities),
   connectionProbe: Schema.optionalKey(Schema.Boolean),
   /** Missing on older servers, which still accept inline image attachments. */
   attachmentUploads: Schema.optionalKey(Schema.Boolean),

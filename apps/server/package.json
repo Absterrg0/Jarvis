@@ -20,7 +20,7 @@
     "start": "node dist/bin.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vp test run",
-    "eval:jarvis-semantic": "node scripts/evalJarvisSemantic.ts"
+    "eval:circe-semantic": "node scripts/evalCirceSemantic.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.260",
@@ -39,10 +39,10 @@
     "yauzl": "^3.4.0"
   },
   "devDependencies": {
+    "@circe/client-runtime": "workspace:*",
+    "@circe/core": "workspace:*",
     "@effect/vitest": "catalog:",
     "@t3tools/contracts": "workspace:*",
-    "@t3tools/jarvis-client-runtime": "workspace:*",
-    "@t3tools/jarvis-core": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "@t3tools/tailscale": "workspace:*",
     "@t3tools/web": "workspace:*",

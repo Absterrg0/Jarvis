@@ -12,7 +12,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import type { Tool } from "effect/unstable/ai";
 
-import * as DesktopUse from "../../../jarvis/desktopUse/DesktopUse.ts";
+import * as DesktopUse from "../../../circe/desktopUse/DesktopUse.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { DesktopUseToolkitHandlersLive } from "./handlers.ts";
 import { DesktopUseToolkit } from "./tools.ts";

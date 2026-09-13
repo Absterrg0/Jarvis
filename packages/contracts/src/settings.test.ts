@@ -483,16 +483,16 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
     });
   });
 
-  it("defaults the Jarvis semantic supervisor to Luna at low reasoning effort", () => {
-    expect(DEFAULT_SERVER_SETTINGS.jarvisSupervisorModelSelection).toEqual({
+  it("defaults the Circe semantic supervisor to Luna at low reasoning effort", () => {
+    expect(DEFAULT_SERVER_SETTINGS.circeSupervisorModelSelection).toEqual({
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.6-luna",
       options: [{ id: "reasoningEffort", value: "low" }],
     });
-    expect(decodeServerSettings({}).jarvisSupervisorModelSelection).toEqual(
-      DEFAULT_SERVER_SETTINGS.jarvisSupervisorModelSelection,
+    expect(decodeServerSettings({}).circeSupervisorModelSelection).toEqual(
+      DEFAULT_SERVER_SETTINGS.circeSupervisorModelSelection,
     );
-    expect(decodeServerSettingsPatch({}).jarvisSupervisorModelSelection).toBeUndefined();
+    expect(decodeServerSettingsPatch({}).circeSupervisorModelSelection).toBeUndefined();
   });
 
   it("defaults to an empty record so legacy configs without the key still decode", () => {
@@ -613,22 +613,22 @@ describe("ServerSettings worktree defaults", () => {
   });
 });
 
-describe("ServerSettings Jarvis defaults", () => {
-  it("defaults the per-node Jarvis model selection to null for legacy configs", () => {
-    expect(decodeServerSettings({}).jarvisDefaultModelSelection).toBeNull();
-    expect(decodeServerSettingsPatch({}).jarvisDefaultModelSelection).toBeUndefined();
+describe("ServerSettings Circe defaults", () => {
+  it("defaults the per-node Circe model selection to null for legacy configs", () => {
+    expect(decodeServerSettings({}).circeDefaultModelSelection).toBeNull();
+    expect(decodeServerSettingsPatch({}).circeDefaultModelSelection).toBeUndefined();
   });
 
-  it("accepts an explicit node Jarvis model selection and reset", () => {
+  it("accepts an explicit node Circe model selection and reset", () => {
     const selection = {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.6-sol",
     };
     expect(
-      decodeServerSettings({ jarvisDefaultModelSelection: selection }).jarvisDefaultModelSelection,
+      decodeServerSettings({ circeDefaultModelSelection: selection }).circeDefaultModelSelection,
     ).toEqual(selection);
     expect(
-      decodeServerSettingsPatch({ jarvisDefaultModelSelection: null }).jarvisDefaultModelSelection,
+      decodeServerSettingsPatch({ circeDefaultModelSelection: null }).circeDefaultModelSelection,
     ).toBeNull();
   });
 });

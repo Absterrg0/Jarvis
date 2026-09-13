@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 
-import * as DesktopUse from "../../../jarvis/desktopUse/DesktopUse.ts";
+import * as DesktopUse from "../../../circe/desktopUse/DesktopUse.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { DesktopUseToolkit } from "./tools.ts";
 

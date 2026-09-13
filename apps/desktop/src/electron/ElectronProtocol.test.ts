@@ -35,7 +35,7 @@ describe("ElectronProtocol", () => {
         Effect.gen(function* () {
           const protocol = yield* ElectronProtocol.ElectronProtocol;
           yield* protocol.registerDesktopProtocol({
-            scheme: "jarvis-dev",
+            scheme: "circe-dev",
             targetOrigin: new URL("http://127.0.0.1:3773/"),
             backendOrigin: new URL("http://127.0.0.1:3774/"),
             clerkFrontendApiHostname: "clerk.t3.codes",
@@ -44,11 +44,11 @@ describe("ElectronProtocol", () => {
 
           const response = yield* Effect.promise(() =>
             handler!(
-              new Request("jarvis-dev://app/api/health?verbose=1", {
+              new Request("circe-dev://app/api/health?verbose=1", {
                 headers: {
                   accept: "application/json",
-                  origin: "jarvis-dev://app",
-                  referer: "jarvis-dev://app/",
+                  origin: "circe-dev://app",
+                  referer: "circe-dev://app/",
                   "sec-fetch-site": "same-origin",
                 },
               }),
@@ -65,18 +65,18 @@ describe("ElectronProtocol", () => {
           );
           assert.include(
             response.headers.get("content-security-policy") ?? "",
-            "img-src 'self' jarvis-dev: blob: data: http: https:",
+            "img-src 'self' circe-dev: blob: data: http: https:",
           );
           assert.include(
             response.headers.get("content-security-policy") ?? "",
-            "font-src 'self' jarvis-dev: data:",
+            "font-src 'self' circe-dev: data:",
           );
         }),
       );
 
       assert.deepEqual(
         handleMock.mock.calls.map((call) => call[0]),
-        ["jarvis-dev"],
+        ["circe-dev"],
       );
       assert.equal(netFetchMock.mock.calls[0]?.[0], "http://127.0.0.1:3773/api/health?verbose=1");
       const forwardedHeaders = new Headers(netFetchMock.mock.calls[0]?.[1]?.headers);
@@ -84,7 +84,7 @@ describe("ElectronProtocol", () => {
       assert.isNull(forwardedHeaders.get("origin"));
       assert.isNull(forwardedHeaders.get("referer"));
       assert.isNull(forwardedHeaders.get("sec-fetch-site"));
-      assert.deepEqual(unhandleMock.mock.calls, [["jarvis-dev"]]);
+      assert.deepEqual(unhandleMock.mock.calls, [["circe-dev"]]);
     }).pipe(Effect.provide(ElectronProtocol.layer)),
   );
 
@@ -99,12 +99,12 @@ describe("ElectronProtocol", () => {
         Effect.gen(function* () {
           const protocol = yield* ElectronProtocol.ElectronProtocol;
           yield* protocol.registerDesktopProtocol({
-            scheme: "jarvis",
+            scheme: "circe",
             targetOrigin: new URL("http://127.0.0.1:3773/"),
             backendOrigin: new URL("http://127.0.0.1:3773/"),
             clerkFrontendApiHostname: undefined,
           });
-          return yield* Effect.promise(() => handler!(new Request("jarvis://other/")));
+          return yield* Effect.promise(() => handler!(new Request("circe://other/")));
         }),
       );
 
@@ -127,12 +127,12 @@ describe("ElectronProtocol", () => {
         Effect.gen(function* () {
           const protocol = yield* ElectronProtocol.ElectronProtocol;
           yield* protocol.registerDesktopProtocol({
-            scheme: "jarvis-dev",
+            scheme: "circe-dev",
             targetOrigin: new URL("http://127.0.0.1:5733/"),
             backendOrigin: new URL("http://127.0.0.1:3773/"),
             clerkFrontendApiHostname: undefined,
           });
-          return yield* Effect.promise(() => handler!(new Request("jarvis-dev://app/")));
+          return yield* Effect.promise(() => handler!(new Request("circe-dev://app/")));
         }),
       );
 
@@ -151,7 +151,7 @@ describe("ElectronProtocol", () => {
       const protocol = yield* ElectronProtocol.ElectronProtocol;
       const error = yield* Effect.scoped(
         protocol.registerDesktopProtocol({
-          scheme: "jarvis-dev",
+          scheme: "circe-dev",
           targetOrigin: new URL("http://127.0.0.1:3773/"),
           backendOrigin: new URL("http://127.0.0.1:3774/"),
           clerkFrontendApiHostname: undefined,
@@ -159,9 +159,9 @@ describe("ElectronProtocol", () => {
       ).pipe(Effect.flip);
 
       assert.instanceOf(error, ElectronProtocol.ElectronProtocolRegistrationError);
-      assert.equal(error.scheme, "jarvis-dev");
+      assert.equal(error.scheme, "circe-dev");
       assert.strictEqual(error.cause, cause);
-      assert.equal(error.message, 'Failed to register Electron protocol scheme "jarvis-dev".');
+      assert.equal(error.message, 'Failed to register Electron protocol scheme "circe-dev".');
     }).pipe(Effect.provide(ElectronProtocol.layer)),
   );
 
@@ -176,7 +176,7 @@ describe("ElectronProtocol", () => {
       const exit = yield* Effect.exit(
         Effect.scoped(
           protocol.registerDesktopProtocol({
-            scheme: "jarvis",
+            scheme: "circe",
             targetOrigin: new URL("http://127.0.0.1:3773/"),
             backendOrigin: new URL("http://127.0.0.1:3773/"),
             clerkFrontendApiHostname: undefined,
@@ -188,16 +188,16 @@ describe("ElectronProtocol", () => {
       if (exit._tag === "Failure") {
         const error = Cause.squash(exit.cause);
         assert.instanceOf(error, ElectronProtocol.ElectronProtocolUnregistrationError);
-        assert.equal(error.scheme, "jarvis");
+        assert.equal(error.scheme, "circe");
         assert.strictEqual(error.cause, cause);
-        assert.equal(error.message, 'Failed to unregister Electron protocol scheme "jarvis".');
+        assert.equal(error.message, 'Failed to unregister Electron protocol scheme "circe".');
       }
     }).pipe(Effect.provide(ElectronProtocol.layer)),
   );
 
   it("keeps executable sources host-restricted while allowing runtime network resources", () => {
     const policy = ElectronProtocol.makeDesktopContentSecurityPolicy({
-      scheme: "jarvis",
+      scheme: "circe",
       targetOrigin: new URL("http://127.0.0.1:3773/"),
       backendOrigin: new URL("http://127.0.0.1:3773/"),
       clerkFrontendApiHostname: "clerk.t3.codes",
@@ -219,13 +219,13 @@ describe("ElectronProtocol", () => {
     assert.deepEqual(directives["connect-src"], ["'self'", "http:", "https:", "ws:", "wss:"]);
     assert.deepEqual(directives["img-src"], [
       "'self'",
-      "jarvis:",
+      "circe:",
       "blob:",
       "data:",
       "http:",
       "https:",
     ]);
-    assert.deepEqual(directives["media-src"], ["'self'", "jarvis:", "blob:", "http:", "https:"]);
-    assert.deepEqual(directives["font-src"], ["'self'", "jarvis:", "data:"]);
+    assert.deepEqual(directives["media-src"], ["'self'", "circe:", "blob:", "http:", "https:"]);
+    assert.deepEqual(directives["font-src"], ["'self'", "circe:", "data:"]);
   });
 });

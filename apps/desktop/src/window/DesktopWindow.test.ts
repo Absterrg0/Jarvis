@@ -90,7 +90,7 @@ function makeFakeBrowserWindow() {
     },
     copyImageAt: vi.fn(),
     focus: vi.fn(),
-    getURL: vi.fn(() => "jarvis-dev://app/"),
+    getURL: vi.fn(() => "circe-dev://app/"),
     isDestroyed: vi.fn(() => destroyed),
     getZoomLevel: vi.fn(() => zoomLevel),
     setZoomLevel: vi.fn((level: number) => {
@@ -623,19 +623,19 @@ describe("DesktopWindow", () => {
   it("recognizes only same-origin renderer navigations", () => {
     assert.isTrue(
       DesktopWindow.isSameOriginRendererNavigation({
-        applicationUrl: "jarvis://app/",
-        navigationUrl: "jarvis://app/settings/connections",
+        applicationUrl: "circe://app/",
+        navigationUrl: "circe://app/settings/connections",
       }),
     );
     assert.isFalse(
       DesktopWindow.isSameOriginRendererNavigation({
-        applicationUrl: "jarvis://app/",
-        navigationUrl: "jarvis://other/settings",
+        applicationUrl: "circe://app/",
+        navigationUrl: "circe://other/settings",
       }),
     );
     assert.isFalse(
       DesktopWindow.isSameOriginRendererNavigation({
-        applicationUrl: "jarvis://app/",
+        applicationUrl: "circe://app/",
         navigationUrl: "t3://app/settings",
       }),
     );
@@ -653,13 +653,13 @@ describe("DesktopWindow", () => {
     );
     assert.isFalse(
       DesktopWindow.isSameOriginRendererNavigation({
-        applicationUrl: "jarvis://app/",
+        applicationUrl: "circe://app/",
         navigationUrl: "https://accounts.microsoft.com/oauth",
       }),
     );
     assert.isFalse(
       DesktopWindow.isSameOriginRendererNavigation({
-        applicationUrl: "jarvis://app/",
+        applicationUrl: "circe://app/",
         navigationUrl: "not a url",
       }),
     );
@@ -698,7 +698,7 @@ describe("DesktopWindow", () => {
         assert.isTrue(createdWindowOptions[0]?.disableAutoHideCursor);
         assert.isFalse(createdWindowOptions[0]?.webPreferences?.backgroundThrottling);
         assert.deepEqual(fakeWindow.setAutoHideCursor.mock.calls, [[false]]);
-        assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["jarvis-dev://app/"]);
+        assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["circe-dev://app/"]);
         assert.equal(fakeWindow.openDevTools.mock.calls.length, 1);
       }).pipe(Effect.provide(layer));
     }),
@@ -932,10 +932,10 @@ describe("DesktopWindow", () => {
         });
       });
       const receiptDirectory = NodeFS.mkdtempSync(
-        NodePath.join(NodeOS.tmpdir(), "jarvis-desktop-window-trigger-"),
+        NodePath.join(NodeOS.tmpdir(), "circe-desktop-window-trigger-"),
       );
       vi.stubEnv(
-        "JARVIS_STARTUP_PROBE_FILE",
+        "CIRCE_STARTUP_PROBE_FILE",
         NodePath.join(receiptDirectory, "startup-receipt.json"),
       );
       const layer = makeTestLayer({
@@ -1063,7 +1063,7 @@ describe("DesktopWindow", () => {
       const createCount = yield* Ref.make(0);
       const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
       const receiptDirectory = NodeFS.mkdtempSync(
-        NodePath.join(NodeOS.tmpdir(), "jarvis-renderer-probe-"),
+        NodePath.join(NodeOS.tmpdir(), "circe-renderer-probe-"),
       );
       const layer = makeTestLayer({
         window: fakeWindow.window,
@@ -1071,7 +1071,7 @@ describe("DesktopWindow", () => {
         mainWindow,
         environment: { ...environmentInput, platform: "linux" },
       });
-      vi.stubEnv("JARVIS_STARTUP_PROBE_FILE", NodePath.join(receiptDirectory, "receipt.json"));
+      vi.stubEnv("CIRCE_STARTUP_PROBE_FILE", NodePath.join(receiptDirectory, "receipt.json"));
 
       try {
         yield* Effect.gen(function* () {
@@ -1155,10 +1155,10 @@ describe("DesktopWindow", () => {
         });
       });
       const receiptDirectory = NodeFS.mkdtempSync(
-        NodePath.join(NodeOS.tmpdir(), "jarvis-desktop-window-"),
+        NodePath.join(NodeOS.tmpdir(), "circe-desktop-window-"),
       );
       const receiptPath = NodePath.join(receiptDirectory, "startup-receipt.json");
-      vi.stubEnv("JARVIS_STARTUP_PROBE_FILE", receiptPath);
+      vi.stubEnv("CIRCE_STARTUP_PROBE_FILE", receiptPath);
       const layer = makeTestLayer({
         window: fakeWindow.window,
         createCount,
@@ -1226,10 +1226,10 @@ describe("DesktopWindow", () => {
         });
       });
       const receiptDirectory = NodeFS.mkdtempSync(
-        NodePath.join(NodeOS.tmpdir(), "jarvis-desktop-window-failure-"),
+        NodePath.join(NodeOS.tmpdir(), "circe-desktop-window-failure-"),
       );
       vi.stubEnv(
-        "JARVIS_STARTUP_PROBE_FILE",
+        "CIRCE_STARTUP_PROBE_FILE",
         NodePath.join(receiptDirectory, "startup-receipt.json"),
       );
       const layer = makeTestLayer({
@@ -1682,17 +1682,17 @@ describe("DesktopWindow", () => {
           return yield* Effect.die("renderer load listeners were not registered");
         }
 
-        didFailLoad({}, -9, "ERR_UNEXPECTED", "jarvis-dev://app/", true);
+        didFailLoad({}, -9, "ERR_UNEXPECTED", "circe-dev://app/", true);
         assert.equal(fakeWindow.loadURL.mock.calls.length, 1);
 
         yield* TestClock.adjust(100);
         assert.deepEqual(fakeWindow.loadURL.mock.calls, [
-          ["jarvis-dev://app/"],
-          ["jarvis-dev://app/"],
+          ["circe-dev://app/"],
+          ["circe-dev://app/"],
         ]);
         assert.equal(fakeWindow.reload.mock.calls.length, 0);
 
-        didFailLoad({}, -9, "ERR_UNEXPECTED", "jarvis-dev://app/", true);
+        didFailLoad({}, -9, "ERR_UNEXPECTED", "circe-dev://app/", true);
         didFinishLoad();
         yield* TestClock.adjust(250);
         assert.equal(fakeWindow.loadURL.mock.calls.length, 2);
@@ -1704,23 +1704,23 @@ describe("DesktopWindow", () => {
   it("retries only transient failures for the development renderer", () => {
     assert.isTrue(
       DesktopWindow.isRetryableDevelopmentRendererLoadFailure({
-        applicationUrl: "jarvis-dev://app/",
+        applicationUrl: "circe-dev://app/",
         errorCode: -102,
         isMainFrame: true,
-        validatedUrl: "jarvis-dev://app/",
+        validatedUrl: "circe-dev://app/",
       }),
     );
     assert.isFalse(
       DesktopWindow.isRetryableDevelopmentRendererLoadFailure({
-        applicationUrl: "jarvis-dev://app/",
+        applicationUrl: "circe-dev://app/",
         errorCode: -3,
         isMainFrame: true,
-        validatedUrl: "jarvis-dev://app/",
+        validatedUrl: "circe-dev://app/",
       }),
     );
     assert.isFalse(
       DesktopWindow.isRetryableDevelopmentRendererLoadFailure({
-        applicationUrl: "jarvis-dev://app/",
+        applicationUrl: "circe-dev://app/",
         errorCode: -102,
         isMainFrame: true,
         validatedUrl: "https://example.com/",
@@ -1963,14 +1963,14 @@ describe("DesktopWindow", () => {
       yield* Effect.gen(function* () {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
-        yield* desktopWindow.dispatchMainRendererAction("jarvis.live-voice-toggle");
+        yield* desktopWindow.dispatchMainRendererAction("circe.live-voice-toggle");
 
         assert.deepEqual(main.send.mock.calls, []);
         main.webContentsListeners.get("ipc-message")?.(
           { sender: main.window.webContents },
           DESKTOP_RENDERER_READY_CHANNEL,
         );
-        assert.deepEqual(main.send.mock.calls, [[MENU_ACTION_CHANNEL, "jarvis.live-voice-toggle"]]);
+        assert.deepEqual(main.send.mock.calls, [[MENU_ACTION_CHANNEL, "circe.live-voice-toggle"]]);
         assert.deepEqual(yield* Ref.get(scenario.revealedWindows), []);
       }).pipe(Effect.provide(scenario.layer));
     }),
@@ -2031,8 +2031,8 @@ describe("DesktopWindow", () => {
   it("authorizes only audio media from the renderer's exact application origin", () => {
     const base = {
       sameWebContents: true,
-      applicationUrl: "jarvis://app/",
-      requestingUrl: "jarvis://app/",
+      applicationUrl: "circe://app/",
+      requestingUrl: "circe://app/",
       permission: "media",
       mediaTypes: ["audio"],
     } as const;
@@ -2048,7 +2048,7 @@ describe("DesktopWindow", () => {
     assert.equal(
       DesktopWindow.isAuthorizedDesktopMediaPermission({
         ...base,
-        requestingUrl: "jarvis://other/",
+        requestingUrl: "circe://other/",
       }),
       false,
     );

@@ -25,11 +25,11 @@ export async function readExpoPushToken(
   if (projectId === null) return null;
 
   // Android needs a channel before its notification permission prompt can be
-  // shown. Keep this direct Jarvis push path separate from the iOS-only cloud
+  // shown. Keep this direct Circe push path separate from the iOS-only cloud
   // relay and Live Activity settings.
   if (Platform.OS === "android") {
     await Notifications.setNotificationChannelAsync(EXPO_PUSH_CHANNEL_ID, {
-      name: "ARIS tasks",
+      name: "Circe tasks",
       importance: Notifications.AndroidImportance.DEFAULT,
     });
   }

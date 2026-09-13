@@ -13,7 +13,7 @@ import { ManagedEndpointZone, RelayApiZone } from "./src/zone.ts";
 import ApiLive, { Api } from "./src/worker.ts";
 
 export default Alchemy.Stack(
-  "JarvisRelay",
+  "CirceRelay",
   {
     providers: Layer.mergeAll(
       Axiom.providers(),

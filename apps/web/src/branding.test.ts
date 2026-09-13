@@ -24,10 +24,10 @@ describe("branding", () => {
       value: {
         desktopBridge: {
           getAppBranding: () => ({
-            baseName: "ARIS",
+            baseName: "Circe",
             stageLabel: "Nightly",
-            displayName: "ARIS (Nightly)",
-            releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
+            displayName: "Circe (Nightly)",
+            releaseTagBaseUrl: "https://github.com/Absterrg0/Circe/releases/tag",
           }),
         },
       },
@@ -35,11 +35,11 @@ describe("branding", () => {
 
     const branding = await import("./branding");
 
-    expect(branding.APP_BASE_NAME).toBe("ARIS");
+    expect(branding.APP_BASE_NAME).toBe("Circe");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
-    expect(branding.APP_DISPLAY_NAME).toBe("ARIS (Nightly)");
+    expect(branding.APP_DISPLAY_NAME).toBe("Circe (Nightly)");
     expect(branding.APP_RELEASE_TAG_BASE_URL).toBe(
-      "https://github.com/Absterrg0/Jarvis/releases/tag",
+      "https://github.com/Absterrg0/Circe/releases/tag",
     );
   });
 
@@ -49,10 +49,10 @@ describe("branding", () => {
       value: {
         desktopBridge: {
           getAppBranding: () => ({
-            baseName: "ARIS",
+            baseName: "Circe",
             stageLabel: "Alpha",
-            displayName: "ARIS",
-            releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
+            displayName: "Circe",
+            releaseTagBaseUrl: "https://github.com/Absterrg0/Circe/releases/tag",
           }),
         },
       },
@@ -61,7 +61,7 @@ describe("branding", () => {
     const desktopUpdateLogic = await import("./components/desktopUpdate.logic");
 
     expect(desktopUpdateLogic.getDesktopUpdateReleaseUrl("1.2.3")).toBe(
-      "https://github.com/Absterrg0/Jarvis/releases/tag/v1.2.3",
+      "https://github.com/Absterrg0/Circe/releases/tag/v1.2.3",
     );
   });
 
@@ -73,7 +73,7 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("nightly");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Nightly");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
-    expect(branding.APP_DISPLAY_NAME).toBe("ARIS (Nightly)");
+    expect(branding.APP_DISPLAY_NAME).toBe("Circe (Nightly)");
   });
 
   it("does not label the latest hosted app channel", async () => {
@@ -84,7 +84,7 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("latest");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Latest");
     expect(branding.APP_STAGE_LABEL).toBe("Latest");
-    expect(branding.APP_DISPLAY_NAME).toBe("ARIS");
+    expect(branding.APP_DISPLAY_NAME).toBe("Circe");
     expect(branding.APP_RELEASE_TAG_BASE_URL).toBe(
       "https://github.com/pingdotgg/t3code/releases/tag",
     );

@@ -11,8 +11,8 @@ describe("release smoke fixture", () => {
   it("copies every workspace package required by the desktop release", () => {
     const source = NodeFS.readFileSync(NodePath.join(repoRoot, "scripts/release-smoke.ts"), "utf8");
 
-    expect(source).toContain('"packages/jarvis-client-runtime/package.json"');
-    expect(source).toContain('"packages/jarvis-core/package.json"');
+    expect(source).toContain('"packages/circe-client-runtime/package.json"');
+    expect(source).toContain('"packages/circe-core/package.json"');
     expect(source).toContain('"scripts/package.json"');
   });
 });

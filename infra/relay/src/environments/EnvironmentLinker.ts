@@ -91,7 +91,7 @@ export class EnvironmentLinker extends Context.Service<
       EnvironmentLinkError
     >;
   }
->()("@t3tools/jarvis-relay/environments/EnvironmentLinker") {}
+>()("@circe/relay/environments/EnvironmentLinker") {}
 
 const decodeProof = Schema.decodeUnknownEffect(RelayEnvironmentLinkProofPayload);
 

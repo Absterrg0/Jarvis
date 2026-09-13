@@ -20,7 +20,7 @@ The lint command uses the K1 frontend because AGP's K2 frontend crashes while an
 
 ## Firebase and app build
 
-1. Create a Firebase project and register each Android application identifier you intend to build: `com.abstergo.jarvis.dev`, `com.abstergo.jarvis.preview`, or `com.abstergo.jarvis`.
+1. Create a Firebase project and register each Android application identifier you intend to build: `com.abstergo.circe.dev`, `com.abstergo.circe.preview`, or `com.abstergo.circe`.
 2. Download `google-services.json`. Set `GOOGLE_SERVICES_JSON` to its path when running Expo prebuild and building the app. The JSON must contain the selected variant's package identifier.
 3. Create a service-account key with permission to send FCM messages for that Firebase project. Keep this private JSON outside the repository and the app bundle.
 4. Enable the Firebase Cloud Messaging API in the Google project if it is not already enabled. For hosted delivery, set the relay's `FCM_SERVICE_ACCOUNT` secret to the service-account JSON.
@@ -34,7 +34,7 @@ GOOGLE_SERVICES_JSON=/absolute/path/google-services.json \
 vp run android:dev
 ```
 
-For an EAS build, provide the same configuration through each selected build environment, using an EAS file variable named `GOOGLE_SERVICES_JSON` for the Google services file. Make the file available to fingerprint generation as well as the native build. FCM service-account credentials belong on the relay, not in EAS's app environment. If deploying a separate hosted relay, configure the build's T3 Connect public settings for that relay and Clerk application as described in [T3 Connect](../internals/t3-connect.md).
+For an EAS build, provide the same configuration through each selected build environment, using an EAS file variable named `GOOGLE_SERVICES_JSON` for the Google services file. Make the file available to fingerprint generation as well as the native build. FCM service-account credentials belong on the relay, not in EAS's app environment. If deploying a separate hosted relay, configure the build's Circe Connect public settings for that relay and Clerk application as described in [Circe Connect](../internals/t3-connect.md).
 
 Set `T3CODE_MOBILE_UPDATES_ENABLED=0` before prebuild and bundling a private binary to disable the repository's configured Expo OTA update source. A debug development-client APK requires Metro; a bundled release build is needed to verify cold-start notification taps without Expo's development launcher.
 
@@ -43,14 +43,14 @@ Set `T3CODE_MOBILE_UPDATES_ENABLED=0` before prebuild and bundling a private bin
 Clerk's native Android sign-in uses `clerk://<applicationId>.callback`. In the Clerk instance selected by the build's publishable key, its administrator must allow the exact callback under **Native applications > Allowlist for mobile SSO redirect**. For the development package, add:
 
 ```text
-clerk://com.abstergo.jarvis.dev.callback
+clerk://com.abstergo.circe.dev.callback
 ```
 
 The app already declares the matching callback receiver. A "redirect url ... does not match an authorized redirect URI" error requires a Clerk configuration change; rebuilding the same APK does not fix it. Reopen sign-in after the administrator saves the entry. See [Android native sign-in redirects](./connect-setup.md#android-native-sign-in-redirects) for the other variants.
 
 Using another operator's publishable key selects their Clerk instance. It grants no access to change that instance's allowlist. The chosen package's callback must already be allowed or be added by that instance's administrator. Android device registration and hosted delivery separately require the relay deployment below. A successful direct-pairing or FCM smoke test does not verify hosted sign-in or device registration.
 
-Building with `APP_VARIANT=production` selects `com.abstergo.jarvis` and its corresponding Clerk callback. Set the same variant during prebuild and bundling, and supply a Google services file that includes that package. Keep OTA updates disabled for a private binary. A locally signed build with this package cannot update an official installation signed by the maintainer or coexist with it; removing that installation also removes its app-local data. The development package remains a separate app.
+Building with `APP_VARIANT=production` selects `com.abstergo.circe` and its corresponding Clerk callback. Set the same variant during prebuild and bundling, and supply a Google services file that includes that package. Keep OTA updates disabled for a private binary. A locally signed build with this package cannot update an official installation signed by the maintainer or coexist with it; removing that installation also removes its app-local data. The development package remains a separate app.
 
 ## Focused delivery check
 
@@ -82,7 +82,7 @@ After Android prebuild, run the native presentation regression tests from `apps/
 
 ### Local verification with existing T3 services
 
-You do not need to duplicate T3 Connect's hosted infrastructure to develop Android push. Keep the normal Clerk login and environment connections. `scripts/android-push-watch.ts` subscribes to one paired environment's shell stream, uses the shared agent-awareness projection, and sends updates through the new FCM client. It holds transient state in memory and needs no hosted database or Clerk secret.
+You do not need to duplicate Circe Connect's hosted infrastructure to develop Android push. Keep the normal Clerk login and environment connections. `scripts/android-push-watch.ts` subscribes to one paired environment's shell stream, uses the shared agent-awareness projection, and sends updates through the new FCM client. It holds transient state in memory and needs no hosted database or Clerk secret.
 
 Create a private `connection.json` containing `wsUrl` (the environment's `/ws` URL) and `bearerToken` (a normal paired environment access token). Use a separate pairing credential for this watcher. Supply the same device file described above, then run from `infra/relay`:
 
@@ -105,16 +105,16 @@ A maintainer with access to the existing Alchemy state and deployment credential
 3. From the repository root, inspect the deployment plan, then deploy the same stage:
 
    ```sh
-   vp run --filter @t3tools/jarvis-relay deploy --stage dev_ryan_android --env-file .env.android-dev --dry-run
-   vp run --filter @t3tools/jarvis-relay deploy --stage dev_ryan_android --env-file .env.android-dev
+   vp run --filter @circe/relay deploy --stage dev_ryan_android --env-file .env.android-dev --dry-run
+   vp run --filter @circe/relay deploy --stage dev_ryan_android --env-file .env.android-dev
    ```
 
-4. Give the tester the deployed relay URL and matching public Clerk configuration. The deploy wrapper also writes the relay URL and public tracing configuration into that checkout's root `.env`. Rebuild the private APK with this `T3CODE_RELAY_URL`, the existing Firebase Android file, and OTA updates disabled. If using the separate development package, authorize its Clerk callback as described above.
+4. Give the tester the deployed relay URL and matching public Clerk configuration. The deploy wrapper also writes the relay URL and public tracing configuration into that checkout's root `.env`. Rebuild the private APK with this `CIRCE_RELAY_URL`, the existing Firebase Android file, and OTA updates disabled. If using the separate development package, authorize its Clerk callback as described above.
 5. Configure one isolated T3 server with the same relay URL and link that test environment through the new relay. Existing production relay links do not automatically move to a personal stage. Enable activity publishing for the test environment, enable notifications on the phone, and verify a real agent turn produces a running update and completion alert while the phone is locked.
 
 The maintainer can perform deployment themselves and return only the public client configuration; the tester does not need copies of their hosting or Clerk server credentials. A fully independent deployment needs its own initial Cloudflare stack, PostgreSQL database, Firebase project, and a Clerk instance the operator can configure. Its Alchemy deployment needs PlanetScale and Axiom credentials.
 
-Build the host client and mobile app with the same relay URL and Clerk public configuration. A source server or desktop development build can host the test environment; keep its T3 home separate from an existing installation. Signing into the phone alone does not link a host environment. Use the host client's T3 Connect settings to link it and enable activity publishing. A private Clerk instance also needs its own CLI OAuth application before using `t3 connect login`; another operator's client ID does not work with your instance.
+Build the host client and mobile app with the same relay URL and Clerk public configuration. A source server or desktop development build can host the test environment; keep its T3 home separate from an existing installation. Signing into the phone alone does not link a host environment. Use the host client's Circe Connect settings to link it and enable activity publishing. A private Clerk instance also needs its own CLI OAuth application before using `t3 connect login`; another operator's client ID does not work with your instance.
 
 For deployment through GitHub Actions, add `FCM_SERVICE_ACCOUNT` to the `production` environment's secrets. The relay workflow passes it to Alchemy. The maintainer must also supply `google-services.json` for the production Android package in the native build environment; changing the relay secret alone cannot move an installed app to another Firebase project.
 

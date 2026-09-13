@@ -67,7 +67,7 @@ export async function ensureDesktopLinuxPortalAppScope(input: {
   const currentAppId = readDesktopLinuxPortalAppIdFromCgroup(cgroup);
   // AppImageLauncher (and Flatpak) already place the process in an
   // `app-<id>-*.scope`. Moving out of that unit fails; the portal must use
-  // the existing id (often `jarvis` from jarvis.desktop).
+  // the existing id (often `circe` from circe.desktop).
   if (currentAppId !== null) {
     return {
       unit:
@@ -93,7 +93,7 @@ export async function ensureDesktopLinuxPortalAppScope(input: {
     unit,
     "fail",
     [
-      ["Description", new input.Variant("s", `ARIS (${input.appId})`)],
+      ["Description", new input.Variant("s", `Circe (${input.appId})`)],
       ["PIDs", new input.Variant("au", [input.pid])],
       ["CollectMode", new input.Variant("s", "inactive-or-failed")],
     ],

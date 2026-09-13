@@ -14,7 +14,7 @@ const native = vi.hoisted(() => ({
 
 vi.mock("expo-constants", () => ({
   default: {
-    expoConfig: { extra: { eas: { projectId: "jarvis-eas-project" } } },
+    expoConfig: { extra: { eas: { projectId: "circe-eas-project" } } },
     easConfig: undefined,
   },
 }));
@@ -57,15 +57,15 @@ describe("readExpoPushToken", () => {
 
     const { readExpoPushToken, resolveExpoProjectId } = await nativeModule();
     await expect(readExpoPushToken()).resolves.toBe("ExponentPushToken[one]");
-    expect(resolveExpoProjectId()).toBe("jarvis-eas-project");
+    expect(resolveExpoProjectId()).toBe("circe-eas-project");
     expect(native.channel).toHaveBeenCalledWith(
-      "jarvis-tasks",
-      expect.objectContaining({ name: "ARIS tasks", importance: 3 }),
+      "circe-tasks",
+      expect.objectContaining({ name: "Circe tasks", importance: 3 }),
     );
     expect(native.channel.mock.invocationCallOrder[0]).toBeLessThan(
       native.token.mock.invocationCallOrder[0]!,
     );
-    expect(native.token).toHaveBeenCalledWith({ projectId: "jarvis-eas-project" });
+    expect(native.token).toHaveBeenCalledWith({ projectId: "circe-eas-project" });
   });
 
   it("requests Android notification permission before fetching a token", async () => {

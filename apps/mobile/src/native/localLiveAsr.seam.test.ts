@@ -21,9 +21,9 @@ const mocks = vi.hoisted(() => ({
   cancel: vi.fn<() => void>(),
 }));
 
-vi.mock("./jarvisLocalAsr", () => ({
-  getJarvisLocalAsrModule: mocks.getModule,
-  isJarvisLocalAsrAvailable: mocks.isAvailable,
+vi.mock("./circeLocalAsr", () => ({
+  getCirceLocalAsrModule: mocks.getModule,
+  isCirceLocalAsrAvailable: mocks.isAvailable,
 }));
 
 import { getLocalLiveVoiceRecognizer } from "./voiceTranscription.android";

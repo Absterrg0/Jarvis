@@ -48,7 +48,7 @@ export class EnvironmentLinkLimits extends Context.Service<
       readonly environmentId: string;
     }) => Effect.Effect<void, EnvironmentLinkLimitExceeded | EnvironmentLinkLimitPersistenceError>;
   }
->()("@t3tools/jarvis-relay/environments/EnvironmentLinkLimits") {}
+>()("@circe/relay/environments/EnvironmentLinkLimits") {}
 
 export const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;

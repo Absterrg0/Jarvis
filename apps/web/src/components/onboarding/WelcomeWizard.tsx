@@ -67,11 +67,11 @@ import { getDriverOption } from "../settings/providerDriverMeta";
 import { TerminalViewport } from "../ThreadTerminalDrawer";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ClaudeAI, OpenAI } from "../Icons";
-import { JARVIS_BRAND_NAME, JARVIS_MARK_SRC } from "../jarvis/JarvisBrand";
+import { CIRCE_BRAND_NAME, CIRCE_MARK_SRC } from "../circe/CirceBrand";
 import {
-  describeJarvisOnboardingLabelSaveError,
-  jarvisOnboardingDeviceNameHint,
-  validateJarvisNodeLabel,
+  describeCirceOnboardingLabelSaveError,
+  circeOnboardingDeviceNameHint,
+  validateCirceNodeLabel,
 } from "./deviceName";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -198,17 +198,17 @@ export function WelcomeWizard({
         initialFocus={() => document.getElementById("onboarding-pairing-url") ?? true}
       >
         <WizardHeader
-          title={`Set up ${JARVIS_BRAND_NAME}`}
+          title={`Set up ${CIRCE_BRAND_NAME}`}
           identity={
-            <div className="flex items-center gap-2" role="img" aria-label={JARVIS_BRAND_NAME}>
+            <div className="flex items-center gap-2" role="img" aria-label={CIRCE_BRAND_NAME}>
               <img
-                src={JARVIS_MARK_SRC}
+                src={CIRCE_MARK_SRC}
                 alt=""
                 aria-hidden
                 className="size-5 shrink-0 rounded-[3px] object-cover"
               />
               <span className="text-[1.4rem] font-medium tracking-tight text-muted-foreground">
-                {JARVIS_BRAND_NAME}
+                {CIRCE_BRAND_NAME}
               </span>
             </div>
           }
@@ -327,7 +327,7 @@ function ConnectionStep({
   }, [ready]);
   const saveDeviceLabel = async (): Promise<boolean> => {
     if (primaryEnvironmentId === null) return false;
-    const validation = validateJarvisNodeLabel(deviceLabel);
+    const validation = validateCirceNodeLabel(deviceLabel);
     if (!validation.valid) {
       setDeviceError(validation.message);
       return false;
@@ -341,13 +341,13 @@ function ConnectionStep({
       });
       if (result._tag === "Failure") {
         if (isAtomCommandInterrupted(result)) return false;
-        setDeviceError(describeJarvisOnboardingLabelSaveError(squashAtomCommandFailure(result)));
+        setDeviceError(describeCirceOnboardingLabelSaveError(squashAtomCommandFailure(result)));
         return false;
       }
       setDeviceDraft(result.value.label);
       return true;
     } catch (defect) {
-      setDeviceError(describeJarvisOnboardingLabelSaveError(defect));
+      setDeviceError(describeCirceOnboardingLabelSaveError(defect));
       return false;
     } finally {
       setDeviceSaving(false);
@@ -386,7 +386,7 @@ function ConnectionStep({
           <p className="mt-1.5 text-xs text-muted-foreground">
             {primaryEnvironmentId === null
               ? "Waiting for this node to connect…"
-              : jarvisOnboardingDeviceNameHint(primaryEnvironment?.entry.target._tag)}
+              : circeOnboardingDeviceNameHint(primaryEnvironment?.entry.target._tag)}
           </p>
           {deviceError ? (
             <p
@@ -538,7 +538,7 @@ function ConnectAccountOption({
         }
       >
         <CloudIcon className="size-4 text-muted-foreground" />
-        <span className="flex-1">T3 Connect</span>
+        <span className="flex-1">Circe Connect</span>
         <span className="text-xs text-muted-foreground">
           {!isLoaded
             ? "Loading sign-in…"
@@ -574,7 +574,7 @@ function ConnectAccountOption({
           </p>
           <CommandBlock command="npx t3 connect" className="mt-3" />
           <p className="mt-3 text-xs text-muted-foreground">
-            Keep {JARVIS_BRAND_NAME} running. Select the computers you want to set up above.
+            Keep {CIRCE_BRAND_NAME} running. Select the computers you want to set up above.
           </p>
         </div>
       </CollapsiblePanel>
@@ -691,9 +691,8 @@ function PairingForm({
             </p>
             <CommandBlock command="npx t3 pair" className="mt-2" />
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Start {JARVIS_BRAND_NAME} first, or run{" "}
-              <code className="font-mono">npx t3 serve</code>. Add{" "}
-              <code className="font-mono">--tailscale</code> to use your tailnet.
+              Start {CIRCE_BRAND_NAME} first, or run <code className="font-mono">npx t3 serve</code>
+              . Add <code className="font-mono">--tailscale</code> to use your tailnet.
             </p>
           </CollapsiblePanel>
         </Collapsible>

@@ -10,7 +10,7 @@ import * as Ref from "effect/Ref";
 import * as Electron from "electron";
 
 import { type DesktopSnapShotEvent, DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
-import type { DesktopJarvisOrbSelection } from "@t3tools/contracts";
+import type { DesktopCirceOrbSelection } from "@t3tools/contracts";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -24,8 +24,8 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
   DESKTOP_PRELOAD_READY_CHANNEL,
   DESKTOP_RENDERER_READY_CHANNEL,
-  JARVIS_LIVE_VOICE_TOGGLE_CHANNEL,
-  JARVIS_ORB_SELECT_CHANNEL,
+  CIRCE_LIVE_VOICE_TOGGLE_CHANNEL,
+  CIRCE_ORB_SELECT_CHANNEL,
   MENU_ACTION_CHANNEL,
   QUIT_SHORTCUT_CHANNEL,
   SNAP_SHOT_EVENT_CHANNEL,
@@ -141,7 +141,7 @@ export class DesktopWindow extends Context.Service<
      * provider catalog and saves it through the ordinary settings API.
      */
     readonly sendOrbSelection: (
-      selection: DesktopJarvisOrbSelection,
+      selection: DesktopCirceOrbSelection,
     ) => Effect.Effect<void, DesktopWindowError>;
     // Zooms the main window's own webContents. The Electron `zoomIn`/`zoomOut`
     // menu roles act on whichever webContents has keyboard focus, so with an
@@ -240,7 +240,7 @@ export function isSameOriginRendererNavigation(input: {
   try {
     const application = new URL(input.applicationUrl);
     const navigation = new URL(input.navigationUrl);
-    // URL.origin is "null" for custom protocols such as jarvis://, so compare
+    // URL.origin is "null" for custom protocols such as circe://, so compare
     // the protocol and authority explicitly. URL.host retains port semantics
     // for HTTP(S) while still providing a useful origin tuple for custom URLs.
     return application.protocol === navigation.protocol && application.host === navigation.host;
@@ -770,7 +770,7 @@ export const make = Effect.gen(function* () {
     window.on("maximize", scheduleBoundsPersist);
     window.on("unmaximize", scheduleBoundsPersist);
     window.on("close", (event) => {
-      // Windows and Linux users expect closing the workspace to leave ARIS
+      // Windows and Linux users expect closing the workspace to leave Circe
       // resident in the tray. Explicit quit sets the shared shutdown latch
       // before destroying windows, so it is the only path that actually
       // closes the BrowserWindow.
@@ -1329,18 +1329,18 @@ export const make = Effect.gen(function* () {
       }
       send();
     }),
-    sendLiveVoiceToggle: dispatchRendererEvent(JARVIS_LIVE_VOICE_TOGGLE_CHANNEL, undefined, {
+    sendLiveVoiceToggle: dispatchRendererEvent(CIRCE_LIVE_VOICE_TOGGLE_CHANNEL, undefined, {
       reveal: false,
     }),
     sendOrbSelection: Effect.fn("desktop.window.sendOrbSelection")(function* (
-      selection: DesktopJarvisOrbSelection,
+      selection: DesktopCirceOrbSelection,
     ) {
       yield* Effect.annotateCurrentSpan({
         instanceId: selection.instanceId,
         model: selection.model,
         reveal: false,
       });
-      yield* dispatchRendererEvent(JARVIS_ORB_SELECT_CHANNEL, selection, { reveal: false });
+      yield* dispatchRendererEvent(CIRCE_ORB_SELECT_CHANNEL, selection, { reveal: false });
     }),
     zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });

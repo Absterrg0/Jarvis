@@ -41,7 +41,7 @@ import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { ConnectionsRouteScreen } from "./features/connection/ConnectionsRouteScreen";
 import { ConnectionsNewRouteScreen } from "./features/connection/ConnectionsNewRouteScreen";
 import { HomeRouteScreen } from "./features/home/HomeRouteScreen";
-import { JarvisRouteScreen } from "./features/jarvis/JarvisRouteScreen";
+import { CirceRouteScreen } from "./features/circe/CirceRouteScreen";
 import { AddProjectDestinationRoute } from "./features/projects/AddProjectDestinationRoute";
 import { AddProjectLocalRoute } from "./features/projects/AddProjectLocalRoute";
 import { AddProjectRepositoryRoute } from "./features/projects/AddProjectRepositoryRoute";
@@ -82,7 +82,7 @@ import { NATIVE_LIQUID_GLASS_SUPPORTED } from "./native/native-glass";
 import { nativeHeaderScrollEdgeEffects } from "./native/StackHeader";
 import { FORM_SHEET_PRESENTATION_OPTIONS } from "./native/sheet-surface";
 import { useAtomCommand } from "./state/use-atom-command";
-import { jarvisPushEnvironment } from "./state/jarvisPush";
+import { circePushEnvironment } from "./state/circePush";
 import { environmentServerConfigsAtom } from "./state/server";
 import { useRemoteConnectionStatus } from "./state/use-remote-environment-registry";
 import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
@@ -384,7 +384,7 @@ function RootStackLayout(props: {
   const navigation = useNavigation();
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  const registerPushToken = useAtomCommand(jarvisPushEnvironment.register, {
+  const registerPushToken = useAtomCommand(circePushEnvironment.register, {
     reportFailure: false,
     reportDefect: false,
   });
@@ -393,7 +393,7 @@ function RootStackLayout(props: {
       connectedEnvironments.flatMap((environment) => {
         if (environment.connectionState !== "connected") return [];
         const config = serverConfigs.get(environment.environmentId);
-        return config?.environment.capabilities.jarvisNode?.pushNotifications === true
+        return config?.environment.capabilities.circeNode?.pushNotifications === true
           ? [{ environmentId: environment.environmentId, supportsExpoPush: true }]
           : [];
       }),
@@ -419,7 +419,7 @@ function RootStackLayout(props: {
   const { pendingShare } = useIncomingShare();
   const sharePresentationRef = useRef(EMPTY_INCOMING_SHARE_PRESENTATION_STATE);
   useAgentNotificationNavigation();
-  // Presents the T3 Connect onboarding sheet after an in-session sign-in.
+  // Presents the Circe Connect onboarding sheet after an in-session sign-in.
   useConnectOnboardingNavigation();
   // Launcher app shortcuts: routes shortcut taps and tracks opened threads.
   useAppShortcuts(props.state);
@@ -497,7 +497,7 @@ function NotFoundScreen() {
 }
 
 export const RootStack = createNativeStackNavigator({
-  initialRouteName: "Jarvis",
+  initialRouteName: "Circe",
   layout: RootStackLayout,
   screenOptions: {
     headerShown: false,
@@ -513,13 +513,13 @@ export const RootStack = createNativeStackNavigator({
         ...getCompactBrandHeaderOptions(),
       },
     }),
-    Jarvis: createNativeStackScreen({
-      screen: JarvisRouteScreen,
-      linking: "jarvis",
+    Circe: createNativeStackScreen({
+      screen: CirceRouteScreen,
+      linking: "circe",
       options: {
         ...GLASS_HEADER_OPTIONS,
         headerBackVisible: false,
-        title: "ARIS",
+        title: "Circe",
       },
     }),
     Thread: createNativeStackScreen({
@@ -645,7 +645,7 @@ export const RootStack = createNativeStackNavigator({
         // A root-level Android formSheet does not host the native stack bar;
         // the route renders an embedded AndroidSheetHeader instead.
         ...(Platform.OS === "android" ? { headerShown: false } : SHEET_SOLID_HEADER_OPTIONS),
-        title: "Set up T3 Connect",
+        title: "Set up Circe Connect",
         gestureEnabled: true,
         ...FORM_SHEET_PRESENTATION_OPTIONS,
         sheetAllowedDetents: [0.6, 0.95],

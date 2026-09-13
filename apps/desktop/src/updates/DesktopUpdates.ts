@@ -253,11 +253,11 @@ export function getAutoUpdateDisabledReason(args: {
   disabledByEnv: boolean;
   hasUpdateFeedConfig: boolean;
 }): string | null {
-  if (args.distribution === "unified-jarvis") {
-    return "Updates are managed by ARIS Setup.";
+  if (args.distribution === "unified-circe") {
+    return "Updates are managed by Circe Setup.";
   }
-  if (args.distribution === "official-jarvis") {
-    return "Automatic updates for official ARIS releases are managed through ARIS Releases.";
+  if (args.distribution === "official-circe") {
+    return "Automatic updates for official Circe releases are managed through Circe Releases.";
   }
   if (!args.hasUpdateFeedConfig) {
     return "Automatic updates are not available because no update feed is configured.";

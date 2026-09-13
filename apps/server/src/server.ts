@@ -43,7 +43,7 @@ import { ProviderAuthServiceLive } from "./provider/Layers/ProviderAuthService.t
 import { AntigravityInstallation } from "./provider/AntigravityInstallation.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
-import * as JarvisProviderExecutionPolicy from "./jarvis/ProviderExecutionPolicy.ts";
+import * as CirceProviderExecutionPolicy from "./circe/ProviderExecutionPolicy.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
 import { ProviderUsageLimitsIngestionLive } from "./provider/Layers/ProviderUsageLimitsIngestion.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
@@ -59,7 +59,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
-import * as DesktopUse from "./jarvis/desktopUse/DesktopUse.ts";
+import * as DesktopUse from "./circe/desktopUse/DesktopUse.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as ProcessRunner from "./processRunner.ts";
@@ -130,24 +130,24 @@ import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinar
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
-import { jarvisDesktopRendererOrigins } from "./jarvis/desktopOrigins.ts";
-import { JarvisControllerLive } from "./jarvis/Layers/JarvisController.ts";
-import { JarvisLocalModelLive } from "./jarvis/Layers/JarvisLocalModel.ts";
-import { JarvisCodexSupervisorLive } from "./jarvis/Layers/JarvisCodexSupervisor.ts";
-import { JarvisOpencodeSupervisorLive } from "./jarvis/Layers/JarvisOpencodeSupervisor.ts";
-import { JarvisGrokSupervisorLive } from "./jarvis/Layers/JarvisGrokSupervisor.ts";
+import { circeDesktopRendererOrigins } from "./circe/desktopOrigins.ts";
+import { CirceControllerLive } from "./circe/Layers/CirceController.ts";
+import { CirceLocalModelLive } from "./circe/Layers/CirceLocalModel.ts";
+import { CirceCodexSupervisorLive } from "./circe/Layers/CirceCodexSupervisor.ts";
+import { CirceOpencodeSupervisorLive } from "./circe/Layers/CirceOpencodeSupervisor.ts";
+import { CirceGrokSupervisorLive } from "./circe/Layers/CirceGrokSupervisor.ts";
 import {
-  JarvisWsRpcHandlerExtensionLive,
-  jarvisRpcScopeExtension,
-} from "./jarvis/Layers/JarvisWsRpc.ts";
-import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
-import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
+  CirceWsRpcHandlerExtensionLive,
+  circeRpcScopeExtension,
+} from "./circe/Layers/CirceWsRpc.ts";
+import { CirceProjectLexiconLive } from "./circe/Layers/CirceProjectLexicon.ts";
+import { CirceTaskDeskLive } from "./circe/Layers/CirceTaskDesk.ts";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns.ts";
-import { JarvisFollowUpQueueLive } from "./jarvis/Layers/JarvisFollowUpQueue.ts";
-import { JarvisPresentationFanoutLive } from "./jarvis/Layers/JarvisPresentationFanout.ts";
-import { JarvisPushNotificationsLive } from "./jarvis/push/ExpoPushNotifications.ts";
-import { JarvisPushRegistrationsLive } from "./persistence/Layers/JarvisPushRegistrations.ts";
-import * as JarvisLiveVoice from "./jarvis/Services/JarvisLiveVoice.ts";
+import { CirceFollowUpQueueLive } from "./circe/Layers/CirceFollowUpQueue.ts";
+import { CircePresentationFanoutLive } from "./circe/Layers/CircePresentationFanout.ts";
+import { CircePushNotificationsLive } from "./circe/push/ExpoPushNotifications.ts";
+import { CircePushRegistrationsLive } from "./persistence/Layers/CircePushRegistrations.ts";
+import * as CirceLiveVoice from "./circe/Services/CirceLiveVoice.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -298,9 +298,9 @@ const PlatformServicesLive = Layer.unwrap(
 
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
-  // Jarvis-owned push subscriptions ride the reactor scope but stay a
+  // Circe-owned push subscriptions ride the reactor scope but stay a
   // product-owned module: upstream orchestration owns no hook for them.
-  Layer.provideMerge(JarvisPushNotificationsLive.pipe(Layer.provide(JarvisPushRegistrationsLive))),
+  Layer.provideMerge(CircePushNotificationsLive.pipe(Layer.provide(CircePushRegistrationsLive))),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
@@ -323,7 +323,7 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
 // NDJSON writers and is provided at the outer runtime layer so both
 // `ProviderService` and the per-instance drivers read the same logger pair.
 const ProviderLayerLive = ProviderServiceLive.pipe(
-  Layer.provide(JarvisProviderExecutionPolicy.layer),
+  Layer.provide(CirceProviderExecutionPolicy.layer),
   Layer.provide(ProviderAdapterRegistryLive),
   Layer.provideMerge(ProviderSessionDirectoryLayerLive),
 );
@@ -435,7 +435,7 @@ const ServerEnvironmentLayerLive = ServerEnvironment.layer.pipe(
 const AuthLayerLive = EnvironmentAuth.layer.pipe(
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provide(ServerEnvironmentLayerLive),
-  Layer.provideMerge(JarvisPushRegistrationsLive),
+  Layer.provideMerge(CircePushRegistrationsLive),
   Layer.provide(ServerSecretStore.layer),
 );
 
@@ -503,9 +503,9 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   ),
   Layer.provideMerge(
     Layer.mergeAll(
-      JarvisTaskDeskLive,
-      JarvisProjectLexiconLive,
-      JarvisFollowUpQueueLive,
+      CirceTaskDeskLive,
+      CirceProjectLexiconLive,
+      CirceFollowUpQueueLive,
       ProjectionTurnRepositoryLive,
     ),
   ),
@@ -552,11 +552,11 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   ),
 );
 
-const RuntimeDependenciesLive = JarvisControllerLive.pipe(
-  Layer.provideMerge(JarvisLocalModelLive),
-  Layer.provideMerge(JarvisCodexSupervisorLive),
-  Layer.provideMerge(JarvisOpencodeSupervisorLive),
-  Layer.provideMerge(JarvisGrokSupervisorLive),
+const RuntimeDependenciesLive = CirceControllerLive.pipe(
+  Layer.provideMerge(CirceLocalModelLive),
+  Layer.provideMerge(CirceCodexSupervisorLive),
+  Layer.provideMerge(CirceOpencodeSupervisorLive),
+  Layer.provideMerge(CirceGrokSupervisorLive),
   Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
   Layer.provideMerge(RuntimeCoreDependenciesLive),
   // Misc.
@@ -594,12 +594,12 @@ export const makeRoutesLayer = Layer.mergeAll(
     attachmentUploadRouteLayer,
     staticAndDevRouteLayer,
     makeWebsocketRpcRouteLayer(
-      JarvisWsRpcHandlerExtensionLive.pipe(
-        Layer.provide(JarvisPushRegistrationsLive),
+      CirceWsRpcHandlerExtensionLive.pipe(
+        Layer.provide(CircePushRegistrationsLive),
         // One shared projection fans out to every presentation listener.
-        Layer.provide(JarvisPresentationFanoutLive),
+        Layer.provide(CircePresentationFanoutLive),
       ),
-      RpcAuthorization.layer(jarvisRpcScopeExtension),
+      RpcAuthorization.layer(circeRpcScopeExtension),
     ),
   ),
   McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
@@ -607,12 +607,12 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
-  Layer.provide(JarvisLiveVoice.layer),
+  Layer.provide(CirceLiveVoice.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(DesktopUse.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
   Layer.provide(commandReadinessLayer),
-  Layer.provide(makeBrowserApiCorsLayer(jarvisDesktopRendererOrigins)),
+  Layer.provide(makeBrowserApiCorsLayer(circeDesktopRendererOrigins)),
   Layer.provide(httpCompressionLayer),
 );
 
@@ -776,9 +776,9 @@ const makeServerLayer = Layer.unwrap(
                   Schedule.upTo({ duration: "10 minutes" }),
                 ),
               }),
-              Effect.tap(() => Effect.logInfo("T3 Connect desired link reconciled on startup")),
+              Effect.tap(() => Effect.logInfo("Circe Connect desired link reconciled on startup")),
               Effect.catch((cause) =>
-                Effect.logWarning("Failed to reconcile T3 Connect desired link on startup", {
+                Effect.logWarning("Failed to reconcile Circe Connect desired link on startup", {
                   message: cause.message,
                 }),
               ),

@@ -1,7 +1,7 @@
-# ARIS Mobile
+# Circe Mobile
 
 > [!WARNING]
-> ARIS Mobile is currently in development and is distributed through internal preview builds.
+> Circe Mobile is currently in development and is distributed through internal preview builds.
 
 ## Quickstart
 
@@ -10,13 +10,13 @@
 
 This app has three variants:
 
-- `development`: Expo dev client, installable side-by-side as `ARIS Dev`
-- `preview`: persistent internal preview build, installable side-by-side as `ARIS Preview`
-- `production`: store/release build as `ARIS`
+- `development`: Expo dev client, installable side-by-side as `Circe Dev`
+- `preview`: persistent internal preview build, installable side-by-side as `Circe Preview`
+- `production`: store/release build as `Circe`
 
 Run commands from `apps/mobile`.
 
-T3 Connect is optional and disabled in a fresh clone. Public configuration belongs in the
+Circe Connect is optional and disabled in a fresh clone. Public configuration belongs in the
 repository-root `.env` or `.env.local`, not an `apps/mobile/.env` file. See
 [`../../.env.example`](../../.env.example).
 
@@ -110,8 +110,8 @@ Preview and production variants use Expo fingerprinting so OTA updates only reac
 
 The development variant uses `appVersion` to avoid recalculating the native fingerprint for each Metro launch manifest. `MOBILE_VERSION_POLICY` can override either default. If you distribute a custom Release build with the development identity and publish OTA updates to it, set `MOBILE_VERSION_POLICY=fingerprint` for both its build and updates. Changing the runtime policy requires a native rebuild for OTA matching; an existing dev client can still load local Metro bundles.
 
-For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY`,
-`T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL`
+For preview or production EAS environments, set `CIRCE_CLERK_PUBLISHABLE_KEY`,
+`CIRCE_CLERK_JWT_TEMPLATE`, and `CIRCE_RELAY_URL`
 as EAS environment variables. Expo config maps the canonical values into the mobile build.
 
 Android push builds also need Firebase client configuration for the package used by that
@@ -127,7 +127,7 @@ eas env:set --environment preview --name GOOGLE_SERVICES_JSON \
   --type file --visibility secret --value /path/to/google-services.preview.json
 ```
 
-The file must be registered for `com.abstergo.jarvis.preview` in the Firebase project used by the
+The file must be registered for `com.abstergo.circe.preview` in the Firebase project used by the
 EAS FCM v1 credential. Firebase client config is public at runtime, but keeping it out of Git
 avoids committing project configuration and makes the build input explicit.
 
@@ -166,8 +166,8 @@ For a standalone Android preview APK, use the `preview` profile. It uses interna
 sets `android.buildType` to `apk` without enabling the development client:
 
 ```bash
-JARVIS_EXPO_OWNER=<jarvis-expo-owner> \
-JARVIS_EXPO_PROJECT_ID=<jarvis-expo-project-id> \
+CIRCE_EXPO_OWNER=<circe-expo-owner> \
+CIRCE_EXPO_PROJECT_ID=<circe-expo-project-id> \
 vp run eas:android:preview
 ```
 

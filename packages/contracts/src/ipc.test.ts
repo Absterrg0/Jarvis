@@ -9,16 +9,16 @@ describe("DesktopAppBrandingSchema", () => {
   it("accepts the optional release-tag base URL", () => {
     expect(
       decode({
-        baseName: "Jarvis",
+        baseName: "Circe",
         stageLabel: "Alpha",
-        displayName: "Jarvis",
-        releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
+        displayName: "Circe",
+        releaseTagBaseUrl: "https://github.com/Absterrg0/Circe/releases/tag",
       }),
     ).toEqual({
-      baseName: "Jarvis",
+      baseName: "Circe",
       stageLabel: "Alpha",
-      displayName: "Jarvis",
-      releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
+      displayName: "Circe",
+      releaseTagBaseUrl: "https://github.com/Absterrg0/Circe/releases/tag",
     });
   });
 });

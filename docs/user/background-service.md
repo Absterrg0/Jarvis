@@ -38,8 +38,8 @@ service is still installed and will start at the next login.
 
 Windows background services are not supported.
 
-T3 Connect can offer service installation during setup, but the two are managed
-separately. Signing out of T3 Connect does not stop or uninstall the service.
+Circe Connect can offer service installation during setup, but the two are managed
+separately. Signing out of Circe Connect does not stop or uninstall the service.
 
 ## Troubleshooting
 
@@ -77,5 +77,5 @@ Downloads, it may need Full Disk Access for the Node executable listed in
 `ProgramArguments` in
 `~/Library/LaunchAgents/com.t3tools.t3code.service.plist`.
 
-For failures after signing in to T3 Connect, see
+For failures after signing in to Circe Connect, see
 [connection troubleshooting](./remote-access.md#t3-connect-troubleshooting).

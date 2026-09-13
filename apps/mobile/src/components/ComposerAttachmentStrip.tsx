@@ -38,7 +38,7 @@ export interface ComposerAttachmentStripProps {
   ) => void;
   /** Image thumbnail size in points.  Defaults to 72. */
   readonly imageSize?: number;
-  /** Border radius of each image thumbnail.  Defaults to the ARIS panel radius. */
+  /** Border radius of each image thumbnail.  Defaults to the Circe panel radius. */
   readonly imageBorderRadius?: number;
   /** Whether the remove button should sit in its own gutter instead of overlapping the image. */
   readonly removeButtonPlacement?: "overlay" | "gutter";

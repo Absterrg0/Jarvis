@@ -7,7 +7,7 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { createModelSelection } from "@t3tools/shared/model";
-import { JarvisSemanticProposal } from "@t3tools/jarvis-core/semanticEvidence";
+import { CirceSemanticProposal } from "@circe/core/semanticEvidence";
 import { expect } from "vite-plus/test";
 
 import { CodexSettings, ProviderInstanceId, TextGenerationError } from "@t3tools/contracts";
@@ -252,7 +252,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
     ),
   );
 
-  it.effect("adapts Jarvis intent constraints to Codex structured output", () =>
+  it.effect("adapts Circe intent constraints to Codex structured output", () =>
     withFakeCodexEnv(
       {
         output: JSON.stringify({
@@ -268,7 +268,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
         textGeneration.generateStructured({
           cwd: process.cwd(),
           prompt: "Return a status intent.",
-          outputSchema: JarvisSemanticProposal,
+          outputSchema: CirceSemanticProposal,
           modelSelection: DEFAULT_TEST_MODEL_SELECTION,
         }),
     ),

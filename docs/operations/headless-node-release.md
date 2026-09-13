@@ -14,8 +14,8 @@ The headless Linux artifact is a self-contained tarball containing:
 The deterministic artifact names are:
 
 ```text
-Jarvis-Headless-Node-<version>-linux-x64.tar.gz
-Jarvis-Headless-Node-<version>-linux-arm64.tar.gz
+Circe-Headless-Node-<version>-linux-x64.tar.gz
+Circe-Headless-Node-<version>-linux-arm64.tar.gz
 ```
 
 ## Build on Linux
@@ -66,12 +66,12 @@ Use a temporary directory and an isolated home; never install a test artifact in
 live home or start it against live T3 data:
 
 ```sh
-artifact=release/Jarvis-Headless-Node-0.0.34-linux-x64.tar.gz
+artifact=release/Circe-Headless-Node-0.0.34-linux-x64.tar.gz
 tar -tzf "$artifact" | sed -n '1,80p'
 tmp_home=$(mktemp -d)
 tmp_root=$(mktemp -d)
 HOME="$tmp_home" tar -xzf "$artifact" -C "$tmp_root"
-HOME="$tmp_home" JARVIS_HEADLESS_HOME="$tmp_home/.jarvis-headless" \
+HOME="$tmp_home" CIRCE_HEADLESS_HOME="$tmp_home/.circe-headless" \
   sh -n "$tmp_root"/*/install.sh
 "$tmp_root"/*/node/bin/node -e 'console.log(process.arch, process.version)'
 if tar -tzf "$artifact" | grep -Eq '(^|/)node_modules/t3/(src(/|$)|dist/client(/|$)|dist/.*\.map$)'; then

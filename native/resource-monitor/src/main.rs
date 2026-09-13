@@ -23,7 +23,7 @@ const MAX_PROCESS_STATUS_BYTES: usize = 256;
 const HISTORY_CHUNK_SNAPSHOTS: usize = 32;
 
 #[cfg(target_os = "linux")]
-const X11_JARVIS_RELEASE_MODE: &str = "--wait-for-x11-jarvis-release";
+const X11_CIRCE_RELEASE_MODE: &str = "--wait-for-x11-circe-release";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -790,7 +790,7 @@ fn write_history(
 
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
-mod x11_jarvis_release {
+mod x11_circe_release {
     use std::io;
     use std::os::raw::{c_char, c_int, c_ulong};
     use std::thread;
@@ -1134,8 +1134,8 @@ mod x11_jarvis_release {
 
 fn main() -> io::Result<()> {
     #[cfg(target_os = "linux")]
-    if std::env::args().nth(1).as_deref() == Some(X11_JARVIS_RELEASE_MODE) {
-        return x11_jarvis_release::wait_for_release();
+    if std::env::args().nth(1).as_deref() == Some(X11_CIRCE_RELEASE_MODE) {
+        return x11_circe_release::wait_for_release();
     }
 
     let mut writer = BufWriter::new(io::stdout().lock());

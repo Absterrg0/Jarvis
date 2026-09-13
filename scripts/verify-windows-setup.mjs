@@ -20,7 +20,7 @@ async function readJson(filePath) {
 
 function verifyManifest(manifest, manifestPath) {
   assert(manifest.format === 3, "Setup manifest format is not 3.");
-  assert(manifest.product === "Jarvis", "Setup manifest product is not Jarvis.");
+  assert(manifest.product === "Circe", "Setup manifest product is not Circe.");
   assert(manifest.platform === "windows", "Setup manifest platform is not windows.");
   assert(manifest.arch === "x64", "Setup manifest architecture is not x64.");
   assert(
@@ -93,10 +93,10 @@ export async function verifyArtifactBundle({
   verifyChecksumFile(await NodeFSP.readFile(checksumPath, "utf8"), artifactName, artifactSha256);
   assert(
     sha256(await NodeFSP.readFile(aliasPath)) === artifactSha256,
-    "Versioned setup and Jarvis-Setup.exe differ.",
+    "Versioned setup and Circe-Setup.exe differ.",
   );
   assert(
-    provenance.format === 1 && provenance.product === "Jarvis",
+    provenance.format === 1 && provenance.product === "Circe",
     "Setup provenance schema is invalid.",
   );
   assert(

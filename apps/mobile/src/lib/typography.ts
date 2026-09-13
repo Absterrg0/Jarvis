@@ -21,8 +21,8 @@ export const MOBILE_CODE_SURFACE = {
 } as const;
 
 /**
- * ARIS section label. Mono uppercase micro labels for group headers and
- * settings sections, matching web `aris-section-label`. Render with the
+ * Circe section label. Mono uppercase micro labels for group headers and
+ * settings sections, matching web `circe-section-label`. Render with the
  * `font-mono` utility class plus this style for tracking and casing.
  */
 export const MOBILE_SECTION_LABEL = {

@@ -1,10 +1,10 @@
-# Keeping ARIS in Sync
+# Keeping Circe in Sync
 
-Official ARIS Full desktop releases do not update themselves automatically. On Windows, rerun
-the newer ARIS Setup; on Linux, replace the Full AppImage; on macOS, install the newer DMG.
+Official Circe Full desktop releases do not update themselves automatically. On Windows, rerun
+the newer Circe Setup; on Linux, replace the Full AppImage; on macOS, install the newer DMG.
 
-The ARIS web or desktop app and the server it connects to work best when they use the same
-version. If they do not match, ARIS shows a warning with the right update option for that server.
+The Circe web or desktop app and the server it connects to work best when they use the same
+version. If they do not match, Circe shows a warning with the right update option for that server.
 
 ## Before you update
 
@@ -16,7 +16,7 @@ Enable it to resume supported active threads after an update, crash, or machine
 restart. Changes are saved to connected environments that support this setting;
 update older servers first. If a supported environment was offline or has a
 different value, use **Apply to all** in Settings after it connects.
-ARIS must start again on that machine;
+Circe must start again on that machine;
 the setting does not enable automatic startup. Terminal commands may still be
 interrupted, and threads without saved provider resume state need a new message.
 If you previously enabled continuation for updates, enable this setting once
@@ -36,13 +36,13 @@ The update does not remove saved threads, settings, or project files.
 
 ## Choose the Action You See
 
-| Action                     | What to do                                                                                                                                                               |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Update server**          | Available for the ARIS Linux background service. Select the button and leave ARIS open while it prepares, tests, restarts, and reconnects.                               |
-| **Update the desktop app** | Open the ARIS desktop app on the machine that runs the server and install the app update there. Reopen it if needed.                                                     |
-| **Copy update command**    | Copy the command, open a terminal on the server machine, stop the current ARIS server, and relaunch it with the copied command and any startup options you normally use. |
+| Action                     | What to do                                                                                                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Update server**          | Available for the Circe Linux background service. Select the button and leave Circe open while it prepares, tests, restarts, and reconnects.                              |
+| **Update the desktop app** | Open the Circe desktop app on the machine that runs the server and install the app update there. Reopen it if needed.                                                     |
+| **Copy update command**    | Copy the command, open a terminal on the server machine, stop the current Circe server, and relaunch it with the copied command and any startup options you normally use. |
 
-The available action depends on how that server was started. ARIS does not update connected
+The available action depends on how that server was started. Circe does not update connected
 servers silently in the background.
 
 An older background-service launcher may ask you to run the exact
@@ -57,7 +57,7 @@ update. A failure remains visible with its error and an option to retry.
 **Copy update command** gives you `npx t3@<client-version>`, which relaunches the server directly
 at the matching version. Add whatever startup options you normally use.
 
-If the server instead runs as the ARIS background service, update the service on the host and
+If the server instead runs as the Circe background service, update the service on the host and
 pin the same version:
 
 ```sh
@@ -73,7 +73,7 @@ For a foreground server, the copied command is `npx t3@<client-version>`. Add
 `serve` if you normally run without a browser, and preserve options such as
 `--host` or `--tailscale-serve`. See
 [background services](./background-service.md) for service management.
-See [Running ARIS in the Background](./background-service.md) for install, status, and removal
+See [Running Circe in the Background](./background-service.md) for install, status, and removal
 commands.
 
 ## If an update fails

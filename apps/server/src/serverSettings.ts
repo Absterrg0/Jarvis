@@ -150,8 +150,8 @@ function usageLimitSourceSecretName(sourceId: string): string {
  * The live voice API key follows the hub-key pattern: the settings file keeps
  * only a marker and the real value lives in the secret store.
  */
-const JARVIS_LIVE_VOICE_KEY_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
-const JARVIS_LIVE_VOICE_API_KEY_SECRET = "jarvis-live-voice-openai-api-key";
+const CIRCE_LIVE_VOICE_KEY_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
+const CIRCE_LIVE_VOICE_API_KEY_SECRET = "circe-live-voice-openai-api-key";
 
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
@@ -189,11 +189,11 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
       },
     ]),
   );
-  const jarvisLiveVoice = {
-    ...settings.jarvisLiveVoice,
-    apiKey: settings.jarvisLiveVoice.apiKey.length > 0 ? JARVIS_LIVE_VOICE_KEY_REDACTED : "",
+  const circeLiveVoice = {
+    ...settings.circeLiveVoice,
+    apiKey: settings.circeLiveVoice.apiKey.length > 0 ? CIRCE_LIVE_VOICE_KEY_REDACTED : "",
   };
-  return { ...settings, providerInstances, usageLimitSources, jarvisLiveVoice };
+  return { ...settings, providerInstances, usageLimitSources, circeLiveVoice };
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -364,8 +364,8 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "providerHealthRefreshInterval",
   "sourceControlWriterModelSelection",
   "textGenerationModelSelection",
-  "jarvisSupervisorModelSelection",
-  "jarvisDefaultModelSelection",
+  "circeSupervisorModelSelection",
+  "circeDefaultModelSelection",
 ]);
 
 // Preserve both enabled states because provider history cannot recover a new opt-in.
@@ -572,11 +572,11 @@ const make = Effect.gen(function* () {
           managementKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
         };
       }
-      const jarvisLiveVoice =
-        settings.jarvisLiveVoice.apiKey === JARVIS_LIVE_VOICE_KEY_REDACTED
-          ? yield* secretStore.get(JARVIS_LIVE_VOICE_API_KEY_SECRET).pipe(
+      const circeLiveVoice =
+        settings.circeLiveVoice.apiKey === CIRCE_LIVE_VOICE_KEY_REDACTED
+          ? yield* secretStore.get(CIRCE_LIVE_VOICE_API_KEY_SECRET).pipe(
               Effect.map((secret) => ({
-                ...settings.jarvisLiveVoice,
+                ...settings.circeLiveVoice,
                 apiKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
               })),
               Effect.mapError(
@@ -584,12 +584,12 @@ const make = Effect.gen(function* () {
                   new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
               ),
             )
-          : settings.jarvisLiveVoice;
+          : settings.circeLiveVoice;
       return {
         ...settings,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
-        jarvisLiveVoice,
+        circeLiveVoice,
       };
     });
 
@@ -758,28 +758,28 @@ const make = Effect.gen(function* () {
           );
       }
 
-      const nextLiveVoiceKey = next.jarvisLiveVoice.apiKey;
-      const jarvisLiveVoice =
-        nextLiveVoiceKey === JARVIS_LIVE_VOICE_KEY_REDACTED
-          ? next.jarvisLiveVoice
+      const nextLiveVoiceKey = next.circeLiveVoice.apiKey;
+      const circeLiveVoice =
+        nextLiveVoiceKey === CIRCE_LIVE_VOICE_KEY_REDACTED
+          ? next.circeLiveVoice
           : nextLiveVoiceKey.length === 0
-            ? yield* secretStore.remove(JARVIS_LIVE_VOICE_API_KEY_SECRET).pipe(
+            ? yield* secretStore.remove(CIRCE_LIVE_VOICE_API_KEY_SECRET).pipe(
                 Effect.mapError(
                   (cause) =>
                     new ServerSettingsError({ settingsPath, operation: "remove-secret", cause }),
                 ),
-                Effect.as(next.jarvisLiveVoice),
+                Effect.as(next.circeLiveVoice),
               )
             : yield* secretStore
-                .set(JARVIS_LIVE_VOICE_API_KEY_SECRET, textEncoder.encode(nextLiveVoiceKey))
+                .set(CIRCE_LIVE_VOICE_API_KEY_SECRET, textEncoder.encode(nextLiveVoiceKey))
                 .pipe(
                   Effect.mapError(
                     (cause) =>
                       new ServerSettingsError({ settingsPath, operation: "write-secret", cause }),
                   ),
                   Effect.as({
-                    ...next.jarvisLiveVoice,
-                    apiKey: JARVIS_LIVE_VOICE_KEY_REDACTED,
+                    ...next.circeLiveVoice,
+                    apiKey: CIRCE_LIVE_VOICE_KEY_REDACTED,
                   }),
                 );
 
@@ -787,7 +787,7 @@ const make = Effect.gen(function* () {
         ...next,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
-        jarvisLiveVoice,
+        circeLiveVoice,
       };
     });
 

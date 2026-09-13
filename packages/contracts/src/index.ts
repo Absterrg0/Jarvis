@@ -39,6 +39,6 @@ export * from "./preview.ts";
 export * from "./previewAutomation.ts";
 export * from "./resourceTelemetry.ts";
 export * from "./usage.ts";
-export * from "./jarvis.ts";
-export * from "./jarvisLiveVoice.ts";
+export * from "./circe.ts";
+export * from "./circeLiveVoice.ts";
 export * from "./rpc.ts";

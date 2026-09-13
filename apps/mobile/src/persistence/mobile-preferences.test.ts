@@ -10,14 +10,14 @@ describe("sanitizePreferences", () => {
   it("trims whitespace from validated identity fields before branding", () => {
     const preferences = sanitizePreferences({
       preferredVoiceNodeId: EnvironmentId.make("voice-node"),
-      preferredJarvisProjectRef: {
+      preferredCirceProjectRef: {
         nodeId: EnvironmentId.make("node-A"),
         projectId: ProjectId.make("project-a"),
       },
     });
 
     expect(preferences.preferredVoiceNodeId).toBe("voice-node");
-    expect(preferences.preferredJarvisProjectRef).toMatchObject({
+    expect(preferences.preferredCirceProjectRef).toMatchObject({
       nodeId: "node-A",
       projectId: "project-a",
     });
@@ -30,13 +30,13 @@ describe("sanitizePreferences", () => {
       JSON.parse(
         JSON.stringify({
           preferredVoiceNodeId: "  voice-node  ",
-          preferredJarvisProjectRef: { nodeId: "  node-A ", projectId: " project-a\t" },
+          preferredCirceProjectRef: { nodeId: "  node-A ", projectId: " project-a\t" },
         }),
       ) as never,
     );
 
     expect(preferences.preferredVoiceNodeId).toBe("voice-node");
-    expect(preferences.preferredJarvisProjectRef).toMatchObject({
+    expect(preferences.preferredCirceProjectRef).toMatchObject({
       nodeId: "node-A",
       projectId: "project-a",
     });

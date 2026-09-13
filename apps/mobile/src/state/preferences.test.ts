@@ -79,17 +79,17 @@ describe("mobile preferences state", () => {
     ).toEqual({});
   });
 
-  it("sanitizes the remembered Jarvis project as a qualified reference", () => {
-    const preferredJarvisProjectRef = {
+  it("sanitizes the remembered Circe project as a qualified reference", () => {
+    const preferredCirceProjectRef = {
       nodeId: EnvironmentId.make("node-laptop"),
       projectId: ProjectId.make("project-rivvl"),
     };
-    expect(sanitizePreferences({ preferredJarvisProjectRef })).toEqual({
-      preferredJarvisProjectRef,
+    expect(sanitizePreferences({ preferredCirceProjectRef })).toEqual({
+      preferredCirceProjectRef,
     });
     expect(
       sanitizePreferences({
-        preferredJarvisProjectRef: {
+        preferredCirceProjectRef: {
           nodeId: EnvironmentId.make("   "),
           projectId: ProjectId.make("project-rivvl"),
         },

@@ -41,7 +41,7 @@ const emptySecretStoreLayer = Layer.succeed(
 
 const makeServerConfig = Effect.fn(function* (
   baseDir: string,
-  jarvisNodePreset?: "full" | "controller" | "headless",
+  circeNodePreset?: "full" | "controller" | "headless",
 ) {
   const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
 
@@ -72,7 +72,7 @@ const makeServerConfig = Effect.fn(function* (
     devAllowedOrigins: [],
     noBrowser: false,
     startupPresentation: "browser",
-    ...(jarvisNodePreset === undefined ? {} : { jarvisNodePreset }),
+    ...(circeNodePreset === undefined ? {} : { circeNodePreset }),
   } satisfies ServerConfig.ServerConfig["Service"];
 });
 
@@ -295,7 +295,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
     }),
   );
 
-  it.effect("projects the configured Jarvis node preset into the descriptor", () =>
+  it.effect("projects the configured Circe node preset into the descriptor", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -315,7 +315,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         ),
       );
 
-      expect(descriptor.capabilities.jarvisNode).toEqual({
+      expect(descriptor.capabilities.circeNode).toEqual({
         preset: "controller",
         ui: true,
         execution: false,

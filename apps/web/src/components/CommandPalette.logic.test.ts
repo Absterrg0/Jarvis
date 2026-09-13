@@ -622,7 +622,7 @@ it.each([
   ]);
 });
 
-describe("ARIS command center palette entry", () => {
+describe("Circe command center palette entry", () => {
   function arisGroups(): CommandPaletteGroup[] {
     return [
       {
@@ -631,10 +631,10 @@ describe("ARIS command center palette entry", () => {
         items: [
           {
             kind: "action",
-            value: "action:jarvis",
+            value: "action:circe",
             searchTerms: [...ARIS_COMMAND_CENTER_SEARCH_TERMS],
-            title: "Open ARIS",
-            description: "Open the ARIS command center",
+            title: "Open Circe",
+            description: "Open the Circe command center",
             icon: null,
             run: async () => undefined,
           },
@@ -653,21 +653,21 @@ describe("ARIS command center palette entry", () => {
     }).flatMap((group) => group.items.map((item) => item.value));
   }
 
-  it("finds the visible Open ARIS entry by its own title words", () => {
-    expect(matches("aris")).toEqual(["action:jarvis"]);
-    expect(matches("ARIS")).toEqual(["action:jarvis"]);
-    expect(matches("open")).toEqual(["action:jarvis"]);
+  it("finds the visible Open Circe entry by its own title words", () => {
+    expect(matches("circe")).toEqual(["action:circe"]);
+    expect(matches("Circe")).toEqual(["action:circe"]);
+    expect(matches("open")).toEqual(["action:circe"]);
   });
 
-  it("keeps command-center phrasing and the legacy jarvis alias searchable", () => {
-    expect(matches("command")).toEqual(["action:jarvis"]);
-    expect(matches("command center")).toEqual(["action:jarvis"]);
-    expect(matches("jarvis")).toEqual(["action:jarvis"]);
+  it("keeps command-center phrasing and the legacy circe alias searchable", () => {
+    expect(matches("command")).toEqual(["action:circe"]);
+    expect(matches("command center")).toEqual(["action:circe"]);
+    expect(matches("circe")).toEqual(["action:circe"]);
   });
 
   it("keeps the title words inside the shared search terms", () => {
     expect([...ARIS_COMMAND_CENTER_SEARCH_TERMS]).toEqual(
-      expect.arrayContaining(["aris", "open", "command", "center"]),
+      expect.arrayContaining(["circe", "open", "command", "center"]),
     );
   });
 });

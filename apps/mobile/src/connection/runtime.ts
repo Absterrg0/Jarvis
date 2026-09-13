@@ -1,5 +1,5 @@
 import { Connection } from "@t3tools/client-runtime/connection";
-import { layer as jarvisMeshLayer } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import { layer as circeMeshLayer } from "@circe/client-runtime/circe/mesh";
 import { shellSnapshotLoaderLayer } from "@t3tools/client-runtime/state/shell";
 import { threadSnapshotLoaderLayer } from "@t3tools/client-runtime/state/threads";
 import * as Layer from "effect/Layer";
@@ -30,7 +30,7 @@ type ConnectionLayerSource =
   | typeof connectionPlatformLayer
   | typeof mobileBackgroundActivityObserverLayer
   | typeof mobileBackgroundActivityReporterLayer
-  | typeof jarvisMeshLayer;
+  | typeof circeMeshLayer;
 
 const providedClientConnectionLayer = snapshotLoaderLayer.pipe(
   Layer.provideMerge(
@@ -49,7 +49,7 @@ const connectionLayer = mobileBackgroundActivityReporterLayer.pipe(
   Layer.provideMerge(providedClientConnectionLayer),
 );
 
-const mobileRuntimeLayer = jarvisMeshLayer.pipe(Layer.provideMerge(connectionLayer));
+const mobileRuntimeLayer = circeMeshLayer.pipe(Layer.provideMerge(connectionLayer));
 
 export const connectionAtomRuntime: Atom.AtomRuntime<
   Layer.Success<ConnectionLayerSource>,

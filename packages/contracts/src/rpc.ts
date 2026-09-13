@@ -252,46 +252,46 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import {
-  JarvisCancelRequestInput,
-  JarvisCancelRequestResult,
-  JarvisExecuteInput,
-  JarvisExecutionError,
-  JarvisExecutionResult,
-  JarvisFocusTaskInput,
-  JarvisFocusTaskResult,
-  JarvisInterpretInput,
-  JarvisInterpretResult,
-  JarvisTaskDeskView,
-  JarvisProjectVocabulary,
-  JarvisManageProjectAliasInput,
-  JarvisManageProjectAliasResult,
-  JarvisPresentationEvent,
-  JarvisPresentationSubscriptionInput,
-  JarvisPushRegistrationInput,
-  JarvisPushRegistrationResult,
-  JarvisPushRegistrationError,
-} from "./jarvis.ts";
+  CirceCancelRequestInput,
+  CirceCancelRequestResult,
+  CirceExecuteInput,
+  CirceExecutionError,
+  CirceExecutionResult,
+  CirceFocusTaskInput,
+  CirceFocusTaskResult,
+  CirceInterpretInput,
+  CirceInterpretResult,
+  CirceTaskDeskView,
+  CirceProjectVocabulary,
+  CirceManageProjectAliasInput,
+  CirceManageProjectAliasResult,
+  CircePresentationEvent,
+  CircePresentationSubscriptionInput,
+  CircePushRegistrationInput,
+  CircePushRegistrationResult,
+  CircePushRegistrationError,
+} from "./circe.ts";
 import {
-  JarvisLiveVoiceCreateInput,
-  JarvisLiveVoiceCreateResult,
-  JarvisLiveVoiceInvalidInputError,
-  JarvisLiveVoiceRuntimeError,
-  JarvisLiveVoiceUnavailableError,
-} from "./jarvisLiveVoice.ts";
+  CirceLiveVoiceCreateInput,
+  CirceLiveVoiceCreateResult,
+  CirceLiveVoiceInvalidInputError,
+  CirceLiveVoiceRuntimeError,
+  CirceLiveVoiceUnavailableError,
+} from "./circeLiveVoice.ts";
 
 export const WS_METHODS = {
-  // Provider-neutral Jarvis manager
-  jarvisExecute: "jarvis.execute",
-  jarvisInterpret: "jarvis.interpret",
-  jarvisCancelRequest: "jarvis.cancelRequest",
-  jarvisGetTaskDesk: "jarvis.getTaskDesk",
-  jarvisFocusTask: "jarvis.focusTask",
-  jarvisGetProjectVocabulary: "jarvis.getProjectVocabulary",
-  jarvisManageProjectAlias: "jarvis.manageProjectAlias",
-  subscribeJarvisPresentation: "jarvis.subscribePresentation",
-  jarvisRegisterPushToken: "jarvis.registerPushToken",
-  jarvisUnregisterPushToken: "jarvis.unregisterPushToken",
-  jarvisVoiceLiveStart: "jarvis.voiceLiveStart",
+  // Provider-neutral Circe manager
+  circeExecute: "circe.execute",
+  circeInterpret: "circe.interpret",
+  circeCancelRequest: "circe.cancelRequest",
+  circeGetTaskDesk: "circe.getTaskDesk",
+  circeFocusTask: "circe.focusTask",
+  circeGetProjectVocabulary: "circe.getProjectVocabulary",
+  circeManageProjectAlias: "circe.manageProjectAlias",
+  subscribeCircePresentation: "circe.subscribePresentation",
+  circeRegisterPushToken: "circe.registerPushToken",
+  circeUnregisterPushToken: "circe.unregisterPushToken",
+  circeVoiceLiveStart: "circe.voiceLiveStart",
 
   // Project registry methods
   projectsList: "projects.list",
@@ -454,74 +454,74 @@ const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, 
   error: Schema.Union([KeybindingsConfigError, EnvironmentAuthorizationError]),
 });
 
-const WsJarvisExecuteRpc = Rpc.make(WS_METHODS.jarvisExecute, {
-  payload: JarvisExecuteInput,
-  success: JarvisExecutionResult,
-  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+const WsCirceExecuteRpc = Rpc.make(WS_METHODS.circeExecute, {
+  payload: CirceExecuteInput,
+  success: CirceExecutionResult,
+  error: Schema.Union([CirceExecutionError, EnvironmentAuthorizationError]),
 });
 
-const WsJarvisCancelRequestRpc = Rpc.make(WS_METHODS.jarvisCancelRequest, {
-  payload: JarvisCancelRequestInput,
-  success: JarvisCancelRequestResult,
-  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+const WsCirceCancelRequestRpc = Rpc.make(WS_METHODS.circeCancelRequest, {
+  payload: CirceCancelRequestInput,
+  success: CirceCancelRequestResult,
+  error: Schema.Union([CirceExecutionError, EnvironmentAuthorizationError]),
 });
 
-const WsJarvisInterpretRpc = Rpc.make(WS_METHODS.jarvisInterpret, {
-  payload: JarvisInterpretInput,
-  success: JarvisInterpretResult,
-  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+const WsCirceInterpretRpc = Rpc.make(WS_METHODS.circeInterpret, {
+  payload: CirceInterpretInput,
+  success: CirceInterpretResult,
+  error: Schema.Union([CirceExecutionError, EnvironmentAuthorizationError]),
 });
 
-const WsJarvisGetTaskDeskRpc = Rpc.make(WS_METHODS.jarvisGetTaskDesk, {
+const WsCirceGetTaskDeskRpc = Rpc.make(WS_METHODS.circeGetTaskDesk, {
   payload: Schema.Struct({}),
-  success: JarvisTaskDeskView,
-  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+  success: CirceTaskDeskView,
+  error: Schema.Union([CirceExecutionError, EnvironmentAuthorizationError]),
 });
 
-const WsJarvisFocusTaskRpc = Rpc.make(WS_METHODS.jarvisFocusTask, {
-  payload: JarvisFocusTaskInput,
-  success: JarvisFocusTaskResult,
-  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+const WsCirceFocusTaskRpc = Rpc.make(WS_METHODS.circeFocusTask, {
+  payload: CirceFocusTaskInput,
+  success: CirceFocusTaskResult,
+  error: Schema.Union([CirceExecutionError, EnvironmentAuthorizationError]),
 });
 
-const WsJarvisGetProjectVocabularyRpc = Rpc.make(WS_METHODS.jarvisGetProjectVocabulary, {
+const WsCirceGetProjectVocabularyRpc = Rpc.make(WS_METHODS.circeGetProjectVocabulary, {
   payload: Schema.Struct({}),
-  success: JarvisProjectVocabulary,
-  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+  success: CirceProjectVocabulary,
+  error: Schema.Union([CirceExecutionError, EnvironmentAuthorizationError]),
 });
 
-const WsJarvisManageProjectAliasRpc = Rpc.make(WS_METHODS.jarvisManageProjectAlias, {
-  payload: JarvisManageProjectAliasInput,
-  success: JarvisManageProjectAliasResult,
-  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+const WsCirceManageProjectAliasRpc = Rpc.make(WS_METHODS.circeManageProjectAlias, {
+  payload: CirceManageProjectAliasInput,
+  success: CirceManageProjectAliasResult,
+  error: Schema.Union([CirceExecutionError, EnvironmentAuthorizationError]),
 });
 
-const WsSubscribeJarvisPresentationRpc = Rpc.make(WS_METHODS.subscribeJarvisPresentation, {
-  payload: JarvisPresentationSubscriptionInput,
-  success: JarvisPresentationEvent,
-  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+const WsSubscribeCircePresentationRpc = Rpc.make(WS_METHODS.subscribeCircePresentation, {
+  payload: CircePresentationSubscriptionInput,
+  success: CircePresentationEvent,
+  error: Schema.Union([CirceExecutionError, EnvironmentAuthorizationError]),
   stream: true,
 });
 
-const WsJarvisRegisterPushTokenRpc = Rpc.make(WS_METHODS.jarvisRegisterPushToken, {
-  payload: JarvisPushRegistrationInput,
-  success: JarvisPushRegistrationResult,
-  error: Schema.Union([JarvisPushRegistrationError, EnvironmentAuthorizationError]),
+const WsCirceRegisterPushTokenRpc = Rpc.make(WS_METHODS.circeRegisterPushToken, {
+  payload: CircePushRegistrationInput,
+  success: CircePushRegistrationResult,
+  error: Schema.Union([CircePushRegistrationError, EnvironmentAuthorizationError]),
 });
 
-const WsJarvisUnregisterPushTokenRpc = Rpc.make(WS_METHODS.jarvisUnregisterPushToken, {
-  payload: JarvisPushRegistrationInput,
-  success: JarvisPushRegistrationResult,
-  error: Schema.Union([JarvisPushRegistrationError, EnvironmentAuthorizationError]),
+const WsCirceUnregisterPushTokenRpc = Rpc.make(WS_METHODS.circeUnregisterPushToken, {
+  payload: CircePushRegistrationInput,
+  success: CircePushRegistrationResult,
+  error: Schema.Union([CircePushRegistrationError, EnvironmentAuthorizationError]),
 });
 
-const WsJarvisVoiceLiveStartRpc = Rpc.make(WS_METHODS.jarvisVoiceLiveStart, {
-  payload: JarvisLiveVoiceCreateInput,
-  success: JarvisLiveVoiceCreateResult,
+const WsCirceVoiceLiveStartRpc = Rpc.make(WS_METHODS.circeVoiceLiveStart, {
+  payload: CirceLiveVoiceCreateInput,
+  success: CirceLiveVoiceCreateResult,
   error: Schema.Union([
-    JarvisLiveVoiceInvalidInputError,
-    JarvisLiveVoiceUnavailableError,
-    JarvisLiveVoiceRuntimeError,
+    CirceLiveVoiceInvalidInputError,
+    CirceLiveVoiceUnavailableError,
+    CirceLiveVoiceRuntimeError,
     EnvironmentAuthorizationError,
   ]),
 });
@@ -1370,29 +1370,29 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
 });
 
 export const WsRpcGroup = RpcGroup.make(
-  WsJarvisExecuteRpc,
-  WsJarvisInterpretRpc,
-  WsJarvisCancelRequestRpc,
-  WsJarvisGetTaskDeskRpc,
-  WsJarvisFocusTaskRpc,
-  WsJarvisGetProjectVocabularyRpc,
-  WsJarvisManageProjectAliasRpc,
-  WsSubscribeJarvisPresentationRpc,
-  WsJarvisRegisterPushTokenRpc,
-  WsJarvisUnregisterPushTokenRpc,
-  WsJarvisVoiceLiveStartRpc,
+  WsCirceExecuteRpc,
+  WsCirceInterpretRpc,
+  WsCirceCancelRequestRpc,
+  WsCirceGetTaskDeskRpc,
+  WsCirceFocusTaskRpc,
+  WsCirceGetProjectVocabularyRpc,
+  WsCirceManageProjectAliasRpc,
+  WsSubscribeCircePresentationRpc,
+  WsCirceRegisterPushTokenRpc,
+  WsCirceUnregisterPushTokenRpc,
+  WsCirceVoiceLiveStartRpc,
   WsServerSetEnvironmentLabelRpc,
-  WsJarvisExecuteRpc,
-  WsJarvisInterpretRpc,
-  WsJarvisCancelRequestRpc,
-  WsJarvisGetTaskDeskRpc,
-  WsJarvisFocusTaskRpc,
-  WsJarvisGetProjectVocabularyRpc,
-  WsJarvisManageProjectAliasRpc,
-  WsSubscribeJarvisPresentationRpc,
-  WsJarvisRegisterPushTokenRpc,
-  WsJarvisUnregisterPushTokenRpc,
-  WsJarvisVoiceLiveStartRpc,
+  WsCirceExecuteRpc,
+  WsCirceInterpretRpc,
+  WsCirceCancelRequestRpc,
+  WsCirceGetTaskDeskRpc,
+  WsCirceFocusTaskRpc,
+  WsCirceGetProjectVocabularyRpc,
+  WsCirceManageProjectAliasRpc,
+  WsSubscribeCircePresentationRpc,
+  WsCirceRegisterPushTokenRpc,
+  WsCirceUnregisterPushTokenRpc,
+  WsCirceVoiceLiveStartRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerSetEnvironmentLabelRpc,
@@ -1525,31 +1525,31 @@ export const WsRpcGroup = RpcGroup.make(
 );
 
 /** The product-owned RPC subset is kept separate so server transports can compose it. */
-export const JarvisWsRpcGroup = RpcGroup.make(
-  WsJarvisExecuteRpc,
-  WsJarvisInterpretRpc,
-  WsJarvisCancelRequestRpc,
-  WsJarvisGetTaskDeskRpc,
-  WsJarvisFocusTaskRpc,
-  WsJarvisGetProjectVocabularyRpc,
-  WsJarvisManageProjectAliasRpc,
-  WsSubscribeJarvisPresentationRpc,
-  WsJarvisRegisterPushTokenRpc,
-  WsJarvisUnregisterPushTokenRpc,
-  WsJarvisVoiceLiveStartRpc,
+export const CirceWsRpcGroup = RpcGroup.make(
+  WsCirceExecuteRpc,
+  WsCirceInterpretRpc,
+  WsCirceCancelRequestRpc,
+  WsCirceGetTaskDeskRpc,
+  WsCirceFocusTaskRpc,
+  WsCirceGetProjectVocabularyRpc,
+  WsCirceManageProjectAliasRpc,
+  WsSubscribeCircePresentationRpc,
+  WsCirceRegisterPushTokenRpc,
+  WsCirceUnregisterPushTokenRpc,
+  WsCirceVoiceLiveStartRpc,
 );
 
 /** Generic T3 RPCs; product handlers are supplied by their composition layer. */
 export const T3WsRpcGroup = WsRpcGroup.omit(
-  WS_METHODS.jarvisExecute,
-  WS_METHODS.jarvisInterpret,
-  WS_METHODS.jarvisCancelRequest,
-  WS_METHODS.jarvisGetTaskDesk,
-  WS_METHODS.jarvisFocusTask,
-  WS_METHODS.jarvisGetProjectVocabulary,
-  WS_METHODS.jarvisManageProjectAlias,
-  WS_METHODS.subscribeJarvisPresentation,
-  WS_METHODS.jarvisRegisterPushToken,
-  WS_METHODS.jarvisUnregisterPushToken,
-  WS_METHODS.jarvisVoiceLiveStart,
+  WS_METHODS.circeExecute,
+  WS_METHODS.circeInterpret,
+  WS_METHODS.circeCancelRequest,
+  WS_METHODS.circeGetTaskDesk,
+  WS_METHODS.circeFocusTask,
+  WS_METHODS.circeGetProjectVocabulary,
+  WS_METHODS.circeManageProjectAlias,
+  WS_METHODS.subscribeCircePresentation,
+  WS_METHODS.circeRegisterPushToken,
+  WS_METHODS.circeUnregisterPushToken,
+  WS_METHODS.circeVoiceLiveStart,
 );

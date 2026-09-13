@@ -45,6 +45,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@circe/client-runtime": "workspace:*",
+    "@circe/core": "workspace:*",
     "@clerk/expo": "catalog:",
     "@effect/atom-react": "catalog:",
     "@expo-google-fonts/dm-sans": "^0.4.2",
@@ -65,8 +67,6 @@
     "@shikijs/themes": "4.2.0",
     "@t3tools/client-runtime": "workspace:*",
     "@t3tools/contracts": "workspace:*",
-    "@t3tools/jarvis-client-runtime": "workspace:*",
-    "@t3tools/jarvis-core": "workspace:*",
     "@t3tools/mobile-markdown-text": "file:./modules/t3-markdown-text",
     "@t3tools/mobile-review-diff-native": "file:./modules/t3-review-diff",
     "@t3tools/mobile-terminal-native": "file:./modules/t3-terminal",

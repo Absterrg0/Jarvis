@@ -40,7 +40,7 @@ export function getProviderSummary(provider: ServerProvider | undefined) {
     return {
       headline: "Disabled",
       detail:
-        provider.message ?? "This provider is installed but disabled for new sessions in ARIS.",
+        provider.message ?? "This provider is installed but disabled for new sessions in Circe.",
     };
   }
   if (!provider.installed) {

@@ -49,7 +49,7 @@ import type {
   TerminalWriteInput,
 } from "./terminal.ts";
 import * as Schema from "effect/Schema";
-import { JarvisTaskRef } from "./jarvis.ts";
+import { CirceTaskRef } from "./circe.ts";
 import type {
   DiscoveredLocalServerList,
   PreviewCloseInput,
@@ -1214,7 +1214,7 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
-export const DesktopJarvisLiveVoiceStatus = Schema.Literals([
+export const DesktopCirceLiveVoiceStatus = Schema.Literals([
   "idle",
   "requesting",
   "connecting",
@@ -1222,26 +1222,26 @@ export const DesktopJarvisLiveVoiceStatus = Schema.Literals([
   "closing",
   "failed",
 ]);
-export type DesktopJarvisLiveVoiceStatus = typeof DesktopJarvisLiveVoiceStatus.Type;
+export type DesktopCirceLiveVoiceStatus = typeof DesktopCirceLiveVoiceStatus.Type;
 
 /**
  * Renderer-owned live conversation state, reported to the main process so the
  * tray label and the global shortcut follow the real session rather than an
  * optimistic guess. `enabled` means the node has a stored API key.
  */
-export const DesktopJarvisLiveVoiceStateSchema = Schema.Struct({
+export const DesktopCirceLiveVoiceStateSchema = Schema.Struct({
   enabled: Schema.Boolean,
   active: Schema.Boolean,
-  status: DesktopJarvisLiveVoiceStatus,
+  status: DesktopCirceLiveVoiceStatus,
   /** Live audio amplitude 0..1 (mic or model voice) for orb animation. */
   level: Schema.optional(Schema.Number),
   /** Short caption shown with the orb (status or transcript). */
   caption: Schema.optional(Schema.String),
 });
-export type DesktopJarvisLiveVoiceState = typeof DesktopJarvisLiveVoiceStateSchema.Type;
+export type DesktopCirceLiveVoiceState = typeof DesktopCirceLiveVoiceStateSchema.Type;
 
-export interface DesktopJarvisLiveVoiceBridge {
-  report: (state: DesktopJarvisLiveVoiceState) => void;
+export interface DesktopCirceLiveVoiceBridge {
+  report: (state: DesktopCirceLiveVoiceState) => void;
   /**
    * Main-process hotkey toggle. Delivered on a dedicated channel because the
    * generic menu-action path waits for a renderer-ready handshake that is not
@@ -1256,27 +1256,27 @@ export interface DesktopJarvisLiveVoiceBridge {
  * orb never invents identities. `available` is informational only, the node
  * validates execution.
  */
-export const DesktopJarvisOrbModelSchema = Schema.Struct({
+export const DesktopCirceOrbModelSchema = Schema.Struct({
   slug: Schema.String,
   name: Schema.String,
 });
-export type DesktopJarvisOrbModel = typeof DesktopJarvisOrbModelSchema.Type;
+export type DesktopCirceOrbModel = typeof DesktopCirceOrbModelSchema.Type;
 
-export const DesktopJarvisOrbProviderSchema = Schema.Struct({
+export const DesktopCirceOrbProviderSchema = Schema.Struct({
   instanceId: Schema.String,
   displayName: Schema.String,
   driver: Schema.String,
   available: Schema.Boolean,
-  models: Schema.Array(DesktopJarvisOrbModelSchema),
+  models: Schema.Array(DesktopCirceOrbModelSchema),
 });
-export type DesktopJarvisOrbProvider = typeof DesktopJarvisOrbProviderSchema.Type;
+export type DesktopCirceOrbProvider = typeof DesktopCirceOrbProviderSchema.Type;
 
 /** Exact `{instanceId, model}` pair the user picked in the orb picker. */
-export const DesktopJarvisOrbSelectionSchema = Schema.Struct({
+export const DesktopCirceOrbSelectionSchema = Schema.Struct({
   instanceId: Schema.String,
   model: Schema.String,
 });
-export type DesktopJarvisOrbSelection = typeof DesktopJarvisOrbSelectionSchema.Type;
+export type DesktopCirceOrbSelection = typeof DesktopCirceOrbSelectionSchema.Type;
 
 /**
  * Renderer-owned orb catalog. The main process forwards it verbatim to the
@@ -1284,12 +1284,12 @@ export type DesktopJarvisOrbSelection = typeof DesktopJarvisOrbSelectionSchema.T
  * verbatim. `pendingSelection` marks an in-flight settings save, `error`
  * carries the last honest failure. Null `selected` means project defaults.
  */
-export const DesktopJarvisOrbCatalogSchema = Schema.Struct({
-  providers: Schema.Array(DesktopJarvisOrbProviderSchema),
+export const DesktopCirceOrbCatalogSchema = Schema.Struct({
+  providers: Schema.Array(DesktopCirceOrbProviderSchema),
   agents: Schema.optional(
     Schema.Array(
       Schema.Struct({
-        taskRef: JarvisTaskRef,
+        taskRef: CirceTaskRef,
         title: Schema.String,
         projectTitle: Schema.String,
         nodeLabel: Schema.String,
@@ -1298,13 +1298,13 @@ export const DesktopJarvisOrbCatalogSchema = Schema.Struct({
       }),
     ),
   ),
-  selected: Schema.NullOr(DesktopJarvisOrbSelectionSchema),
-  pendingSelection: Schema.NullOr(DesktopJarvisOrbSelectionSchema),
+  selected: Schema.NullOr(DesktopCirceOrbSelectionSchema),
+  pendingSelection: Schema.NullOr(DesktopCirceOrbSelectionSchema),
   error: Schema.NullOr(Schema.String),
 });
-export type DesktopJarvisOrbCatalog = typeof DesktopJarvisOrbCatalogSchema.Type;
+export type DesktopCirceOrbCatalog = typeof DesktopCirceOrbCatalogSchema.Type;
 
-export const EMPTY_DESKTOP_JARVIS_ORB_CATALOG: DesktopJarvisOrbCatalog = {
+export const EMPTY_DESKTOP_CIRCE_ORB_CATALOG: DesktopCirceOrbCatalog = {
   providers: [],
   selected: null,
   pendingSelection: null,
@@ -1312,25 +1312,25 @@ export const EMPTY_DESKTOP_JARVIS_ORB_CATALOG: DesktopJarvisOrbCatalog = {
 };
 
 /** Overlay-to-main click report. Only `select` crosses the boundary. */
-export const DesktopJarvisOrbEventSchema = Schema.Struct({
+export const DesktopCirceOrbEventSchema = Schema.Struct({
   type: Schema.Literal("select"),
   instanceId: Schema.String,
   model: Schema.String,
 });
-export type DesktopJarvisOrbEvent = typeof DesktopJarvisOrbEventSchema.Type;
+export type DesktopCirceOrbEvent = typeof DesktopCirceOrbEventSchema.Type;
 
-export interface DesktopJarvisOrbBridge {
+export interface DesktopCirceOrbBridge {
   /** Renderer pushes its real provider catalog for the orb picker. */
-  reportCatalog: (catalog: DesktopJarvisOrbCatalog) => void;
+  reportCatalog: (catalog: DesktopCirceOrbCatalog) => void;
   /** Orb picker selection, relayed orb -> main -> renderer. */
-  onSelect: (listener: (selection: DesktopJarvisOrbSelection) => void) => () => void;
+  onSelect: (listener: (selection: DesktopCirceOrbSelection) => void) => () => void;
 }
 
 export interface DesktopBridge {
   /** Optional handshake sent after the desktop renderer has mounted its UI. */
   notifyRendererReady?: () => void;
-  jarvisLiveVoice?: DesktopJarvisLiveVoiceBridge;
-  jarvisOrb?: DesktopJarvisOrbBridge;
+  circeLiveVoice?: DesktopCirceLiveVoiceBridge;
+  circeOrb?: DesktopCirceOrbBridge;
   getAppBranding: () => DesktopAppBranding | null;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;

@@ -35,7 +35,7 @@ export class RelayConfiguration extends Context.Service<
       readonly voice: string;
     };
   }
->()("@t3tools/jarvis-relay/Config/RelayConfiguration") {}
+>()("@circe/relay/Config/RelayConfiguration") {}
 
 export const make = (configuration: RelayConfiguration["Service"]) =>
   RelayConfiguration.of(configuration);

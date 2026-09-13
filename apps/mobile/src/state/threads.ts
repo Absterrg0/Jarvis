@@ -42,7 +42,7 @@ export type MobileThreadLookup =
 /** Read one durable thread through the ordinary snapshot endpoint.
  *
  * A transport failure stays "unreachable" so reconnects do not discard a
- * retained Jarvis listener. A confirmed 404 is "missing" and can retire it.
+ * retained Circe listener. A confirmed 404 is "missing" and can retire it.
  */
 export const lookupThread = createEnvironmentCommand(connectionAtomRuntime, {
   label: "mobile:environment-data:thread:lookup",

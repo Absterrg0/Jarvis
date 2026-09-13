@@ -1,4 +1,4 @@
-import { JARVIS_CONVERSATIONS_PROJECT_TITLE } from "@t3tools/contracts";
+import { CIRCE_CONVERSATIONS_PROJECT_TITLE } from "@t3tools/contracts";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { LinkBranchPullRequestButton } from "./pullRequest/LinkBranchPullRequestButton";
 import {
@@ -33,7 +33,7 @@ import {
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import {
-  JARVIS_CONVERSATION_TITLE_PREFIX,
+  CIRCE_CONVERSATION_TITLE_PREFIX,
   resolveEnvironmentMachineKind,
   type EnvironmentMachineKind,
   type ProjectIconOverride,
@@ -1443,7 +1443,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       </span>
     ) : null;
 
-  const isConversation = thread.title.startsWith(JARVIS_CONVERSATION_TITLE_PREFIX);
+  const isConversation = thread.title.startsWith(CIRCE_CONVERSATION_TITLE_PREFIX);
   const conversationIndicator = isConversation ? (
     <span
       role="img"
@@ -2318,7 +2318,7 @@ export default function Sidebar() {
   const projectGroupsRef = useRef(projectGroups);
   projectGroupsRef.current = projectGroups;
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  // Threads on non-primary environments (T3 Connect, hosted) resolve their
+  // Threads on non-primary environments (Circe Connect, hosted) resolve their
   // provider entry from their own environment's config: default instance ids
   // are driver slugs, so a flat map would collide across environments.
   const providerEntriesByEnvironment = useMemo(
@@ -2548,7 +2548,7 @@ export default function Sidebar() {
     const rest: EnvironmentThreadShell[] = [];
     for (const thread of visible) {
       const display = projectDisplayNameByKey.get(`${thread.environmentId}:${thread.projectId}`);
-      if (display !== undefined && display.trim() === JARVIS_CONVERSATIONS_PROJECT_TITLE) {
+      if (display !== undefined && display.trim() === CIRCE_CONVERSATIONS_PROJECT_TITLE) {
         conversations.push(thread);
         continue;
       }

@@ -32,15 +32,15 @@ export interface MakeDesktopEnvironmentInput {
   readonly runningUnderArm64Translation: boolean;
 }
 
-export const DESKTOP_DISTRIBUTIONS = ["unified-jarvis", "official-jarvis", "standalone"] as const;
+export const DESKTOP_DISTRIBUTIONS = ["unified-circe", "official-circe", "standalone"] as const;
 export type DesktopDistribution = (typeof DESKTOP_DISTRIBUTIONS)[number];
-export const JARVIS_OFFICIAL_RELEASE_MARKER_FILE = "jarvis-official-release.json";
+export const CIRCE_OFFICIAL_RELEASE_MARKER_FILE = "circe-official-release.json";
 
 /**
  * A unified Windows install keeps the Electron desktop payload below the
  * setup-owned root. The executable path and both filesystem markers are
  * required so a standalone Desktop build cannot accidentally opt out of its
- * own updater just because it happens to be named ARIS.exe. Official
+ * own updater just because it happens to be named Circe.exe. Official
  * Linux/macOS releases use an explicit packaged marker instead.
  */
 export function resolveDesktopDistribution(input: {
@@ -49,7 +49,7 @@ export function resolveDesktopDistribution(input: {
   readonly executablePath: string;
   readonly rootManifestExists: boolean;
   readonly desktopExecutableExists: boolean;
-  readonly officialJarvisMarkerExists: boolean;
+  readonly officialCirceMarkerExists: boolean;
   readonly path: Pick<Path.Path, "resolve" | "dirname" | "basename">;
 }): DesktopDistribution {
   // The unified layout is Windows-only: without the platform gate a packaged
@@ -64,11 +64,11 @@ export function resolveDesktopDistribution(input: {
     const executablePath = input.path.resolve(input.executablePath);
     const desktopDirectory = input.path.dirname(executablePath);
     if (input.path.basename(desktopDirectory).toLowerCase() === "desktop") {
-      return "unified-jarvis";
+      return "unified-circe";
     }
   }
 
-  return input.isPackaged && input.officialJarvisMarkerExists ? "official-jarvis" : "standalone";
+  return input.isPackaged && input.officialCirceMarkerExists ? "official-circe" : "standalone";
 }
 
 export class DesktopEnvironment extends Context.Service<
@@ -130,8 +130,8 @@ export class DesktopEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
-const APP_BASE_NAME = "ARIS";
-const APP_RELEASE_TAG_BASE_URL = "https://github.com/Absterrg0/Jarvis/releases/tag";
+const APP_BASE_NAME = "Circe";
+const APP_RELEASE_TAG_BASE_URL = "https://github.com/Absterrg0/Circe/releases/tag";
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
@@ -220,10 +220,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const desktopExecutableExists = yield* Effect.sync(() =>
     NodeFS.existsSync(path.join(installRoot, "desktop", path.basename(executablePath))),
   );
-  const officialJarvisMarkerExists = yield* Effect.sync(
+  const officialCirceMarkerExists = yield* Effect.sync(
     () =>
       input.isPackaged &&
-      NodeFS.existsSync(path.join(input.resourcesPath, JARVIS_OFFICIAL_RELEASE_MARKER_FILE)),
+      NodeFS.existsSync(path.join(input.resourcesPath, CIRCE_OFFICIAL_RELEASE_MARKER_FILE)),
   );
   const distribution = resolveDesktopDistribution({
     isPackaged: input.isPackaged,
@@ -231,7 +231,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     executablePath,
     rootManifestExists,
     desktopExecutableExists,
-    officialJarvisMarkerExists,
+    officialCirceMarkerExists,
     path,
   });
   const serverRoot =
@@ -249,8 +249,8 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     t3Home: config.t3Home,
   });
-  const userDataDirName = isDevelopment ? "jarvis-dev" : "jarvis";
-  const legacyUserDataDirName = isDevelopment ? "Jarvis (Dev)" : "Jarvis";
+  const userDataDirName = isDevelopment ? "circe-dev" : "circe";
+  const legacyUserDataDirName = isDevelopment ? "Circe (Dev)" : "Circe";
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -297,12 +297,12 @@ const make = Effect.fn("desktop.environment.make")(function* (
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.abstergo.jarvis.dev" : "com.abstergo.jarvis",
+      isDevelopment ? "com.abstergo.circe.dev" : "com.abstergo.circe",
     ),
     // The portal host registry resolves an app id through the desktop entry
     // with the same name, so the hidden entry must match appUserModelId.
-    linuxDesktopEntryName: isDevelopment ? "jarvis-dev.desktop" : "com.abstergo.jarvis.desktop",
-    linuxWmClass: isDevelopment ? "jarvis-dev" : "jarvis",
+    linuxDesktopEntryName: isDevelopment ? "circe-dev.desktop" : "com.abstergo.circe.desktop",
+    linuxWmClass: isDevelopment ? "circe-dev" : "circe",
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
     userDataDirName,

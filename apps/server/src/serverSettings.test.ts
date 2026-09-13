@@ -366,36 +366,36 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("replaces and resets the per-node Jarvis default atomically", () =>
+  it.effect("replaces and resets the per-node Circe default atomically", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
 
       const first = yield* serverSettings.updateSettings({
-        jarvisDefaultModelSelection: {
+        circeDefaultModelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.6-sol",
           options: [{ id: "reasoningEffort", value: "high" }],
         },
       });
-      assert.deepEqual(first.jarvisDefaultModelSelection, {
+      assert.deepEqual(first.circeDefaultModelSelection, {
         instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5.6-sol",
         options: [{ id: "reasoningEffort", value: "high" }],
       });
 
       const replaced = yield* serverSettings.updateSettings({
-        jarvisDefaultModelSelection: {
+        circeDefaultModelSelection: {
           instanceId: ProviderInstanceId.make("claudeAgent"),
           model: "claude-sonnet-5",
         },
       });
-      assert.deepEqual(replaced.jarvisDefaultModelSelection, {
+      assert.deepEqual(replaced.circeDefaultModelSelection, {
         instanceId: ProviderInstanceId.make("claudeAgent"),
         model: "claude-sonnet-5",
       });
 
-      const reset = yield* serverSettings.updateSettings({ jarvisDefaultModelSelection: null });
-      assert.isNull(reset.jarvisDefaultModelSelection);
+      const reset = yield* serverSettings.updateSettings({ circeDefaultModelSelection: null });
+      assert.isNull(reset.circeDefaultModelSelection);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
@@ -1320,32 +1320,32 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const fileSystem = yield* FileSystem.FileSystem;
 
       const saved = yield* serverSettings.updateSettings({
-        jarvisLiveVoice: { model: "gpt-live-1", voice: "marin", apiKey: "sk-live-secret" },
+        circeLiveVoice: { model: "gpt-live-1", voice: "marin", apiKey: "sk-live-secret" },
       });
-      assert.equal(saved.jarvisLiveVoice.apiKey, "sk-live-secret");
-      assert.equal(saved.jarvisLiveVoice.model, "gpt-live-1");
+      assert.equal(saved.circeLiveVoice.apiKey, "sk-live-secret");
+      assert.equal(saved.circeLiveVoice.model, "gpt-live-1");
 
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       assert.notInclude(raw, "sk-live-secret");
-      assert.include(raw, '"jarvisLiveVoice"');
+      assert.include(raw, '"circeLiveVoice"');
       assert.include(raw, "\u2022\u2022\u2022\u2022\u2022\u2022");
 
       const redacted = ServerSettingsModule.redactServerSettingsForClient(
         yield* serverSettings.getSettings,
       );
-      assert.equal(redacted.jarvisLiveVoice.apiKey, "\u2022\u2022\u2022\u2022\u2022\u2022");
+      assert.equal(redacted.circeLiveVoice.apiKey, "\u2022\u2022\u2022\u2022\u2022\u2022");
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       assert.notInclude(JSON.stringify(redacted), "sk-live-secret");
 
       const kept = yield* serverSettings.updateSettings({
-        jarvisLiveVoice: { apiKey: "\u2022\u2022\u2022\u2022\u2022\u2022" },
+        circeLiveVoice: { apiKey: "\u2022\u2022\u2022\u2022\u2022\u2022" },
       });
-      assert.equal(kept.jarvisLiveVoice.apiKey, "sk-live-secret");
+      assert.equal(kept.circeLiveVoice.apiKey, "sk-live-secret");
 
       const cleared = yield* serverSettings.updateSettings({
-        jarvisLiveVoice: { apiKey: "" },
+        circeLiveVoice: { apiKey: "" },
       });
-      assert.equal(cleared.jarvisLiveVoice.apiKey, "");
+      assert.equal(cleared.circeLiveVoice.apiKey, "");
       const afterClear = yield* fileSystem.readFileString(serverConfig.settingsPath);
       assert.notInclude(afterClear, "\u2022\u2022\u2022\u2022\u2022\u2022");
     }).pipe(Effect.provide(makeServerSettingsLayer())),

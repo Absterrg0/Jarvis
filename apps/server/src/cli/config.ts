@@ -1,6 +1,6 @@
 import * as NetService from "@t3tools/shared/Net";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
-import { DesktopBackendBootstrap, JarvisNodePreset, PortSchema } from "@t3tools/contracts";
+import { DesktopBackendBootstrap, CirceNodePreset, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -23,11 +23,8 @@ const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
   Flag.optional,
 );
-export const jarvisNodePresetFlag = Flag.choice(
-  "jarvis-node-preset",
-  JarvisNodePreset.literals,
-).pipe(
-  Flag.withDescription("ARIS node capability preset: full, controller, or headless."),
+export const circeNodePresetFlag = Flag.choice("circe-node-preset", CirceNodePreset.literals).pipe(
+  Flag.withDescription("Circe node capability preset: full, controller, or headless."),
   Flag.optional,
 );
 const portFlag = Flag.integer("port").pipe(
@@ -41,7 +38,7 @@ const hostFlag = Flag.string("host").pipe(
 );
 export const baseDirFlag = Flag.string("base-dir").pipe(
   Flag.withDescription(
-    "Explicit ARIS data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
+    "Explicit Circe data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
   ),
   Flag.optional,
 );
@@ -111,7 +108,7 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  jarvisNodePreset: Config.schema(JarvisNodePreset, "JARVIS_NODE_PRESET").pipe(
+  circeNodePreset: Config.schema(CirceNodePreset, "CIRCE_NODE_PRESET").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
@@ -152,31 +149,31 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  jarvisLocalModelEnabled: Config.boolean("JARVIS_LOCAL_MODEL_ENABLED").pipe(
+  circeLocalModelEnabled: Config.boolean("CIRCE_LOCAL_MODEL_ENABLED").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  jarvisLocalModelDir: Config.string("JARVIS_LOCAL_MODEL_DIR").pipe(
+  circeLocalModelDir: Config.string("CIRCE_LOCAL_MODEL_DIR").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  jarvisLocalModelPython: Config.string("JARVIS_LOCAL_MODEL_PYTHON").pipe(
+  circeLocalModelPython: Config.string("CIRCE_LOCAL_MODEL_PYTHON").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  jarvisLocalModelTimeoutMs: Config.int("JARVIS_LOCAL_MODEL_TIMEOUT_MS").pipe(
+  circeLocalModelTimeoutMs: Config.int("CIRCE_LOCAL_MODEL_TIMEOUT_MS").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  jarvisLocalModelEvalReport: Config.string("JARVIS_LOCAL_MODEL_EVAL_REPORT").pipe(
+  circeLocalModelEvalReport: Config.string("CIRCE_LOCAL_MODEL_EVAL_REPORT").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  jarvisLocalModelPolicy: Config.string("JARVIS_LOCAL_MODEL_POLICY").pipe(
+  circeLocalModelPolicy: Config.string("CIRCE_LOCAL_MODEL_POLICY").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  jarvisLocalModelInferenceScript: Config.string("JARVIS_LOCAL_MODEL_INFERENCE_SCRIPT").pipe(
+  circeLocalModelInferenceScript: Config.string("CIRCE_LOCAL_MODEL_INFERENCE_SCRIPT").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
@@ -184,7 +181,7 @@ const EnvServerConfig = Config.all({
 
 export interface CliServerFlags {
   readonly mode: Option.Option<ServerConfig.RuntimeMode>;
-  readonly jarvisNodePreset?: Option.Option<JarvisNodePreset>;
+  readonly circeNodePreset?: Option.Option<CirceNodePreset>;
   readonly port: Option.Option<number>;
   readonly host: Option.Option<string>;
   readonly baseDir: Option.Option<string>;
@@ -214,7 +211,7 @@ export const projectLocationFlags = {
 
 export const sharedServerCommandFlags = {
   mode: modeFlag,
-  jarvisNodePreset: jarvisNodePresetFlag,
+  circeNodePreset: circeNodePresetFlag,
   port: portFlag,
   host: hostFlag,
   baseDir: baseDirFlag,
@@ -255,7 +252,7 @@ const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: st
  * `nodeType` spelling used by the Linux headless archive as well as the
  * canonical `preset` field so the same runtime can be moved between hosts.
  */
-export const loadPersistedJarvisNodePreset = Effect.fn(function* (presetPath: string) {
+export const loadPersistedCirceNodePreset = Effect.fn(function* (presetPath: string) {
   const fs = yield* FileSystem.FileSystem;
   const exists = yield* fs.exists(presetPath).pipe(Effect.orElseSucceed(() => false));
   if (!exists) return undefined;
@@ -264,15 +261,15 @@ export const loadPersistedJarvisNodePreset = Effect.fn(function* (presetPath: st
   const parsed = yield* decodeUnknownJson(raw).pipe(Effect.option);
   if (Option.isNone(parsed)) return undefined;
   if (typeof parsed.value === "string") {
-    return JarvisNodePreset.literals.includes(parsed.value as JarvisNodePreset)
-      ? (parsed.value as JarvisNodePreset)
+    return CirceNodePreset.literals.includes(parsed.value as CirceNodePreset)
+      ? (parsed.value as CirceNodePreset)
       : undefined;
   }
   if (typeof parsed.value !== "object" || parsed.value === null) return undefined;
   const record = parsed.value as Record<string, unknown>;
   const value = record.preset ?? record.nodeType;
-  return typeof value === "string" && JarvisNodePreset.literals.includes(value as JarvisNodePreset)
-    ? (value as JarvisNodePreset)
+  return typeof value === "string" && CirceNodePreset.literals.includes(value as CirceNodePreset)
+    ? (value as CirceNodePreset)
     : undefined;
 });
 
@@ -291,7 +288,7 @@ export const resolveServerConfig = (
     const env = yield* EnvServerConfig;
     const normalizedFlags = {
       mode: flags.mode ?? Option.none(),
-      jarvisNodePreset: flags.jarvisNodePreset ?? Option.none(),
+      circeNodePreset: flags.circeNodePreset ?? Option.none(),
       port: flags.port ?? Option.none(),
       host: flags.host ?? Option.none(),
       baseDir: flags.baseDir ?? Option.none(),
@@ -359,7 +356,7 @@ export const resolveServerConfig = (
     const persistedObservabilitySettings = yield* loadPersistedObservabilitySettings(
       derivedPaths.settingsPath,
     );
-    const persistedJarvisNodePreset = yield* loadPersistedJarvisNodePreset(
+    const persistedCirceNodePreset = yield* loadPersistedCirceNodePreset(
       derivedPaths.nodePresetPath ?? path.join(baseDir, "config", "node-preset.json"),
     );
     const serverTracePath = env.traceFile ?? derivedPaths.serverTracePath;
@@ -421,35 +418,35 @@ export const resolveServerConfig = (
       () => (mode === "desktop" ? "127.0.0.1" : undefined),
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
-    const jarvisNodePreset = Option.getOrUndefined(
+    const circeNodePreset = Option.getOrUndefined(
       resolveOptionPrecedence(
-        normalizedFlags.jarvisNodePreset,
-        Option.fromUndefinedOr(env.jarvisNodePreset),
-        Option.fromUndefinedOr(persistedJarvisNodePreset),
+        normalizedFlags.circeNodePreset,
+        Option.fromUndefinedOr(env.circeNodePreset),
+        Option.fromUndefinedOr(persistedCirceNodePreset),
       ),
     );
     // Local extraction tier: explicit opt-in only. Absent or disabled means
     // zero workers and no model load. Even when enabled, the tier declines
     // unless the model directory's evaluate.py report passes the frozen gate.
-    const jarvisLocalModelEnabled = env.jarvisLocalModelEnabled ?? false;
-    const jarvisLocalModelDir = env.jarvisLocalModelDir?.trim() ?? "";
-    const jarvisLocalModelPython = env.jarvisLocalModelPython?.trim() ?? "";
-    const jarvisLocalModelEvalReport = env.jarvisLocalModelEvalReport?.trim() ?? "";
-    const jarvisLocalModelPolicy = env.jarvisLocalModelPolicy?.trim() ?? "";
-    const jarvisLocalModelInferenceScript = env.jarvisLocalModelInferenceScript?.trim() ?? "";
-    const jarvisLocalModel =
-      jarvisLocalModelEnabled && jarvisLocalModelDir.length > 0
+    const circeLocalModelEnabled = env.circeLocalModelEnabled ?? false;
+    const circeLocalModelDir = env.circeLocalModelDir?.trim() ?? "";
+    const circeLocalModelPython = env.circeLocalModelPython?.trim() ?? "";
+    const circeLocalModelEvalReport = env.circeLocalModelEvalReport?.trim() ?? "";
+    const circeLocalModelPolicy = env.circeLocalModelPolicy?.trim() ?? "";
+    const circeLocalModelInferenceScript = env.circeLocalModelInferenceScript?.trim() ?? "";
+    const circeLocalModel =
+      circeLocalModelEnabled && circeLocalModelDir.length > 0
         ? {
             enabled: true as const,
-            modelDir: jarvisLocalModelDir,
-            pythonBin: jarvisLocalModelPython.length > 0 ? jarvisLocalModelPython : "python3",
-            timeoutMs: env.jarvisLocalModelTimeoutMs ?? 8_000,
-            ...(jarvisLocalModelEvalReport.length > 0
-              ? { evalReportPath: jarvisLocalModelEvalReport }
+            modelDir: circeLocalModelDir,
+            pythonBin: circeLocalModelPython.length > 0 ? circeLocalModelPython : "python3",
+            timeoutMs: env.circeLocalModelTimeoutMs ?? 8_000,
+            ...(circeLocalModelEvalReport.length > 0
+              ? { evalReportPath: circeLocalModelEvalReport }
               : {}),
-            ...(jarvisLocalModelPolicy.length > 0 ? { policyPath: jarvisLocalModelPolicy } : {}),
-            ...(jarvisLocalModelInferenceScript.length > 0
-              ? { inferenceScriptPath: jarvisLocalModelInferenceScript }
+            ...(circeLocalModelPolicy.length > 0 ? { policyPath: circeLocalModelPolicy } : {}),
+            ...(circeLocalModelInferenceScript.length > 0
+              ? { inferenceScriptPath: circeLocalModelInferenceScript }
               : {}),
           }
         : undefined;
@@ -472,8 +469,8 @@ export const resolveServerConfig = (
       otlpExportIntervalMs: env.otlpExportIntervalMs,
       otlpServiceName: env.otlpServiceName,
       mode,
-      ...(jarvisNodePreset === undefined ? {} : { jarvisNodePreset }),
-      ...(jarvisLocalModel === undefined ? {} : { jarvisLocalModel }),
+      ...(circeNodePreset === undefined ? {} : { circeNodePreset }),
+      ...(circeLocalModel === undefined ? {} : { circeLocalModel }),
       port,
       cwd,
       baseDir,

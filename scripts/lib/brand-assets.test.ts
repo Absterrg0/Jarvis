@@ -31,29 +31,29 @@ describe("brand-assets", () => {
     ]);
   });
 
-  it("maps server build web assets to ARIS icons", () => {
+  it("maps server build web assets to Circe icons", () => {
     expect(DEVELOPMENT_ICON_OVERRIDES[0]).toEqual({
-      sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebFaviconIco,
+      sourceRelativePath: BRAND_ASSET_PATHS.circeWebFaviconIco,
       targetRelativePath: "dist/client/favicon.ico",
     });
   });
 
-  it("maps development web assets to the ARIS splash and favicon files", () => {
+  it("maps development web assets to the Circe splash and favicon files", () => {
     expect(DEVELOPMENT_PUBLIC_ICON_OVERRIDES).toEqual([
       {
-        sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebFaviconIco,
+        sourceRelativePath: BRAND_ASSET_PATHS.circeWebFaviconIco,
         targetRelativePath: "apps/web/public/favicon.ico",
       },
       {
-        sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebFavicon16Png,
+        sourceRelativePath: BRAND_ASSET_PATHS.circeWebFavicon16Png,
         targetRelativePath: "apps/web/public/favicon-16x16.png",
       },
       {
-        sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebFavicon32Png,
+        sourceRelativePath: BRAND_ASSET_PATHS.circeWebFavicon32Png,
         targetRelativePath: "apps/web/public/favicon-32x32.png",
       },
       {
-        sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebAppleTouchIconPng,
+        sourceRelativePath: BRAND_ASSET_PATHS.circeWebAppleTouchIconPng,
         targetRelativePath: "apps/web/public/apple-touch-icon.png",
       },
     ]);
@@ -73,14 +73,14 @@ describe("brand-assets", () => {
     });
   });
 
-  it("maps hosted release channels to the ARIS brand", () => {
-    expect(resolveWebAssetBrandForChannel("latest")).toBe("jarvis");
-    expect(resolveWebAssetBrandForChannel("nightly")).toBe("jarvis");
+  it("maps hosted release channels to the Circe brand", () => {
+    expect(resolveWebAssetBrandForChannel("latest")).toBe("circe");
+    expect(resolveWebAssetBrandForChannel("nightly")).toBe("circe");
   });
 
-  it("maps package versions to the ARIS brand", () => {
-    expect(resolveWebAssetBrandForPackageVersion("0.0.29")).toBe("jarvis");
-    expect(resolveWebAssetBrandForPackageVersion("0.0.29-nightly.20260723.882")).toBe("jarvis");
+  it("maps package versions to the Circe brand", () => {
+    expect(resolveWebAssetBrandForPackageVersion("0.0.29")).toBe("circe");
+    expect(resolveWebAssetBrandForPackageVersion("0.0.29-nightly.20260723.882")).toBe("circe");
   });
 
   it("keeps development, nightly, and production icon families separate", () => {
@@ -98,28 +98,28 @@ describe("brand-assets", () => {
     expect(BRAND_ASSET_PATHS.productionMacIconPng).toMatch(/^assets\/prod\/black-/);
   });
 
-  it("keeps the Jarvis desktop family separate from hosted T3 channel assets", () => {
-    expect(BRAND_ASSET_PATHS.jarvisMasterPng).toBe("assets/jarvis/jarvis-master.png");
-    expect(BRAND_ASSET_PATHS.jarvisMacIconPng).toMatch(/^assets\/jarvis\/jarvis-/);
-    expect(BRAND_ASSET_PATHS.jarvisWindowsIconIco).toMatch(/^assets\/jarvis\/jarvis-/);
-    expect(BRAND_ASSET_PATHS.jarvisWebFaviconIco).not.toBe(
+  it("keeps the Circe desktop family separate from hosted T3 channel assets", () => {
+    expect(BRAND_ASSET_PATHS.circeMasterPng).toBe("assets/circe/circe-master.png");
+    expect(BRAND_ASSET_PATHS.circeMacIconPng).toMatch(/^assets\/circe\/circe-/);
+    expect(BRAND_ASSET_PATHS.circeWindowsIconIco).toMatch(/^assets\/circe\/circe-/);
+    expect(BRAND_ASSET_PATHS.circeWebFaviconIco).not.toBe(
       BRAND_ASSET_PATHS.productionWebFaviconIco,
     );
-    expect(resolveWebIconOverrides("jarvis", "apps/server/dist/client")).toEqual([
+    expect(resolveWebIconOverrides("circe", "apps/server/dist/client")).toEqual([
       {
-        sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebFaviconIco,
+        sourceRelativePath: BRAND_ASSET_PATHS.circeWebFaviconIco,
         targetRelativePath: "apps/server/dist/client/favicon.ico",
       },
       {
-        sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebFavicon16Png,
+        sourceRelativePath: BRAND_ASSET_PATHS.circeWebFavicon16Png,
         targetRelativePath: "apps/server/dist/client/favicon-16x16.png",
       },
       {
-        sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebFavicon32Png,
+        sourceRelativePath: BRAND_ASSET_PATHS.circeWebFavicon32Png,
         targetRelativePath: "apps/server/dist/client/favicon-32x32.png",
       },
       {
-        sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebAppleTouchIconPng,
+        sourceRelativePath: BRAND_ASSET_PATHS.circeWebAppleTouchIconPng,
         targetRelativePath: "apps/server/dist/client/apple-touch-icon.png",
       },
     ]);

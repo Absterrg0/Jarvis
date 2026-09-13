@@ -237,7 +237,7 @@ describe("DesktopBackendConfiguration", () => {
         assert.isUndefined(first.env.T3CODE_PORT);
         assert.isUndefined(first.env.T3CODE_MODE);
         assert.isUndefined(first.env.T3CODE_DESKTOP_LAN_HOST);
-        assert.isUndefined(first.env.JARVIS_NODE_PRESET);
+        assert.isUndefined(first.env.CIRCE_NODE_PRESET);
         assert.isUndefined(first.env.T3CODE_CODEX_LAUNCH_ARGS);
 
         assert.equal(first.bootstrap.mode, "desktop");
@@ -274,7 +274,7 @@ describe("DesktopBackendConfiguration", () => {
         yield* fileSystem.makeDirectory(`${baseDir}/desktop`, { recursive: true });
         yield* fileSystem.makeDirectory(`${baseDir}/apps/server/dist`, { recursive: true });
         yield* fileSystem.writeFileString(`${baseDir}/payload-manifest.json`, "{}");
-        yield* fileSystem.writeFileString(`${baseDir}/desktop/Jarvis`, "");
+        yield* fileSystem.writeFileString(`${baseDir}/desktop/Circe`, "");
         yield* fileSystem.writeFileString(`${baseDir}/apps/server/dist/bin.mjs`, "");
 
         const config = yield* Effect.gen(function* () {
@@ -306,7 +306,7 @@ describe("DesktopBackendConfiguration", () => {
               Layer.provideMerge(
                 makeEnvironmentLayer(baseDir, {
                   appPath: `${baseDir}/app.asar`,
-                  executablePath: `${baseDir}/desktop/Jarvis`,
+                  executablePath: `${baseDir}/desktop/Circe`,
                   platform: "win32",
                   resourcesPath: `${baseDir}/resources`,
                 }),
@@ -337,8 +337,8 @@ describe("DesktopBackendConfiguration", () => {
         const resourcesPath = `${baseDir}/resources`;
         yield* fileSystem.makeDirectory(resourcesPath, { recursive: true });
         yield* fileSystem.writeFileString(
-          `${resourcesPath}/${DesktopEnvironment.JARVIS_OFFICIAL_RELEASE_MARKER_FILE}`,
-          '{"product":"Jarvis","distribution":"official"}\n',
+          `${resourcesPath}/${DesktopEnvironment.CIRCE_OFFICIAL_RELEASE_MARKER_FILE}`,
+          '{"product":"Circe","distribution":"official"}\n',
         );
 
         const primary = yield* Effect.gen(function* () {
@@ -354,7 +354,7 @@ describe("DesktopBackendConfiguration", () => {
               Layer.provideMerge(
                 makeEnvironmentLayer(baseDir, {
                   appPath: `${resourcesPath}/app.asar`,
-                  executablePath: `${baseDir}/Jarvis`,
+                  executablePath: `${baseDir}/Circe`,
                   platform: "linux",
                   resourcesPath,
                 }),
@@ -383,8 +383,8 @@ describe("DesktopBackendConfiguration", () => {
         const resourcesPath = `${baseDir}/resources`;
         yield* fileSystem.makeDirectory(resourcesPath, { recursive: true });
         yield* fileSystem.writeFileString(
-          `${resourcesPath}/${DesktopEnvironment.JARVIS_OFFICIAL_RELEASE_MARKER_FILE}`,
-          '{"product":"Jarvis","distribution":"official"}\n',
+          `${resourcesPath}/${DesktopEnvironment.CIRCE_OFFICIAL_RELEASE_MARKER_FILE}`,
+          '{"product":"Circe","distribution":"official"}\n',
         );
 
         const primary = yield* Effect.gen(function* () {
@@ -400,7 +400,7 @@ describe("DesktopBackendConfiguration", () => {
               Layer.provideMerge(
                 makeEnvironmentLayer(baseDir, {
                   appPath: `${resourcesPath}/app.asar`,
-                  executablePath: `${baseDir}/Jarvis`,
+                  executablePath: `${baseDir}/Circe`,
                   platform: "linux",
                   resourcesPath,
                 }),
@@ -464,9 +464,9 @@ describe("DesktopBackendConfiguration", () => {
 
   it.effect("managed primary and WSL children strip an ambient node preset", () =>
     Effect.gen(function* () {
-      const previousPreset = process.env.JARVIS_NODE_PRESET;
+      const previousPreset = process.env.CIRCE_NODE_PRESET;
       try {
-        process.env.JARVIS_NODE_PRESET = "headless";
+        process.env.CIRCE_NODE_PRESET = "headless";
 
         yield* withHarness(
           Effect.gen(function* () {
@@ -474,12 +474,12 @@ describe("DesktopBackendConfiguration", () => {
             const primary = yield* configuration.resolvePrimary;
             const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
 
-            assert.isUndefined(primary.env.JARVIS_NODE_PRESET);
-            assert.isUndefined(wsl.env.JARVIS_NODE_PRESET);
+            assert.isUndefined(primary.env.CIRCE_NODE_PRESET);
+            assert.isUndefined(wsl.env.CIRCE_NODE_PRESET);
           }),
         );
       } finally {
-        restoreEnv("JARVIS_NODE_PRESET", previousPreset);
+        restoreEnv("CIRCE_NODE_PRESET", previousPreset);
       }
     }),
   );
@@ -493,8 +493,8 @@ describe("DesktopBackendConfiguration", () => {
         const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
 
         assert.equal(wsl.bootstrap.desktopBootstrapToken, primary.bootstrap.desktopBootstrapToken);
-        assert.isUndefined(primary.env.JARVIS_NODE_PRESET);
-        assert.isUndefined(wsl.env.JARVIS_NODE_PRESET);
+        assert.isUndefined(primary.env.CIRCE_NODE_PRESET);
+        assert.isUndefined(wsl.env.CIRCE_NODE_PRESET);
       }),
     ),
   );

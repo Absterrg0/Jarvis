@@ -169,7 +169,7 @@ function makeConfiguration(apiKey: string | null) {
     apns: null,
     clerkSecretKey: Redacted.make("clerk-secret"),
     clerkPublishableKey: "pk_test",
-    clerkJwtAudience: "t3-code-relay",
+    clerkJwtAudience: "circe-relay",
     apnsDeliveryJobSigningSecret: Redacted.make("apns-secret"),
     cloudMintPrivateKey: Redacted.make("mint-private"),
     cloudMintPublicKey: "mint-public",

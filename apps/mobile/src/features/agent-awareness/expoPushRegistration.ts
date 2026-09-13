@@ -1,4 +1,4 @@
-export const EXPO_PUSH_CHANNEL_ID = "jarvis-tasks";
+export const EXPO_PUSH_CHANNEL_ID = "circe-tasks";
 
 export interface ExpoPushRegistrationNode {
   readonly environmentId: string;

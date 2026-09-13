@@ -50,21 +50,21 @@ describe("DesktopEnvironment", () => {
         platform: "win32",
         rootManifestExists: true,
         desktopExecutableExists: true,
-        officialJarvisMarkerExists: false,
+        officialCirceMarkerExists: false,
         path,
       } as const;
 
       assert.equal(
         DesktopEnvironment.resolveDesktopDistribution({
           ...base,
-          executablePath: "/Users/alice/.jarvis/desktop/Jarvis.exe",
+          executablePath: "/Users/alice/.circe/desktop/Circe.exe",
         }),
-        "unified-jarvis",
+        "unified-circe",
       );
       assert.equal(
         DesktopEnvironment.resolveDesktopDistribution({
           ...base,
-          executablePath: "/Applications/Jarvis.app/Contents/MacOS/Jarvis",
+          executablePath: "/Applications/Circe.app/Contents/MacOS/Circe",
         }),
         "standalone",
       );
@@ -74,14 +74,14 @@ describe("DesktopEnvironment", () => {
         DesktopEnvironment.resolveDesktopDistribution({
           ...base,
           platform: "linux",
-          executablePath: "/opt/jarvis/desktop/jarvis",
+          executablePath: "/opt/circe/desktop/circe",
         }),
         "standalone",
       );
       assert.equal(
         DesktopEnvironment.resolveDesktopDistribution({
           ...base,
-          executablePath: "/Users/alice/.jarvis/desktop/Jarvis.exe",
+          executablePath: "/Users/alice/.circe/desktop/Circe.exe",
           rootManifestExists: false,
         }),
         "standalone",
@@ -89,18 +89,18 @@ describe("DesktopEnvironment", () => {
       assert.equal(
         DesktopEnvironment.resolveDesktopDistribution({
           ...base,
-          executablePath: "/Applications/Jarvis.app/Contents/MacOS/Jarvis",
-          officialJarvisMarkerExists: true,
+          executablePath: "/Applications/Circe.app/Contents/MacOS/Circe",
+          officialCirceMarkerExists: true,
         }),
-        "official-jarvis",
+        "official-circe",
       );
       assert.equal(
         DesktopEnvironment.resolveDesktopDistribution({
           ...base,
-          executablePath: "/Users/alice/.jarvis/desktop/Jarvis.exe",
-          officialJarvisMarkerExists: true,
+          executablePath: "/Users/alice/.circe/desktop/Circe.exe",
+          officialCirceMarkerExists: true,
         }),
-        "unified-jarvis",
+        "unified-circe",
       );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -110,9 +110,9 @@ describe("DesktopEnvironment", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const installRoot = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "jarvis-unified-desktop-test-",
+        prefix: "circe-unified-desktop-test-",
       });
-      const executablePath = path.join(installRoot, "desktop", "Jarvis.exe");
+      const executablePath = path.join(installRoot, "desktop", "Circe.exe");
       yield* fileSystem.makeDirectory(path.dirname(executablePath), { recursive: true });
       yield* fileSystem.writeFileString(path.join(installRoot, "payload-manifest.json"), "{}\n");
       yield* fileSystem.writeFileString(executablePath, "");
@@ -125,32 +125,32 @@ describe("DesktopEnvironment", () => {
       });
 
       assert.equal(environment.executablePath, executablePath);
-      assert.equal(environment.distribution, "unified-jarvis");
+      assert.equal(environment.distribution, "unified-circe");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("detects the packaged official Jarvis marker outside the unified Windows layout", () =>
+  it.effect("detects the packaged official Circe marker outside the unified Windows layout", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const installRoot = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "jarvis-official-desktop-test-",
+        prefix: "circe-official-desktop-test-",
       });
       const resourcesPath = path.join(installRoot, "resources");
       yield* fileSystem.makeDirectory(resourcesPath, { recursive: true });
       yield* fileSystem.writeFileString(
-        path.join(resourcesPath, DesktopEnvironment.JARVIS_OFFICIAL_RELEASE_MARKER_FILE),
-        '{"product":"Jarvis","distribution":"official"}\n',
+        path.join(resourcesPath, DesktopEnvironment.CIRCE_OFFICIAL_RELEASE_MARKER_FILE),
+        '{"product":"Circe","distribution":"official"}\n',
       );
 
       const environment = yield* makeEnvironment({
         isPackaged: true,
-        executablePath: path.join(installRoot, "Jarvis"),
+        executablePath: path.join(installRoot, "Circe"),
         appPath: path.join(resourcesPath, "app.asar"),
         resourcesPath,
       });
 
-      assert.equal(environment.distribution, "official-jarvis");
+      assert.equal(environment.distribution, "official-circe");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -188,13 +188,13 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.serverRoot, "/repo");
       assert.equal(environment.backendEntryPath, "/repo/apps/server/dist/bin.mjs");
       assert.equal(environment.backendCwd, "/repo");
-      assert.equal(environment.appUserModelId, "com.abstergo.jarvis.dev");
-      assert.equal(environment.linuxWmClass, "jarvis-dev");
+      assert.equal(environment.appUserModelId, "com.abstergo.circe.dev");
+      assert.equal(environment.linuxWmClass, "circe-dev");
       assert.deepEqual(environment.branding, {
-        baseName: "ARIS",
+        baseName: "Circe",
         stageLabel: "Dev",
-        displayName: "ARIS (Dev)",
-        releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
+        displayName: "Circe (Dev)",
+        releaseTagBaseUrl: "https://github.com/Absterrg0/Circe/releases/tag",
       });
 
       assert.deepEqual(
@@ -253,7 +253,7 @@ describe("DesktopEnvironment", () => {
         resourcesPath: "/tmp/.mount_t3code/resources",
       });
 
-      assert.equal(environment.linuxDesktopEntryName, "com.abstergo.jarvis.desktop");
+      assert.equal(environment.linuxDesktopEntryName, "com.abstergo.circe.desktop");
     }),
   );
 
@@ -265,8 +265,8 @@ describe("DesktopEnvironment", () => {
       );
       const production = yield* makeEnvironment();
 
-      assert.equal(development.stateDir, "/Users/alice/.jarvis/dev");
-      assert.equal(production.stateDir, "/Users/alice/.jarvis/userdata");
+      assert.equal(development.stateDir, "/Users/alice/.circe/dev");
+      assert.equal(production.stateDir, "/Users/alice/.circe/userdata");
     }),
   );
 
@@ -275,12 +275,12 @@ describe("DesktopEnvironment", () => {
       const environment = yield* makeEnvironment(
         {},
         {
-          T3CODE_DESKTOP_APP_USER_MODEL_ID: " com.abstergo.jarvis.dev.local ",
+          T3CODE_DESKTOP_APP_USER_MODEL_ID: " com.abstergo.circe.dev.local ",
           VITE_DEV_SERVER_URL: "http://localhost:5173",
         },
       );
 
-      assert.equal(environment.appUserModelId, "com.abstergo.jarvis.dev.local");
+      assert.equal(environment.appUserModelId, "com.abstergo.circe.dev.local");
     }),
   );
 

@@ -20,9 +20,9 @@ describe("DesktopLinuxPortalAppScope", () => {
   it("reads the portal app id from a desktop app scope cgroup", () => {
     expect(
       readDesktopLinuxPortalAppIdFromCgroup(
-        "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.abstergo.jarvis-ae65e0f32221.scope",
+        "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.abstergo.circe-ae65e0f32221.scope",
       ),
-    ).toBe("com.abstergo.jarvis");
+    ).toBe("com.abstergo.circe");
     expect(
       readDesktopLinuxPortalAppIdFromCgroup(
         "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-org.chromium.Chromium-6194.scope",
@@ -36,27 +36,27 @@ describe("DesktopLinuxPortalAppScope", () => {
   it.each([
     {
       name: "any desktop app scope",
-      cgroup: "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-jarvis-244677.scope",
+      cgroup: "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-circe-244677.scope",
       expected: {
-        unit: "app-jarvis-tok.scope",
+        unit: "app-circe-tok.scope",
         alreadyScoped: true,
-        effectiveAppId: "jarvis",
+        effectiveAppId: "circe",
       },
     },
     {
       name: "the matching app scope",
       cgroup:
-        "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.abstergo.jarvis-tok.scope",
+        "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.abstergo.circe-tok.scope",
       expected: {
-        unit: "app-com.abstergo.jarvis-tok.scope",
+        unit: "app-com.abstergo.circe-tok.scope",
         alreadyScoped: true,
-        effectiveAppId: "com.abstergo.jarvis",
+        effectiveAppId: "com.abstergo.circe",
       },
     },
   ])("skips StartTransientUnit when already inside $name", async ({ cgroup, expected }) => {
     const StartTransientUnit = vi.fn();
     const result = await ensureDesktopLinuxPortalAppScope({
-      appId: "com.abstergo.jarvis",
+      appId: "com.abstergo.circe",
       pid: 42,
       instance: "tok",
       bus: {
@@ -81,7 +81,7 @@ describe("DesktopLinuxPortalAppScope", () => {
       ) => "/job",
     );
     const result = await ensureDesktopLinuxPortalAppScope({
-      appId: "com.abstergo.jarvis",
+      appId: "com.abstergo.circe",
       pid: 42,
       instance: "tok",
       bus: {
@@ -94,12 +94,12 @@ describe("DesktopLinuxPortalAppScope", () => {
       delayMs: async () => undefined,
     });
     expect(result).toEqual({
-      unit: "app-com.abstergo.jarvis-tok.scope",
+      unit: "app-com.abstergo.circe-tok.scope",
       alreadyScoped: false,
-      effectiveAppId: "com.abstergo.jarvis",
+      effectiveAppId: "com.abstergo.circe",
     });
     expect(StartTransientUnit).toHaveBeenCalledTimes(1);
-    expect(StartTransientUnit.mock.calls[0]?.[0]).toBe("app-com.abstergo.jarvis-tok.scope");
+    expect(StartTransientUnit.mock.calls[0]?.[0]).toBe("app-com.abstergo.circe-tok.scope");
     expect(StartTransientUnit.mock.calls[0]?.[2]).toEqual(
       expect.arrayContaining([["PIDs", expect.objectContaining({ type: "au", value: [42] })]]),
     );

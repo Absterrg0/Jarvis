@@ -26,7 +26,7 @@ import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
-import * as DesktopJarvisShell from "../shell/DesktopJarvisShell.ts";
+import * as DesktopCirceShell from "../shell/DesktopCirceShell.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopRemoteUpdates from "../updates/DesktopRemoteUpdates.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
@@ -250,7 +250,7 @@ const startup = Effect.gen(function* () {
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
   const updates = yield* DesktopUpdates.DesktopUpdates;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  const jarvisShell = yield* DesktopJarvisShell.DesktopJarvisShell;
+  const circeShell = yield* DesktopCirceShell.DesktopCirceShell;
 
   yield* shellEnvironment.installIntoProcess;
   const hasCommandLinePasswordStore =
@@ -301,12 +301,12 @@ const startup = Effect.gen(function* () {
   // a matching desktop file. Establish that identity before the
   // resident shell starts its asynchronous shortcut binding.
   yield* linuxUrlHandler.register;
-  if (DesktopJarvisShell.shouldStartDesktopJarvisShell(environment.distribution)) {
+  if (DesktopCirceShell.shouldStartDesktopCirceShell(environment.distribution)) {
     // Tray and global hotkeys degrade gracefully: a failed shortcut
     // registration or tray setup must not take down the whole workspace.
-    yield* jarvisShell.start.pipe(
+    yield* circeShell.start.pipe(
       Effect.catchCause((cause) =>
-        logStartupError("desktop Jarvis shell failed to start; continuing without tray", {
+        logStartupError("desktop Circe shell failed to start; continuing without tray", {
           cause: Cause.pretty(cause),
         }),
       ),
@@ -345,7 +345,7 @@ const scopedProgram = Effect.scoped(
         yield* isolateStep(
           "desktop shell stop failed",
           Effect.gen(function* () {
-            const shell = yield* DesktopJarvisShell.DesktopJarvisShell;
+            const shell = yield* DesktopCirceShell.DesktopCirceShell;
             yield* shell.stop;
           }),
         );

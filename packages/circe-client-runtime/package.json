@@ -1,0 +1,61 @@
+{
+  "name": "@circe/client-runtime",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./circe": {
+      "types": "./src/circe/index.ts",
+      "default": "./src/circe/index.ts"
+    },
+    "./circe/mesh": {
+      "types": "./src/circe/mesh.ts",
+      "default": "./src/circe/mesh.ts"
+    },
+    "./circe/commandContext": {
+      "types": "./src/circe/commandContext.ts",
+      "default": "./src/circe/commandContext.ts"
+    },
+    "./circe/voiceWaiting": {
+      "types": "./src/circe/voiceWaiting.ts",
+      "default": "./src/circe/voiceWaiting.ts"
+    },
+    "./circe/routeGrounding": {
+      "types": "./src/circe/routeGrounding.ts",
+      "default": "./src/circe/routeGrounding.ts"
+    },
+    "./circe/liveVoice": {
+      "types": "./src/circe/liveVoice.ts",
+      "default": "./src/circe/liveVoice.ts"
+    },
+    "./operations/circe": {
+      "types": "./src/operations/circe.ts",
+      "default": "./src/operations/circe.ts"
+    },
+    "./operations/circeLiveVoice": {
+      "types": "./src/operations/circeLiveVoice.ts",
+      "default": "./src/operations/circeLiveVoice.ts"
+    },
+    "./presence": {
+      "types": "./src/presence.ts",
+      "default": "./src/presence.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@circe/core": "workspace:*",
+    "@t3tools/client-runtime": "workspace:*",
+    "@t3tools/contracts": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

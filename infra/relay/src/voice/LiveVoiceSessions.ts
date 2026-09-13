@@ -6,10 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import type { RelayLiveVoiceSessionCreateResponse } from "@t3tools/contracts/relay";
-import {
-  JARVIS_LIVE_VOICE_DEFAULT_MODEL,
-  JARVIS_LIVE_VOICE_DEFAULT_VOICE,
-} from "@t3tools/contracts";
+import { CIRCE_LIVE_VOICE_DEFAULT_MODEL, CIRCE_LIVE_VOICE_DEFAULT_VOICE } from "@t3tools/contracts";
 
 import { RelayConfiguration } from "../Config.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
@@ -29,7 +26,7 @@ const LIVE_VOICE_USAGE_WINDOW_MILLIS = 24 * 60 * 60_000;
  * configurations.
  */
 const FALLBACK_INSTRUCTIONS =
-  "You are Jarvis, a calm, friendly voice assistant for the user's coding workspace. Keep replies brief and delegate work to the backend.";
+  "You are Circe, a calm, friendly voice assistant for the user's coding workspace. Keep replies brief and delegate work to the backend.";
 
 export class LiveVoiceNotConfigured extends Schema.TaggedError<LiveVoiceNotConfigured>()(
   "LiveVoiceNotConfigured",
@@ -94,7 +91,7 @@ export interface LiveVoiceSessionsShape {
 }
 
 export class LiveVoiceSessions extends Context.Service<LiveVoiceSessions, LiveVoiceSessionsShape>()(
-  "@t3tools/jarvis-relay/voice/LiveVoiceSessions",
+  "@circe/relay/voice/LiveVoiceSessions",
 ) {}
 
 export const make = Effect.gen(function* () {
@@ -156,8 +153,8 @@ export const make = Effect.gen(function* () {
       if (publicKey === null) {
         return yield* new LiveVoiceNotConfigured();
       }
-      const model = liveVoice?.model ?? JARVIS_LIVE_VOICE_DEFAULT_MODEL;
-      const voice = liveVoice?.voice ?? JARVIS_LIVE_VOICE_DEFAULT_VOICE;
+      const model = liveVoice?.model ?? CIRCE_LIVE_VOICE_DEFAULT_MODEL;
+      const voice = liveVoice?.voice ?? CIRCE_LIVE_VOICE_DEFAULT_VOICE;
       const userId = yield* resolveUserId(input.environmentId, true);
       const now = yield* DateTime.now;
       const nowIso = DateTime.formatIso(now);

@@ -99,7 +99,7 @@ export function ControlPill(props: {
     variant === "circle" || variant === "danger" || (variant === "primary" && !props.label);
   const containerClassName = cn(
     // Circles stay round intentionally (icon buttons, avatar-adjacent
-    // targets). Labeled pills use the sharp ARIS control radius.
+    // targets). Labeled pills use the sharp Circe control radius.
     isCircle
       ? "h-11 w-11 items-center justify-center rounded-full"
       : variant === "primary"

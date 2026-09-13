@@ -5,7 +5,7 @@ import {
   isAtomCommandInterrupted,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import { JARVIS_CONVERSATIONS_PROJECT_TITLE } from "@t3tools/contracts";
+import { CIRCE_CONVERSATIONS_PROJECT_TITLE } from "@t3tools/contracts";
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/unstable/reactivity";
@@ -1163,14 +1163,14 @@ export function sortProjectsForSidebar<
 }
 
 /**
- * Keep the ARIS Conversations project above coding projects in the sidebar,
+ * Keep the Circe Conversations project above coding projects in the sidebar,
  * regardless of activity, so general-question threads stay grouped and first.
  */
-function pinJarvisConversationsProjectFirst<T extends { readonly title: string }>(
+function pinCirceConversationsProjectFirst<T extends { readonly title: string }>(
   projects: readonly T[],
 ): T[] {
   const index = projects.findIndex(
-    (project) => project.title === JARVIS_CONVERSATIONS_PROJECT_TITLE,
+    (project) => project.title === CIRCE_CONVERSATIONS_PROJECT_TITLE,
   );
   if (index <= 0) return [...projects];
   const ordered = [...projects];
@@ -1208,7 +1208,7 @@ export function sortLogicalProjectsForSidebar<
     }
   }
 
-  return pinJarvisConversationsProjectFirst(
+  return pinCirceConversationsProjectFirst(
     sortProjectsByActivity(
       projects,
       sortOrder,
@@ -1245,7 +1245,7 @@ export function sortScopedProjectsForSidebar<
     threadsByProject.set(key, existing);
   }
 
-  return pinJarvisConversationsProjectFirst(
+  return pinCirceConversationsProjectFirst(
     sortProjectsByActivity(
       projects,
       sortOrder,

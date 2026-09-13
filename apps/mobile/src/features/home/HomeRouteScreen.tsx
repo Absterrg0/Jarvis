@@ -1,4 +1,4 @@
-import { JarvisNavigation } from "../jarvis/JarvisNavigation";
+import { CirceNavigation } from "../circe/CirceNavigation";
 import { View } from "react-native";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
@@ -127,9 +127,9 @@ export function HomeRouteScreen() {
                 onPress={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
               />
               <NativeHeaderToolbar.Button
-                accessibilityLabel="Open ARIS"
+                accessibilityLabel="Open Circe"
                 icon="bolt.circle"
-                onPress={() => navigation.navigate("Jarvis")}
+                onPress={() => navigation.navigate("Circe")}
               />
             </>
           }
@@ -192,7 +192,7 @@ export function HomeRouteScreen() {
         />
 
         <View className="px-5 pb-3">
-          <JarvisNavigation selected="tasks" />
+          <CirceNavigation selected="tasks" />
         </View>
 
         <HomeScreen

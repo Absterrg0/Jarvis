@@ -14,7 +14,7 @@ import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import * as DesktopUse from "../../../jarvis/desktopUse/DesktopUse.ts";
+import * as DesktopUse from "../../../circe/desktopUse/DesktopUse.ts";
 
 const dependencies = [McpInvocationContext.McpInvocationContext, DesktopUse.DesktopUse];
 

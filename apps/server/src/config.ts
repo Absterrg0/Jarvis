@@ -15,7 +15,7 @@ import * as LogLevel from "effect/LogLevel";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import type { JarvisNodePreset } from "@t3tools/contracts";
+import type { CirceNodePreset } from "@t3tools/contracts";
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 
 export const DEFAULT_PORT = 3773;
@@ -53,7 +53,7 @@ export interface ServerDerivedPaths {
   readonly secretsDir: string;
   /** Installer-owned node capability selection, kept outside the install tree. */
   readonly nodePresetPath?: string;
-  /** User-owned Jarvis node label override, kept outside the install tree. */
+  /** User-owned Circe node label override, kept outside the install tree. */
   readonly nodeLabelPath?: string;
 }
 
@@ -67,7 +67,7 @@ export interface DeriveServerPathsOptions {
  * directory plus python binary and a passing evaluate.py quality report;
  * weights live outside Git and are never loaded when disabled.
  */
-export interface JarvisLocalModelRuntimeConfig {
+export interface CirceLocalModelRuntimeConfig {
   readonly enabled: boolean;
   readonly modelDir: string;
   readonly pythonBin: string;
@@ -94,10 +94,10 @@ export class ServerConfig extends Context.Service<
     readonly otlpExportIntervalMs: number;
     readonly otlpServiceName: string;
     readonly mode: RuntimeMode;
-    /** Optional Jarvis installation preset; existing installs default to full. */
-    readonly jarvisNodePreset?: JarvisNodePreset;
+    /** Optional Circe installation preset; existing installs default to full. */
+    readonly circeNodePreset?: CirceNodePreset;
     /** Optional on-demand local extraction tier; absent means disabled. */
-    readonly jarvisLocalModel?: JarvisLocalModelRuntimeConfig | undefined;
+    readonly circeLocalModel?: CirceLocalModelRuntimeConfig | undefined;
     readonly port: number;
     readonly host: string | undefined;
     readonly cwd: string;

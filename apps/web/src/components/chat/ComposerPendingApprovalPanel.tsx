@@ -1,4 +1,4 @@
-import { describeApproval } from "@t3tools/jarvis-core/describeApproval";
+import { describeApproval } from "@circe/core/describeApproval";
 import { memo } from "react";
 import { type PendingApproval } from "../../session-logic";
 import { cn } from "~/lib/utils";

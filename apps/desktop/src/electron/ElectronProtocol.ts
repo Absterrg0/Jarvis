@@ -9,8 +9,8 @@ import * as Scope from "effect/Scope";
 import * as Electron from "electron";
 
 export const DESKTOP_HOST = "app";
-export const DESKTOP_PRODUCTION_SCHEME = "jarvis";
-export const DESKTOP_DEVELOPMENT_SCHEME = "jarvis-dev";
+export const DESKTOP_PRODUCTION_SCHEME = "circe";
+export const DESKTOP_DEVELOPMENT_SCHEME = "circe-dev";
 
 export function getDesktopScheme(isDevelopment: boolean): string {
   return isDevelopment ? DESKTOP_DEVELOPMENT_SCHEME : DESKTOP_PRODUCTION_SCHEME;

@@ -82,9 +82,9 @@ export function encodeWindowsSetupNsi(source: string): Buffer {
   return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(source, "utf8")]);
 }
 
-/** Resolve the canonical Jarvis Windows icon used by the setup shell. */
+/** Resolve the canonical Circe Windows icon used by the setup shell. */
 export function windowsSetupIconPath(repoRoot: string): string {
-  return NodePath.resolve(repoRoot, BRAND_ASSET_PATHS.jarvisWindowsIconIco);
+  return NodePath.resolve(repoRoot, BRAND_ASSET_PATHS.circeWindowsIconIco);
 }
 
 export async function createWindowsSetupArchive(
@@ -308,7 +308,7 @@ async function copyPayload(source: string, target: string): Promise<void> {
   // The marker is compiled into the outer installer and checked after NSIS
   // extraction, before the previous mode is removed.  This catches a partial
   // payload even when makensis itself reported a successful File operation.
-  await NodeFSP.writeFile(NodePath.join(target, "jarvis-payload-complete.txt"), "Jarvis\n", "utf8");
+  await NodeFSP.writeFile(NodePath.join(target, "circe-payload-complete.txt"), "Circe\n", "utf8");
 }
 
 function packageNameFromJson(value: unknown): string | undefined {
@@ -384,17 +384,17 @@ async function copyRuntimePayload(source: string, target: string): Promise<void>
   // restart/stop behavior; the CI workflow only has to provide node.exe and
   // the bundled dist/bin.mjs entrypoint.
   await NodeFSP.writeFile(
-    NodePath.join(target, "jarvis-node-launcher.cmd"),
+    NodePath.join(target, "circe-node-launcher.cmd"),
     renderWindowsNodeLauncherCmd(),
     "utf8",
   );
   await NodeFSP.writeFile(
-    NodePath.join(target, "jarvis-node-supervisor.mjs"),
+    NodePath.join(target, "circe-node-supervisor.mjs"),
     renderWindowsNodeSupervisorMjs(),
     "utf8",
   );
   await NodeFSP.writeFile(
-    NodePath.join(target, "jarvis-node-stop.ps1"),
+    NodePath.join(target, "circe-node-stop.ps1"),
     renderWindowsNodeStopPs1(),
     "utf8",
   );
@@ -416,23 +416,23 @@ async function main(): Promise<void> {
 
   const iconPath = windowsSetupIconPath(repoRoot);
   if (!(await NodeFSP.stat(iconPath).catch(() => undefined))?.isFile()) {
-    throw new Error(`Canonical Jarvis Windows icon is missing: ${iconPath}`);
+    throw new Error(`Canonical Circe Windows icon is missing: ${iconPath}`);
   }
 
   const outputDir = NodePath.resolve(input.outputDir);
   await NodeFSP.mkdir(outputDir, { recursive: true });
-  const stageRoot = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-setup-"));
+  const stageRoot = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "circe-setup-"));
   try {
     await Promise.all([
       copyPayload(input.desktopDir, NodePath.join(stageRoot, "desktop")),
       copyRuntimePayload(input.runtimeDir, NodePath.join(stageRoot, "runtime-win")),
     ]);
     await NodeFSP.writeFile(
-      NodePath.join(stageRoot, "jarvis-owned-process-stop.ps1"),
+      NodePath.join(stageRoot, "circe-owned-process-stop.ps1"),
       renderWindowsOwnedProcessStopPs1(),
       "utf8",
     );
-    await NodeFSP.copyFile(iconPath, NodePath.join(stageRoot, "jarvis.ico"));
+    await NodeFSP.copyFile(iconPath, NodePath.join(stageRoot, "circe.ico"));
     await createWindowsSetupArchives(stageRoot);
     const manifest = await createWindowsSetupManifest({
       version: input.version,
@@ -450,7 +450,7 @@ async function main(): Promise<void> {
       windowsSetupArtifactName(input.version, input.arch),
     );
     const sevenZipPath = await resolveWindowsSevenZipPath();
-    const nsiPath = NodePath.join(stageRoot, "Jarvis-Setup.nsi");
+    const nsiPath = NodePath.join(stageRoot, "Circe-Setup.nsi");
     await NodeFSP.writeFile(
       nsiPath,
       encodeWindowsSetupNsi(
@@ -460,7 +460,7 @@ async function main(): Promise<void> {
           outputPath: artifactPath,
           stageRoot,
           sevenZipPath,
-          iconPath: NodePath.join(stageRoot, "jarvis.ico"),
+          iconPath: NodePath.join(stageRoot, "circe.ico"),
         }),
       ),
     );

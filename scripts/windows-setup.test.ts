@@ -28,13 +28,13 @@ import {
 
 describe("Windows setup contracts", () => {
   it("creates deterministic payload hashes and exact release names", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-setup-test-"));
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "circe-setup-test-"));
     const dirs = {
       desktop: NodePath.join(root, "desktop"),
       runtimeWin: NodePath.join(root, "runtime-win"),
     };
     await Promise.all(Object.values(dirs).map((dir) => NodeFSP.mkdir(dir, { recursive: true })));
-    await NodeFSP.writeFile(NodePath.join(dirs.desktop, "Jarvis.exe"), "desktop");
+    await NodeFSP.writeFile(NodePath.join(dirs.desktop, "Circe.exe"), "desktop");
     await NodeFSP.mkdir(NodePath.join(dirs.runtimeWin, "node"));
     await NodeFSP.writeFile(NodePath.join(dirs.runtimeWin, "node", "node.exe"), "runtime");
 
@@ -44,8 +44,8 @@ describe("Windows setup contracts", () => {
       sourceCommit: "0123456789abcdef0123456789abcdef01234567",
       payloadDirectories: dirs,
     });
-    expect(manifest.artifactName).toBe("Jarvis-Setup-1.2.3-win-x64.exe");
-    expect(windowsSetupAliasName()).toBe("Jarvis-Setup.exe");
+    expect(manifest.artifactName).toBe("Circe-Setup-1.2.3-win-x64.exe");
+    expect(windowsSetupAliasName()).toBe("Circe-Setup.exe");
     expect(manifest.payloads.map(({ id }) => id)).toEqual(["desktop", "runtime-win"]);
     expect(manifest.payloads[0]?.modes).toEqual(["full", "controller"]);
     expect(manifest.payloads[0]?.files[0]?.sha256).toMatch(/^[0-9a-f]{64}$/u);
@@ -58,7 +58,7 @@ describe("Windows setup contracts", () => {
     const provenance = createWindowsSetupProvenance({
       artifactName: windowsSetupArtifactName("1.2.3", "x64"),
       artifactSha256: "a".repeat(64),
-      aliasName: "Jarvis-Setup.exe",
+      aliasName: "Circe-Setup.exe",
       manifestName: windowsSetupManifestName("1.2.3", "x64"),
       manifestSha256: "b".repeat(64),
       provenanceName: windowsSetupProvenanceName("1.2.3", "x64"),
@@ -67,8 +67,8 @@ describe("Windows setup contracts", () => {
       arch: "x64",
     });
     expect(provenance).toMatchObject({
-      artifactName: "Jarvis-Setup-1.2.3-win-x64.exe",
-      manifestName: "Jarvis-Setup-1.2.3-win-x64.exe.manifest.json",
+      artifactName: "Circe-Setup-1.2.3-win-x64.exe",
+      manifestName: "Circe-Setup-1.2.3-win-x64.exe.manifest.json",
       sourceCommit: "0123456789abcdef0123456789abcdef01234567",
     });
     expect(() =>
@@ -93,15 +93,15 @@ describe("Windows setup contracts", () => {
       capabilities: { execution: false, ui: true },
     });
     const launcher = renderWindowsNodeLauncherCmd();
-    expect(launcher).toContain('set "JARVIS_NODE_PRESET=headless"');
-    expect(launcher).toContain("JARVIS_NODE_STOP=%T3CODE_HOME%\\runtime\\windows-stop.marker");
+    expect(launcher).toContain('set "CIRCE_NODE_PRESET=headless"');
+    expect(launcher).toContain("CIRCE_NODE_STOP=%T3CODE_HOME%\\runtime\\windows-stop.marker");
     expect(launcher).toContain('cd /d "%~dp0"');
-    expect(launcher).toContain('"%~dp0node\\node.exe" "%~dp0jarvis-node-supervisor.mjs"');
+    expect(launcher).toContain('"%~dp0node\\node.exe" "%~dp0circe-node-supervisor.mjs"');
     expect(launcher).not.toContain("service-launcher.mjs");
     expect(launcher).toContain("goto run_supervisor");
     expect(launcher).toContain(":cleanup_orphan");
     expect(launcher).toContain(
-      '"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0jarvis-node-stop.ps1" -RuntimeRoot "%~dp0."',
+      '"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0circe-node-stop.ps1" -RuntimeRoot "%~dp0."',
     );
     expect(launcher).toContain("if errorlevel 1 goto cleanup_retry");
     expect(launcher).toContain(":cleanup_retry");
@@ -112,10 +112,10 @@ describe("Windows setup contracts", () => {
     expect(supervisor).toContain("fileURLToPath(import.meta.url)");
     expect(supervisor).toContain("process.execPath");
     expect(supervisor).toContain(
-      '"--mode", "web", "--no-browser", "--port", "3773", "--jarvis-node-preset", "headless"',
+      '"--mode", "web", "--no-browser", "--port", "3773", "--circe-node-preset", "headless"',
     );
     expect(supervisor).toContain("cwd: runtimeRoot");
-    expect(supervisor).toContain('JARVIS_NODE_PRESET: "headless"');
+    expect(supervisor).toContain('CIRCE_NODE_PRESET: "headless"');
     expect(supervisor).toContain("setTimeout");
     expect(supervisor).toContain("5000");
     expect(supervisor).toContain("/PID");
@@ -145,9 +145,9 @@ describe("Windows setup contracts", () => {
     expect(ownedStopPs1).toContain("foreach ($candidate in $candidatePaths)");
     expect(ownedStopPs1).toContain("$allowedByPath[$full.ToLowerInvariant()] = $true");
     expect(ownedStopPs1).not.toContain("$AllowedPath =");
-    expect(ownedStopPs1).toContain("Name = 'Jarvis.exe'");
-    expect(ownedStopPs1).toContain("Owned ARIS processes remain after stop");
-    expect(ownedStopPs1).toContain("Could not safely stop owned ARIS processes");
+    expect(ownedStopPs1).toContain("Name = 'Circe.exe'");
+    expect(ownedStopPs1).toContain("Owned Circe processes remain after stop");
+    expect(ownedStopPs1).toContain("Could not safely stop owned Circe processes");
     expect(ownedStopPs1).not.toContain("Owned Jarvis processes remain");
     expect(ownedStopPs1).toContain("$_.ExecutablePath");
     expect(ownedStopPs1).toContain("ToLowerInvariant()");
@@ -159,14 +159,14 @@ describe("Windows setup contracts", () => {
     expect(ownedStopPs1).not.toContain("/IM");
 
     const command = renderWindowsTaskCreateCommand(
-      "C:\\Users\\Ada\\AppData\\Local\\Programs\\Jarvis\\runtime-win\\jarvis-node-launcher.cmd",
+      "C:\\Users\\Ada\\AppData\\Local\\Programs\\Circe\\runtime-win\\circe-node-launcher.cmd",
     );
     expect(command).toBe(
-      'schtasks.exe /Create /TN "Jarvis Headless Node" /SC ONLOGON /TR "C:\\Users\\Ada\\AppData\\Local\\Programs\\Jarvis\\runtime-win\\jarvis-node-launcher.cmd" /RL LIMITED /F',
+      'schtasks.exe /Create /TN "Circe Headless Node" /SC ONLOGON /TR "C:\\Users\\Ada\\AppData\\Local\\Programs\\Circe\\runtime-win\\circe-node-launcher.cmd" /RL LIMITED /F',
     );
     const xml = renderWindowsTaskXml({
-      launcherPath: "C:\\Jarvis\\runtime\\launcher.cmd",
-      nodePath: "C:\\Jarvis\\runtime\\node\\node.exe",
+      launcherPath: "C:\\Circe\\runtime\\launcher.cmd",
+      nodePath: "C:\\Circe\\runtime\\node\\node.exe",
     });
     expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
     expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
@@ -178,8 +178,8 @@ describe("Windows setup contracts", () => {
     // oxlint-disable-next-line t3code/no-global-process-runtime -- this test is a direct Node child-process smoke test and must skip on non-Windows hosts.
     if (NodeOS.platform() !== "win32") return;
 
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-owned-stop-smoke-"));
-    const script = NodePath.join(root, "jarvis-owned-process-stop.ps1");
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "circe-owned-stop-smoke-"));
+    const script = NodePath.join(root, "circe-owned-process-stop.ps1");
     try {
       await NodeFSP.writeFile(script, renderWindowsOwnedProcessStopPs1());
       await NodeUtil.promisify(NodeChildProcess.execFile)("powershell.exe", [
@@ -190,7 +190,7 @@ describe("Windows setup contracts", () => {
         "-File",
         script,
         "-DesktopPath",
-        NodePath.join(root, "missing-desktop", "Jarvis.exe"),
+        NodePath.join(root, "missing-desktop", "Circe.exe"),
       ]);
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
@@ -198,7 +198,7 @@ describe("Windows setup contracts", () => {
   });
 
   it("starts and stops the exact supervisor-owned child through its marker", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-supervisor-test-"));
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "circe-supervisor-test-"));
     let supervisor: NodeChildProcess.ChildProcess | undefined;
     let childPid: number | undefined;
     try {
@@ -214,16 +214,16 @@ describe("Windows setup contracts", () => {
         `import * as fs from "node:fs/promises";
 await fs.writeFile(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid));
 await fs.rename(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)});
-await fs.writeFile(${JSON.stringify(`${argsFile}.tmp`)}, JSON.stringify({ argv: process.argv.slice(2), preset: process.env.JARVIS_NODE_PRESET }));
+await fs.writeFile(${JSON.stringify(`${argsFile}.tmp`)}, JSON.stringify({ argv: process.argv.slice(2), preset: process.env.CIRCE_NODE_PRESET }));
 await fs.rename(${JSON.stringify(`${argsFile}.tmp`)}, ${JSON.stringify(argsFile)});
 setInterval(() => {}, 1000);
 `,
       );
-      const supervisorPath = NodePath.join(root, "jarvis-node-supervisor.mjs");
+      const supervisorPath = NodePath.join(root, "circe-node-supervisor.mjs");
       await NodeFSP.writeFile(supervisorPath, renderWindowsNodeSupervisorMjs());
       const spawnedSupervisor = NodeChildProcess.spawn(process.execPath, [supervisorPath], {
         cwd: root,
-        env: { ...process.env, JARVIS_NODE_STOP: marker, JARVIS_NODE_PRESET: "headless" },
+        env: { ...process.env, CIRCE_NODE_STOP: marker, CIRCE_NODE_PRESET: "headless" },
         stdio: "ignore",
       });
       supervisor = spawnedSupervisor;
@@ -251,7 +251,7 @@ setInterval(() => {}, 1000);
         "--no-browser",
         "--port",
         "3773",
-        "--jarvis-node-preset",
+        "--circe-node-preset",
         "headless",
       ]);
       expect(childArgs.preset).toBe("headless");
@@ -298,32 +298,32 @@ setInterval(() => {}, 1000);
     const nsi = renderWindowsSetupNsi({
       version: "1.2.3",
       arch: "x64",
-      outputPath: "C:\\out\\Jarvis-Setup-1.2.3-win-x64.exe",
-      stageRoot: "C:\\stage\\jarvis",
+      outputPath: "C:\\out\\Circe-Setup-1.2.3-win-x64.exe",
+      stageRoot: "C:\\stage\\circe",
       sevenZipPath: "C:\\tools\\7za.exe",
-      iconPath: "C:\\stage\\jarvis.ico",
+      iconPath: "C:\\stage\\circe.ico",
     });
-    expect(nsi).toContain('OutFile "C:\\out\\Jarvis-Setup-1.2.3-win-x64.exe"');
-    expect(nsi.indexOf("Unicode true")).toBeLessThan(nsi.indexOf('Name "ARIS 1.2.3"'));
+    expect(nsi).toContain('OutFile "C:\\out\\Circe-Setup-1.2.3-win-x64.exe"');
+    expect(nsi.indexOf("Unicode true")).toBeLessThan(nsi.indexOf('Name "Circe 1.2.3"'));
     expect(nsi).toContain("Full Node");
     expect(nsi).toContain("Controller Node");
     expect(nsi).toContain("Headless Node");
     expect(nsi).not.toContain("—");
-    expect(nsi).toContain('!define MUI_ICON "C:\\stage\\jarvis.ico"');
-    expect(nsi).toContain('!define MUI_WELCOMEPAGE_TITLE "Welcome to ARIS Setup"');
+    expect(nsi).toContain('!define MUI_ICON "C:\\stage\\circe.ico"');
+    expect(nsi).toContain('!define MUI_WELCOMEPAGE_TITLE "Welcome to Circe Setup"');
     expect(nsi).toContain(
-      '!define MUI_WELCOMEPAGE_TEXT "Install ARIS as a Full, Controller, or Headless node on this Windows device."',
+      '!define MUI_WELCOMEPAGE_TEXT "Install Circe as a Full, Controller, or Headless node on this Windows device."',
     );
-    expect(nsi).toContain('!define MUI_FINISHPAGE_RUN_TEXT "Launch ARIS"');
-    expect(nsi).toContain('BrandingText "ARIS 1.2.3"');
-    // Display is ARIS; install and uninstall identities stay Jarvis for upgrades.
-    expect(nsi).toContain('InstallDir "$LOCALAPPDATA\\Programs\\Jarvis"');
-    expect(nsi).toContain('InstallDirRegKey HKCU "Software\\Jarvis" "InstallLocation"');
-    expect(nsi).toContain('VIAddVersionKey /LANG=1033 "ProductName" "ARIS"');
-    expect(nsi).toContain('VIAddVersionKey /LANG=1033 "FileDescription" "ARIS Node setup"');
-    expect(nsi).toContain('"DisplayName" "ARIS"');
-    expect(nsi).toContain("Choose how this Windows device runs ARIS");
-    expect(nsi).toContain("Close ARIS before continuing");
+    expect(nsi).toContain('!define MUI_FINISHPAGE_RUN_TEXT "Launch Circe"');
+    expect(nsi).toContain('BrandingText "Circe 1.2.3"');
+    // Display is Circe; install and uninstall identities stay Circe for upgrades.
+    expect(nsi).toContain('InstallDir "$LOCALAPPDATA\\Programs\\Circe"');
+    expect(nsi).toContain('InstallDirRegKey HKCU "Software\\Circe" "InstallLocation"');
+    expect(nsi).toContain('VIAddVersionKey /LANG=1033 "ProductName" "Circe"');
+    expect(nsi).toContain('VIAddVersionKey /LANG=1033 "FileDescription" "Circe Node setup"');
+    expect(nsi).toContain('"DisplayName" "Circe"');
+    expect(nsi).toContain("Choose how this Windows device runs Circe");
+    expect(nsi).toContain("Close Circe before continuing");
     expect(nsi).not.toContain("Welcome to Jarvis Setup");
     expect(nsi).not.toContain("Install Jarvis as a Full");
     expect(nsi).not.toContain('"DisplayName" "Jarvis"');
@@ -337,14 +337,14 @@ setInterval(() => {}, 1000);
     expect(nsi.indexOf('!insertmacro MUI_LANGUAGE "English"')).toBeGreaterThan(
       nsi.indexOf("!insertmacro MUI_UNPAGE_FINISH"),
     );
-    expect(nsi).toContain('CreateShortCut "$DESKTOP\\ARIS.lnk"');
-    expect(nsi).toContain('CreateShortCut "$SMPROGRAMS\\ARIS\\ARIS.lnk"');
-    expect(nsi).toContain('CreateDirectory "$SMPROGRAMS\\ARIS"');
-    // Upgrades from Jarvis-branded installs drop the old shortcuts.
-    expect(nsi).toContain('Delete "$DESKTOP\\Jarvis.lnk"');
-    expect(nsi).toContain('Delete "$SMPROGRAMS\\Jarvis\\Jarvis.lnk"');
-    expect(nsi).toContain('RMDir "$SMPROGRAMS\\Jarvis"');
-    expect(nsi).toContain('RMDir "$SMPROGRAMS\\ARIS"');
+    expect(nsi).toContain('CreateShortCut "$DESKTOP\\Circe.lnk"');
+    expect(nsi).toContain('CreateShortCut "$SMPROGRAMS\\Circe\\Circe.lnk"');
+    expect(nsi).toContain('CreateDirectory "$SMPROGRAMS\\Circe"');
+    // Upgrades from Circe-branded installs drop the old shortcuts.
+    expect(nsi).toContain('Delete "$DESKTOP\\Circe.lnk"');
+    expect(nsi).toContain('Delete "$SMPROGRAMS\\Circe\\Circe.lnk"');
+    expect(nsi).toContain('RMDir "$SMPROGRAMS\\Circe"');
+    expect(nsi).toContain('RMDir "$SMPROGRAMS\\Circe"');
     expect(nsi).not.toContain(
       'CreateShortCut "$DESKTOP\\Jarvis.lnk" "$INSTDIR\\desktop\\Jarvis.exe"',
     );
@@ -357,7 +357,7 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain('"QuietUninstallString"');
     expect(nsi).toContain("WriteRegDWORD HKCU");
     expect(nsi).toContain(
-      'DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Jarvis"',
+      'DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Circe"',
     );
     expect(nsi).toContain("IfErrors mode_from_existing 0");
     expect(nsi).toContain("schtasks.exe /Run");
@@ -387,12 +387,12 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("Var StopHelperPath");
     expect(nsi).toContain("Var StopFailed");
     expect(nsi).toContain("Var OwnedProcessPowerShellPath");
-    expect(nsi).toContain("Function StopOwnedJarvisProcesses");
-    expect(nsi).toContain("Function un.StopOwnedJarvisProcesses");
+    expect(nsi).toContain("Function StopOwnedCirceProcesses");
+    expect(nsi).toContain("Function un.StopOwnedCirceProcesses");
     expect(nsi).toContain(
-      '-File $\\"$PLUGINSDIR\\jarvis-owned-process-stop.ps1$\\" -DesktopPath $\\"$INSTDIR\\desktop\\Jarvis.exe$\\"',
+      '-File $\\"$PLUGINSDIR\\circe-owned-process-stop.ps1$\\" -DesktopPath $\\"$INSTDIR\\desktop\\Circe.exe$\\"',
     );
-    const stopOwnedStart = nsi.indexOf("Function StopOwnedJarvisProcesses");
+    const stopOwnedStart = nsi.indexOf("Function StopOwnedCirceProcesses");
     const stopOwned = nsi.slice(stopOwnedStart, nsi.indexOf("FunctionEnd", stopOwnedStart));
     expect(stopOwned).toContain(
       'StrCpy $OwnedProcessPowerShellPath "$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe"',
@@ -402,12 +402,12 @@ setInterval(() => {}, 1000);
     );
     expect(stopOwned).toContain("nsExec::ExecToStack");
     expect(stopOwned).toContain("Pop $R9\r\n  Pop $R8");
-    expect(stopOwned).toContain("$TEMP\\jarvis-owned-process-stop-diagnostic.txt");
+    expect(stopOwned).toContain("$TEMP\\circe-owned-process-stop-diagnostic.txt");
     expect(stopOwned).toContain("Owned process helper missing");
     expect(stopOwned).not.toContain("nsExec::ExecToLog");
-    expect(nsi).toContain("jarvis-owned-process-stop.ps1");
+    expect(nsi).toContain("circe-owned-process-stop.ps1");
     expect(nsi).toContain(
-      'File /oname=jarvis-owned-process-stop.ps1 "C:\\stage\\jarvis\\jarvis-owned-process-stop.ps1"',
+      'File /oname=circe-owned-process-stop.ps1 "C:\\stage\\circe\\circe-owned-process-stop.ps1"',
     );
     const installHelperStart = nsi.indexOf('Section "-Owned process shutdown helper"');
     const installHelper = nsi.slice(
@@ -416,7 +416,7 @@ setInterval(() => {}, 1000);
     );
     const installInitPluginsDir = installHelper.indexOf("InitPluginsDir");
     const installSetOutPath = installHelper.indexOf('SetOutPath "$PLUGINSDIR"');
-    const installHelperFile = installHelper.indexOf("File /oname=jarvis-owned-process-stop.ps1");
+    const installHelperFile = installHelper.indexOf("File /oname=circe-owned-process-stop.ps1");
     expect(installInitPluginsDir).toBeGreaterThanOrEqual(0);
     expect(installSetOutPath).toBeGreaterThanOrEqual(0);
     expect(installHelperFile).toBeGreaterThanOrEqual(0);
@@ -430,24 +430,24 @@ setInterval(() => {}, 1000);
     const uninstallInitPluginsDir = uninstallSection.indexOf("InitPluginsDir");
     const uninstallSetOutPath = uninstallSection.indexOf('SetOutPath "$PLUGINSDIR"');
     const uninstallHelperFile = uninstallSection.indexOf(
-      "File /oname=jarvis-owned-process-stop.ps1",
+      "File /oname=circe-owned-process-stop.ps1",
     );
     expect(uninstallInitPluginsDir).toBeGreaterThanOrEqual(0);
     expect(uninstallSetOutPath).toBeGreaterThanOrEqual(0);
     expect(uninstallHelperFile).toBeGreaterThanOrEqual(0);
     expect(uninstallInitPluginsDir).toBeLessThan(uninstallSetOutPath);
     expect(uninstallSetOutPath).toBeLessThan(uninstallHelperFile);
-    expect(nsi).not.toContain("File /oname=$PLUGINSDIR\\jarvis-owned-process-stop.ps1");
+    expect(nsi).not.toContain("File /oname=$PLUGINSDIR\\circe-owned-process-stop.ps1");
     expect(nsi).toContain("Sleep 1500");
-    expect(nsi).toContain("jarvis-node-supervisor.mjs");
-    expect(nsi).toContain("jarvis-node-stop.ps1");
+    expect(nsi).toContain("circe-node-supervisor.mjs");
+    expect(nsi).toContain("circe-node-stop.ps1");
     expect(nsi).toContain("WindowsPowerShell\\v1.0\\powershell.exe");
     expect(nsi).toContain("-NoProfile -NonInteractive -ExecutionPolicy Bypass");
     expect(nsi).toContain("schtasks.exe /End /TN");
     expect(nsi).toContain("schtasks.exe /Delete /TN");
     const stopStart = nsi.indexOf("Function StopHeadlessNode");
     const stopFunction = nsi.slice(stopStart, nsi.indexOf("FunctionEnd", stopStart));
-    expect(stopFunction).not.toContain('Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"');
+    expect(stopFunction).not.toContain('Delete "$PROFILE\\.circe\\runtime\\windows-stop.marker"');
     expect(stopFunction.indexOf("Sleep 1500")).toBeLessThan(stopFunction.indexOf("powershell.exe"));
     expect(stopFunction.indexOf("powershell.exe")).toBeLessThan(
       stopFunction.indexOf("schtasks.exe /End"),
@@ -476,11 +476,11 @@ setInterval(() => {}, 1000);
     expect(uninstall).toContain("Call un.StopHeadlessNode");
     expect(uninstall).toContain("ClearErrors");
     expect(uninstall).toContain("IfErrors un_stop_headless_failed 0");
-    expect(uninstall).toContain('Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"');
+    expect(uninstall).toContain('Delete "$PROFILE\\.circe\\runtime\\windows-stop.marker"');
     expect(uninstall).toContain("SetErrorLevel 5");
     expect(uninstall).toContain("un_stop_headless_interactive:");
     expect(uninstall.indexOf("IfErrors un_stop_headless_failed 0")).toBeLessThan(
-      uninstall.indexOf('Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"'),
+      uninstall.indexOf('Delete "$PROFILE\\.circe\\runtime\\windows-stop.marker"'),
     );
     const resetStart = nsi.indexOf('Section "Reset old mode"');
     const reset = nsi.slice(resetStart, nsi.indexOf("SectionEnd", resetStart));
@@ -492,33 +492,33 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain('StrCmp $PreviousHeadless "1" 0 staging_failure_message');
     expect(nsi).toContain("Function HandleStagingFailure");
     expect(nsi).toContain('RMDir /r "$INSTDIR\\.incoming"');
-    expect(nsi).toContain('Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"');
+    expect(nsi).toContain('Delete "$PROFILE\\.circe\\runtime\\windows-stop.marker"');
     expect(nsi).toContain("stale UI/voice files");
-    expect(nsi).toContain("jarvis-payload-complete.txt");
+    expect(nsi).toContain("circe-payload-complete.txt");
     expect(nsi).not.toContain("taskkill.exe /IM");
-    expect(nsi).toContain("Call StopOwnedJarvisProcesses");
+    expect(nsi).toContain("Call StopOwnedCirceProcesses");
     expect(nsi).toContain("IfErrors owned_process_stop_abort 0");
-    expect(nsi).toContain("Call un.StopOwnedJarvisProcesses");
+    expect(nsi).toContain("Call un.StopOwnedCirceProcesses");
     expect(nsi).toContain("IfErrors un_owned_process_stop_failed 0");
-    expect(nsi).toContain('Exec "$INSTDIR\\desktop\\Jarvis.exe"');
-    expect(nsi).not.toContain("--jarvis-controller");
-    expect(nsi).toContain('CreateShortCut "$DESKTOP\\ARIS.lnk" "$INSTDIR\\desktop\\Jarvis.exe"');
-    // User-visible failure copy is ARIS; exe, task, and registry identities stay Jarvis.
-    expect(nsi).toContain("ARIS could not stop its existing processes safely");
-    expect(nsi).toContain("ARIS could not stop the existing headless runtime");
-    expect(nsi).toContain("ARIS could not validate the staged payload");
-    expect(nsi).toContain("ARIS could not commit the staged payload");
-    expect(nsi).toContain("ARIS could not fully roll back the staged payload");
-    expect(nsi).toContain("Uninstall Jarvis.exe");
-    expect(nsi).toContain('WriteRegStr HKCU "Software\\Jarvis" "InstallLocation"');
-    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\desktop\\Jarvis.exe"');
-    expect(nsi).toContain("Jarvis Headless Node");
+    expect(nsi).toContain('Exec "$INSTDIR\\desktop\\Circe.exe"');
+    expect(nsi).not.toContain("--circe-controller");
+    expect(nsi).toContain('CreateShortCut "$DESKTOP\\Circe.lnk" "$INSTDIR\\desktop\\Circe.exe"');
+    // User-visible failure copy is Circe; exe, task, and registry identities stay Circe.
+    expect(nsi).toContain("Circe could not stop its existing processes safely");
+    expect(nsi).toContain("Circe could not stop the existing headless runtime");
+    expect(nsi).toContain("Circe could not validate the staged payload");
+    expect(nsi).toContain("Circe could not commit the staged payload");
+    expect(nsi).toContain("Circe could not fully roll back the staged payload");
+    expect(nsi).toContain("Uninstall Circe.exe");
+    expect(nsi).toContain('WriteRegStr HKCU "Software\\Circe" "InstallLocation"');
+    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\desktop\\Circe.exe"');
+    expect(nsi).toContain("Circe Headless Node");
     expect(nsi).not.toContain("Jarvis could not stop");
     expect(nsi).not.toContain("Jarvis could not validate");
     expect(nsi).not.toContain("Jarvis could not commit");
     expect(nsi).not.toContain("Jarvis could not fully");
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming"');
-    expect(nsi).toContain("preserve $PROFILE\\.jarvis");
+    expect(nsi).toContain("preserve $PROFILE\\.circe");
     expect(nsi).toContain("SetCompress off");
     expect(nsi).toContain('Section "-Embedded extractor" SEC_EXTRACTOR');
     expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\7za\.exe /gmu)?.length).toBe(1);
@@ -563,7 +563,7 @@ setInterval(() => {}, 1000);
     expect(failureHandler).toContain("staging_failure_interactive:");
     const failureSequence = [
       'RMDir /r "$INSTDIR\\.incoming"',
-      'Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"',
+      'Delete "$PROFILE\\.circe\\runtime\\windows-stop.marker"',
       'StrCmp $PreviousHeadless "1" 0 staging_failure_message',
       "MessageBox MB_ICONSTOP",
       "Abort",
@@ -723,22 +723,22 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain('StrCmp $NodeMode "headless" runtime_extract');
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming\\desktop"');
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming\\runtime-win"');
-    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\desktop\\Jarvis.exe"');
+    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\desktop\\Circe.exe"');
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\node\\node.exe"');
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\dist\\bin.mjs"');
     expect(nsi).toContain(
-      'IfFileExists "$INSTDIR\\.incoming\\runtime-win\\jarvis-node-supervisor.mjs"',
+      'IfFileExists "$INSTDIR\\.incoming\\runtime-win\\circe-node-supervisor.mjs"',
     );
-    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\jarvis-node-stop.ps1"');
+    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\circe-node-stop.ps1"');
     const stateGuiStart = nsi.indexOf("state_gui:");
     const stateGui = nsi.slice(stateGuiStart, nsi.indexOf("staged_commit_failed:", stateGuiStart));
-    expect(stateGui).toContain('Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"');
+    expect(stateGui).toContain('Delete "$PROFILE\\.circe\\runtime\\windows-stop.marker"');
     expect(nsi).toContain(
-      'IfFileExists "$INSTDIR\\.incoming\\runtime-win\\jarvis-node-launcher.cmd"',
+      'IfFileExists "$INSTDIR\\.incoming\\runtime-win\\circe-node-launcher.cmd"',
     );
-    expect(nsi).toContain('FileWrite $0 "{$\\"product$\\":$\\"Jarvis');
+    expect(nsi).toContain('FileWrite $0 "{$\\"product$\\":$\\"Circe');
     expect(nsi).toContain("MUI_FINISHPAGE_RUN");
-    expect(windowsSetupArtifactName("1.2.3", "arm64")).toBe("Jarvis-Setup-1.2.3-win-arm64.exe");
+    expect(windowsSetupArtifactName("1.2.3", "arm64")).toBe("Circe-Setup-1.2.3-win-arm64.exe");
     expect(
       renderWindowsSetupNsi({
         version: "1.2.3-beta.1",
@@ -750,51 +750,51 @@ setInterval(() => {}, 1000);
     ).toContain('VIProductVersion "1.2.3.0"');
   });
 
-  it("brands installer display as ARIS while keeping install identities Jarvis", () => {
+  it("brands installer display as Circe while keeping install identities Circe", () => {
     const nsi = renderWindowsSetupNsi({
       version: "1.2.3",
       arch: "x64",
-      outputPath: "C:\\out\\Jarvis-Setup-1.2.3-win-x64.exe",
-      stageRoot: "C:\\stage\\jarvis",
+      outputPath: "C:\\out\\Circe-Setup-1.2.3-win-x64.exe",
+      stageRoot: "C:\\stage\\circe",
       sevenZipPath: "C:\\tools\\7za.exe",
     });
     for (const display of [
-      "Welcome to ARIS Setup",
-      "Install ARIS as a Full",
-      "Launch ARIS",
-      'Name "ARIS 1.2.3"',
-      'BrandingText "ARIS 1.2.3"',
-      '"ProductName" "ARIS"',
-      '"FileDescription" "ARIS Node setup"',
-      '"DisplayName" "ARIS"',
-      "$SMPROGRAMS\\ARIS",
-      "$DESKTOP\\ARIS.lnk",
+      "Welcome to Circe Setup",
+      "Install Circe as a Full",
+      "Launch Circe",
+      'Name "Circe 1.2.3"',
+      'BrandingText "Circe 1.2.3"',
+      '"ProductName" "Circe"',
+      '"FileDescription" "Circe Node setup"',
+      '"DisplayName" "Circe"',
+      "$SMPROGRAMS\\Circe",
+      "$DESKTOP\\Circe.lnk",
     ]) {
       expect(nsi).toContain(display);
     }
     for (const identity of [
-      'InstallDir "$LOCALAPPDATA\\Programs\\Jarvis"',
-      'InstallDirRegKey HKCU "Software\\Jarvis"',
-      'WriteRegStr HKCU "Software\\Jarvis"',
-      "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Jarvis",
-      "$INSTDIR\\desktop\\Jarvis.exe",
-      "Uninstall Jarvis.exe",
-      "Jarvis Headless Node",
-      'FileWrite $0 "{$\\"product$\\":$\\"Jarvis',
+      'InstallDir "$LOCALAPPDATA\\Programs\\Circe"',
+      'InstallDirRegKey HKCU "Software\\Circe"',
+      'WriteRegStr HKCU "Software\\Circe"',
+      "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Circe",
+      "$INSTDIR\\desktop\\Circe.exe",
+      "Uninstall Circe.exe",
+      "Circe Headless Node",
+      'FileWrite $0 "{$\\"product$\\":$\\"Circe',
     ]) {
       expect(nsi).toContain(identity);
     }
   });
 
   it("keeps NSIS source bounded for a large synthetic manifest", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-setup-large-"));
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "circe-setup-large-"));
     try {
       const dirs = {
         desktop: NodePath.join(root, "desktop"),
         runtimeWin: NodePath.join(root, "runtime-win"),
       };
       await Promise.all(Object.values(dirs).map((dir) => NodeFSP.mkdir(dir, { recursive: true })));
-      await NodeFSP.writeFile(NodePath.join(dirs.desktop, "Jarvis.exe"), "desktop");
+      await NodeFSP.writeFile(NodePath.join(dirs.desktop, "Circe.exe"), "desktop");
       await Promise.all(
         Array.from({ length: 32 }, (_, index) =>
           NodeFSP.mkdir(NodePath.join(dirs.runtimeWin, "node_modules", `package-${index}`), {

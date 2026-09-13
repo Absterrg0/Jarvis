@@ -100,13 +100,13 @@ export interface RelayPublicConfig {
 
 const publicConfigEnvEntries = (config: RelayPublicConfig) =>
   ({
-    T3CODE_RELAY_URL: config.relayUrl,
-    T3CODE_MOBILE_OTLP_TRACES_URL: config.mobileTracingUrl,
-    T3CODE_MOBILE_OTLP_TRACES_DATASET: config.mobileTracingDataset,
-    T3CODE_MOBILE_OTLP_TRACES_TOKEN: config.mobileTracingToken,
-    T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: config.clientTracingUrl,
-    T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: config.clientTracingDataset,
-    T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: config.clientTracingToken,
+    CIRCE_RELAY_URL: config.relayUrl,
+    CIRCE_MOBILE_OTLP_TRACES_URL: config.mobileTracingUrl,
+    CIRCE_MOBILE_OTLP_TRACES_DATASET: config.mobileTracingDataset,
+    CIRCE_MOBILE_OTLP_TRACES_TOKEN: config.mobileTracingToken,
+    CIRCE_RELAY_CLIENT_OTLP_TRACES_URL: config.clientTracingUrl,
+    CIRCE_RELAY_CLIENT_OTLP_TRACES_DATASET: config.clientTracingDataset,
+    CIRCE_RELAY_CLIENT_OTLP_TRACES_TOKEN: config.clientTracingToken,
   }) as const;
 
 export function reconcileRootEnvPublicConfig(contents: string, config: RelayPublicConfig): string {
@@ -138,8 +138,8 @@ export function reconcileRootEnvRelayUrl(contents: string, relayUrl: string): st
     clientTracingToken: "",
   })
     .split("\n")
-    .filter((line) => !line.startsWith("T3CODE_MOBILE_OTLP_TRACES_"))
-    .filter((line) => !line.startsWith("T3CODE_RELAY_CLIENT_OTLP_TRACES_"))
+    .filter((line) => !line.startsWith("CIRCE_MOBILE_OTLP_TRACES_"))
+    .filter((line) => !line.startsWith("CIRCE_RELAY_CLIENT_OTLP_TRACES_"))
     .join("\n");
 }
 
@@ -167,9 +167,9 @@ export function serializeGithubOutput(entries: Readonly<Record<string, string | 
 
 export function serializeRelayClientTracingEnvironment(config: RelayPublicConfig): string {
   return serializeGithubOutput({
-    T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: config.clientTracingUrl,
-    T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: config.clientTracingDataset,
-    T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: config.clientTracingToken,
+    CIRCE_RELAY_CLIENT_OTLP_TRACES_URL: config.clientTracingUrl,
+    CIRCE_RELAY_CLIENT_OTLP_TRACES_DATASET: config.clientTracingDataset,
+    CIRCE_RELAY_CLIENT_OTLP_TRACES_TOKEN: config.clientTracingToken,
   });
 }
 
@@ -337,7 +337,7 @@ export function publicConfigFromOutput(output: unknown): RelayPublicConfig | nul
 const readRelayPublicConfig = Effect.fn("relay.deploy.readState")(function* (stage: string) {
   const state = yield* State.State;
   const service = yield* state;
-  const output = yield* service.getOutput({ stack: "JarvisRelay", stage });
+  const output = yield* service.getOutput({ stack: "CirceRelay", stage });
   const publicConfig = publicConfigFromOutput(output);
   if (publicConfig === null) {
     return yield* new RelayDeployError({

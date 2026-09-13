@@ -23,7 +23,7 @@ const Path = NodePath;
 export type HeadlessArch = "x64" | "arm64";
 
 const SERVICE_LAUNCHER_PROTOCOL = 2;
-const SERVICE_NAME = "jarvis-headless.service";
+const SERVICE_NAME = "circe-headless.service";
 const SAFE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u;
 
 export interface HeadlessManifestInput {
@@ -35,7 +35,7 @@ export interface HeadlessManifestInput {
 
 export interface HeadlessManifest extends HeadlessManifestInput {
   readonly format: 1;
-  readonly product: "Jarvis";
+  readonly product: "Circe";
   readonly nodeType: "headless";
   readonly platform: "linux";
   readonly capabilities: {
@@ -109,7 +109,7 @@ export function assertHeadlessArch(arch: string): asserts arch is HeadlessArch {
 
 export function headlessArtifactName(version: string, arch: HeadlessArch): string {
   assertVersion(version);
-  return `Jarvis-Headless-Node-${version}-linux-${arch}.tar.gz`;
+  return `Circe-Headless-Node-${version}-linux-${arch}.tar.gz`;
 }
 
 export function createHeadlessManifest(input: HeadlessManifestInput): HeadlessManifest {
@@ -121,7 +121,7 @@ export function createHeadlessManifest(input: HeadlessManifestInput): HeadlessMa
   assertSourceCommit(input.sourceCommit);
   return {
     format: 1,
-    product: "Jarvis",
+    product: "Circe",
     nodeType: "headless",
     platform: "linux",
     arch: input.arch,
@@ -188,7 +188,7 @@ function systemdQuote(value: string): string {
 export function renderHeadlessSystemdUnit(paths: HeadlessServicePaths): string {
   return [
     "[Unit]",
-    "Description=ARIS Headless Node",
+    "Description=Circe Headless Node",
     "After=network.target",
     "StartLimitIntervalSec=300",
     "StartLimitBurst=5",
@@ -197,7 +197,7 @@ export function renderHeadlessSystemdUnit(paths: HeadlessServicePaths): string {
     "Type=simple",
     `WorkingDirectory=${systemdQuote(paths.installRoot)}`,
     `Environment=T3CODE_HOME=${systemdQuote(paths.installRoot)}`,
-    "Environment=JARVIS_NODE_PRESET=headless",
+    "Environment=CIRCE_NODE_PRESET=headless",
     "Environment=T3CODE_NO_BROWSER=true",
     `ExecStart=${systemdQuote(paths.nodePath)} ${systemdQuote(paths.launcherPath)}`,
     "KillMode=mixed",
@@ -218,11 +218,11 @@ export function renderHeadlessInstallScript(): string {
 set -eu
 
 archive_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-install_root=\${JARVIS_HEADLESS_HOME:-"\$HOME/.jarvis-headless"}
-unit_path="\$HOME/.config/systemd/user/jarvis-headless.service"
+install_root=\${CIRCE_HEADLESS_HOME:-"\$HOME/.circe-headless"}
+unit_path="\$HOME/.config/systemd/user/circe-headless.service"
 
 die() {
-  echo "ARIS Headless Node: \$*" >&2
+  echo "Circe Headless Node: \$*" >&2
   exit 1
 }
 
@@ -302,9 +302,9 @@ restore() {
   fi
   rm -rf "\$incoming" 2>/dev/null || true
   if test -n "\$restore_error"; then
-    echo "ARIS Headless Node: restore failed:\$restore_error" >&2
-    echo "ARIS Headless Node: recoverable backup retained at \$previous" >&2
-    echo "ARIS Headless Node: user data preserved under \$install_root/userdata" >&2
+    echo "Circe Headless Node: restore failed:\$restore_error" >&2
+    echo "Circe Headless Node: recoverable backup retained at \$previous" >&2
+    echo "Circe Headless Node: user data preserved under \$install_root/userdata" >&2
     exit 1
   fi
   rm -rf "\$previous" 2>/dev/null || true
@@ -315,18 +315,18 @@ restore() {
   # deployment, and a failed restore must not restart one either.
   if test "\$unit_was_present" = true; then
     if systemctl --user daemon-reload >/dev/null 2>&1; then
-      if systemctl --user enable --now jarvis-headless.service >/dev/null 2>&1; then
+      if systemctl --user enable --now circe-headless.service >/dev/null 2>&1; then
         :
       else
-        echo "ARIS Headless Node: previous tree restored but failed to restart jarvis-headless.service; start it with: systemctl --user enable --now jarvis-headless.service" >&2
+        echo "Circe Headless Node: previous tree restored but failed to restart circe-headless.service; start it with: systemctl --user enable --now circe-headless.service" >&2
         exit 1
       fi
     else
-      echo "ARIS Headless Node: previous tree restored but user daemon-reload failed; reload and restart jarvis-headless.service manually" >&2
+      echo "Circe Headless Node: previous tree restored but user daemon-reload failed; reload and restart circe-headless.service manually" >&2
       exit 1
     fi
   else
-    systemctl --user daemon-reload >/dev/null 2>&1 || echo "ARIS Headless Node: warning: daemon-reload failed after removing the partial first install" >&2
+    systemctl --user daemon-reload >/dev/null 2>&1 || echo "Circe Headless Node: warning: daemon-reload failed after removing the partial first install" >&2
   fi
   exit 1
 }
@@ -334,7 +334,7 @@ trap restore HUP INT TERM EXIT
 
 # Stop before replacing the launcher/runtime. User data is deliberately not in
 # this list: userdata, worktrees, caches, and provider credentials survive an update.
-systemctl --user stop jarvis-headless.service >/dev/null 2>&1 || true
+systemctl --user stop circe-headless.service >/dev/null 2>&1 || true
 if test "\$unit_was_present" = true; then
   mv "\$unit_path" "\$previous/unit"
 fi
@@ -370,7 +370,7 @@ unit_log=\$(systemd_quote "\$log_path")
 
 cat > "\$unit_path" <<EOF
 [Unit]
-Description=ARIS Headless Node
+Description=Circe Headless Node
 After=network.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
@@ -379,7 +379,7 @@ StartLimitBurst=5
 Type=simple
 WorkingDirectory=\$unit_install_root
 Environment=T3CODE_HOME=\$unit_install_root
-Environment=JARVIS_NODE_PRESET=headless
+Environment=CIRCE_NODE_PRESET=headless
 Environment=T3CODE_NO_BROWSER=true
 ExecStart=\$unit_node \$unit_launcher
 KillMode=mixed
@@ -397,7 +397,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now ${SERVICE_NAME}
 trap - HUP INT TERM EXIT
 rm -rf "\$incoming" "\$previous" || true
-echo "ARIS Headless Node installed at \$install_root"
+echo "Circe Headless Node installed at \$install_root"
 echo "Pair it with: \$node_path \$install_root/runtime/versions/*/node_modules/t3/dist/bin.mjs pair"
 `;
 }
@@ -406,9 +406,9 @@ export function renderHeadlessStatusScript(): string {
   return `#!/bin/sh
 set -u
 
-install_root=\${JARVIS_HEADLESS_HOME:-"\$HOME/.jarvis-headless"}
-unit=jarvis-headless.service
-echo "ARIS Headless Node"
+install_root=\${CIRCE_HEADLESS_HOME:-"\$HOME/.circe-headless"}
+unit=circe-headless.service
+echo "Circe Headless Node"
 echo "  Install: \$install_root"
 if test -f "\$install_root/manifest.json"; then
   echo "  Manifest: \$install_root/manifest.json"
@@ -428,8 +428,8 @@ export function renderHeadlessUninstallScript(): string {
   return `#!/bin/sh
 set -eu
 
-install_root=\${JARVIS_HEADLESS_HOME:-"\$HOME/.jarvis-headless"}
-unit_path="\$HOME/.config/systemd/user/jarvis-headless.service"
+install_root=\${CIRCE_HEADLESS_HOME:-"\$HOME/.circe-headless"}
+unit_path="\$HOME/.config/systemd/user/circe-headless.service"
 purge=false
 if test "\${1:-}" = "--purge-data"; then
   purge=true
@@ -443,16 +443,16 @@ case "\$install_root" in
 esac
 
 if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
-  systemctl --user disable --now jarvis-headless.service >/dev/null 2>&1 || true
+  systemctl --user disable --now circe-headless.service >/dev/null 2>&1 || true
   systemctl --user daemon-reload >/dev/null 2>&1 || true
 fi
 rm -f "\$unit_path"
 if test "\$purge" = true; then
   rm -rf "\$install_root"
-  echo "Removed ARIS Headless Node and its data from \$install_root"
+  echo "Removed Circe Headless Node and its data from \$install_root"
 else
   rm -rf "\$install_root/node" "\$install_root/runtime" "\$install_root/config" "\$install_root/bin" "\$install_root/manifest.json"
-  echo "Removed ARIS Headless Node; preserved user data under \$install_root/userdata"
+  echo "Removed Circe Headless Node; preserved user data under \$install_root/userdata"
   echo "Use --purge-data to remove that data too"
 fi
 `;
@@ -628,7 +628,7 @@ export async function stageHeadlessNode(
 
   const rootDir = Path.join(
     input.stageParent,
-    `jarvis-headless-node-${input.version}-linux-${input.arch}`,
+    `circe-headless-node-${input.version}-linux-${input.arch}`,
   );
   await FileSystem.rm(rootDir, { recursive: true, force: true });
   const runtimeVersionDir = Path.join(rootDir, "runtime", "versions", input.version);
@@ -677,7 +677,7 @@ export async function stageHeadlessNode(
     presetPath,
     `${JSON.stringify(
       {
-        product: "Jarvis",
+        product: "Circe",
         nodeType: "headless",
         capabilities: manifest.capabilities,
       },
@@ -802,7 +802,7 @@ async function packageHeadlessNode(): Promise<void> {
   await ensureFile(Path.join(serverDist, "bin.mjs"), "built server bundle");
   await ensureFile(Path.join(serverDist, "service-launcher.mjs"), "built service launcher");
 
-  const tempRoot = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-headless-node-"));
+  const tempRoot = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "circe-headless-node-"));
   const deployDir =
     deployDirArg === undefined ? Path.join(tempRoot, "deploy") : Path.resolve(deployDirArg);
   const nodeVersion =

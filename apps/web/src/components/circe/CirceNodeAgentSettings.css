@@ -1,0 +1,92 @@
+.circe-node-settings {
+  margin-top: 1.5rem;
+  min-width: 0;
+  overflow: clip;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--card) 65%, transparent);
+}
+
+.circe-node-settings__summary {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 1.125rem 1.25rem;
+  cursor: pointer;
+  list-style: none;
+  color: var(--foreground);
+}
+
+.circe-node-settings__summary::-webkit-details-marker {
+  display: none;
+}
+.circe-node-settings__summary:hover {
+  background: color-mix(in srgb, var(--muted) 40%, transparent);
+}
+.circe-node-settings__summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
+  border-radius: 1rem;
+}
+.circe-node-settings__icon {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex-shrink: 0;
+  border-radius: 0.75rem;
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+.circe-node-settings__heading {
+  display: grid;
+  gap: 0.25rem;
+  flex: 1;
+  font-size: 0.8125rem;
+  font-weight: 550;
+}
+.circe-node-settings__description {
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  line-height: 1.5;
+}
+.circe-node-settings__chevron {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  transition: transform 160ms ease;
+}
+.circe-node-settings[open] .circe-node-settings__chevron {
+  transform: rotate(180deg);
+}
+.circe-node-settings__body {
+  padding: 0 1.25rem 1.25rem;
+}
+.circe-node-settings__body > section {
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+.circe-node-settings__body > section + section {
+  margin-top: 1.5rem;
+}
+.circe-node-settings__body input {
+  border-radius: 0.625rem;
+  background: transparent;
+}
+@media (max-width: 480px) {
+  .circe-node-settings__summary {
+    padding: 1rem;
+  }
+  .circe-node-settings__body {
+    padding: 0 1rem 1rem;
+  }
+  .circe-node-settings__body input {
+    min-width: 0;
+    width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .circe-node-settings__chevron {
+    transition: none;
+  }
+}

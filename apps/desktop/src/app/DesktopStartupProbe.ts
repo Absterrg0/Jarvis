@@ -20,13 +20,13 @@ export interface DesktopStartupProbeCommandLine {
 
 export interface DesktopStartupReceipt {
   readonly schemaVersion: typeof STARTUP_PROBE_SCHEMA_VERSION;
-  readonly product: "Jarvis";
+  readonly product: "Circe";
   readonly version: string;
   readonly platform: NodeJS.Platform;
   readonly phase: typeof STARTUP_PROBE_PHASE;
 }
 
-const PROBE_SWITCH = "jarvis-startup-probe";
+const PROBE_SWITCH = "circe-startup-probe";
 
 function nonEmpty(value: string | undefined): string | null {
   const trimmed = value?.trim();
@@ -35,7 +35,7 @@ function nonEmpty(value: string | undefined): string | null {
 
 export function resolveStartupProbePath(input: DesktopStartupProbeInput = {}): string | null {
   const envPath = nonEmpty(
-    input.env?.JARVIS_STARTUP_PROBE_FILE ?? process.env.JARVIS_STARTUP_PROBE_FILE,
+    input.env?.CIRCE_STARTUP_PROBE_FILE ?? process.env.CIRCE_STARTUP_PROBE_FILE,
   );
   if (envPath !== null) return envPath;
 
@@ -59,7 +59,7 @@ export function resolveStartupProbePath(input: DesktopStartupProbeInput = {}): s
  */
 export function resolveStartupProbeQuit(input: DesktopStartupProbeInput = {}): boolean {
   const value = nonEmpty(
-    input.env?.JARVIS_STARTUP_PROBE_QUIT ?? process.env.JARVIS_STARTUP_PROBE_QUIT,
+    input.env?.CIRCE_STARTUP_PROBE_QUIT ?? process.env.CIRCE_STARTUP_PROBE_QUIT,
   );
   return value === "1" || value?.toLowerCase() === "true";
 }
@@ -83,7 +83,7 @@ export function writeStartupReceipt(
 ): DesktopStartupReceipt {
   const receipt: DesktopStartupReceipt = {
     schemaVersion: STARTUP_PROBE_SCHEMA_VERSION,
-    product: "Jarvis",
+    product: "Circe",
     version: input.version,
     platform: input.platform,
     phase: STARTUP_PROBE_PHASE,
