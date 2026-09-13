@@ -268,13 +268,13 @@ jobs:
           cache: true
           run-install: |
             args:
-              - --filter=t3code-relay...
+              - --filter=@t3tools/jarvis-relay...
 
       - id: relay_state
         name: Read production relay tracing config
         shell: bash
         run: |
-          vp run --filter t3code-relay deploy \
+          vp run --filter @t3tools/jarvis-relay deploy \
             --stage prod \
             --read-state \
             --github-output \
