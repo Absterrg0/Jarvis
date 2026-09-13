@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { NativeReviewDiffRow } from "./nativeReviewDiffSurface";
 import type { NativeReviewDiffFile } from "./nativeReviewDiffTypes";
@@ -34,7 +34,13 @@ vi.mock("react-native-shiki-engine", async () => {
   return { isNativeEngineAvailable: () => true, createNativeEngine: createJavaScriptRegexEngine };
 });
 
+// Grammar comparisons must not depend on Shiki's wall-clock tokenization deadline.
+beforeEach(() => {
+  vi.spyOn(Date, "now").mockReturnValue(0);
+});
+
 afterEach(() => {
+  vi.restoreAllMocks();
   tokenization.calls = [];
   tokenization.afterCall = undefined;
 });
