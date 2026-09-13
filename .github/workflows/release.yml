@@ -850,6 +850,10 @@ jobs:
             chmod +x "$target_dir"/t3-resource-monitor 2>/dev/null || true
           done
 
+      # Trusted publishing needs npm >= 11.5.1; the bundled npm can be older.
+      - name: Upgrade npm for trusted publishing
+        run: npm install --global npm@latest && npm --version
+
       - name: Publish CLI package
         run: node apps/server/scripts/cli.ts publish --tag "${{ needs.preflight.outputs.cli_dist_tag }}" --app-version "${{ needs.preflight.outputs.version }}" --verbose
 
