@@ -42,7 +42,6 @@ interface PackageJson {
   engines: Record<string, string>;
   files: string[];
   dependencies: Record<string, string>;
-  overrides: Record<string, string>;
 }
 
 const PackageJsonPrettyJson = fromJsonStringPretty(Schema.Unknown);
