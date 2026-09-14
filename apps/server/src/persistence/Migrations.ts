@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - the ownership marker is written synchronously before the Effect runtime owns the directory.
 /**
  * Migration runner with an inline loader.
  *
@@ -10,6 +11,10 @@
 
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -163,6 +168,139 @@ const migrationEntries = [
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
+/**
+ * A database whose recorded history disagrees with the shipped manifest, or an
+ * existing database with no Circe ownership marker, belongs to another product
+ * line (upstream T3 Code, or the pre-rebrand Jarvis build). Running Circe
+ * migrations against it would collide on renumbered slots or silently adopt it,
+ * so the runner refuses before applying anything.
+ */
+export class ForeignDatabaseError extends Schema.TaggedError<ForeignDatabaseError>()(
+  "ForeignDatabaseError",
+  {
+    baseDir: Schema.String,
+    reason: Schema.Literals(["unowned_database", "history_mismatch"]),
+    detail: Schema.optional(Schema.String),
+  },
+) {
+  override get message(): string {
+    const base = `Refusing to migrate the database in ${this.baseDir}.`;
+    if (this.reason === "unowned_database") {
+      return `${base} It has no Circe ownership marker, so it belongs to another product (T3 Code or Jarvis). Circe keeps its data in ~/.circe; point --base-dir or T3CODE_HOME at a Circe directory.`;
+    }
+    return `${base} Its recorded history belongs to another product: ${this.detail ?? "migration history mismatch"}. Do not reuse a T3 Code or Jarvis data directory.`;
+  }
+}
+
+const CIRCE_OWNER_MARKER = "circe-product.json";
+const CIRCE_OWNED_MIN_ID = 41;
+const CIRCE_OWNED_MAX_ID = 58;
+const ownerMarkerBody = `${JSON.stringify({ product: "circe", version: 1 })}\n`;
+
+interface RecordedMigration {
+  readonly migration_id: number;
+  readonly name: string;
+}
+
+const expectedNameById = new Map<number, string>(migrationManifest.map(([id, name]) => [id, name]));
+
+const findHistoryMismatch = (recorded: ReadonlyArray<RecordedMigration>) => {
+  for (const row of recorded) {
+    const expected = expectedNameById.get(Number(row.migration_id));
+    if (expected !== undefined && expected !== row.name) {
+      return {
+        migrationId: Number(row.migration_id),
+        recordedName: row.name,
+        expectedName: expected,
+      };
+    }
+  }
+  return undefined;
+};
+
+// A database is positively Circe-owned only when it recorded one of the slots
+// the Circe line introduced (41-58). An upstream database that stopped before
+// the fork point records only 1-40, which are identical on both lines, so
+// history alone cannot claim it.
+const hasCirceOwnedHistory = (recorded: ReadonlyArray<RecordedMigration>): boolean =>
+  recorded.some((row) => {
+    const id = Number(row.migration_id);
+    return (
+      id >= CIRCE_OWNED_MIN_ID && id <= CIRCE_OWNED_MAX_ID && expectedNameById.get(id) === row.name
+    );
+  });
+
+const assertCirceDatabase = Effect.fn("Migrations.assertCirceDatabase")(function* (
+  baseDir: string | undefined,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const trackingTable = yield* sql<{ readonly name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  const markerPath = baseDir === undefined ? undefined : NodePath.join(baseDir, CIRCE_OWNER_MARKER);
+
+  if (trackingTable.length === 0) {
+    // A missing tracking table does not mean an empty database. Only claim a
+    // directory that holds no user objects at all; anything else belongs to
+    // another product or a pre-tracking install.
+    const userObjects = yield* sql<{ readonly name: string }>`
+      SELECT name FROM sqlite_master
+      WHERE name NOT LIKE 'sqlite_%' AND type IN ('table', 'index', 'view', 'trigger')
+    `;
+    if (userObjects.length > 0) {
+      return yield* Effect.die(
+        new ForeignDatabaseError({
+          baseDir: baseDir ?? "(configured data directory)",
+          reason: "unowned_database",
+        }),
+      );
+    }
+    // Brand-new database: claim the directory so later runs can prove ownership.
+    if (baseDir !== undefined && markerPath !== undefined) {
+      yield* Effect.sync(() => {
+        NodeFS.mkdirSync(baseDir, { recursive: true });
+        NodeFS.writeFileSync(markerPath, ownerMarkerBody);
+      });
+    }
+    return;
+  }
+
+  const recorded =
+    yield* sql<RecordedMigration>`SELECT migration_id, name FROM effect_sql_migrations`;
+  const mismatch = findHistoryMismatch(recorded);
+
+  if (baseDir !== undefined && markerPath !== undefined && !NodeFS.existsSync(markerPath)) {
+    // An existing database with no marker is only adopted when its history is
+    // unambiguously Circe's. Anything else belongs to another product.
+    if (mismatch !== undefined) {
+      return yield* Effect.die(
+        new ForeignDatabaseError({
+          baseDir,
+          reason: "history_mismatch",
+          detail: `migration ${mismatch.migrationId} is recorded as "${mismatch.recordedName}" but Circe expects "${mismatch.expectedName}"`,
+        }),
+      );
+    }
+    if (!hasCirceOwnedHistory(recorded)) {
+      return yield* Effect.die(new ForeignDatabaseError({ baseDir, reason: "unowned_database" }));
+    }
+    yield* Effect.sync(() => {
+      NodeFS.mkdirSync(baseDir, { recursive: true });
+      NodeFS.writeFileSync(markerPath, ownerMarkerBody);
+    });
+  }
+
+  if (mismatch !== undefined) {
+    return yield* Effect.die(
+      new ForeignDatabaseError({
+        baseDir: baseDir ?? "(configured data directory)",
+        reason: "history_mismatch",
+        detail: `migration ${mismatch.migrationId} is recorded as "${mismatch.recordedName}" but Circe expects "${mismatch.expectedName}"`,
+      }),
+    );
+  }
+});
+
 const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
@@ -180,6 +318,7 @@ const run = Migrator.make({});
 
 export interface RunMigrationsOptions {
   readonly toMigrationInclusive?: number | undefined;
+  readonly baseDir?: string | undefined;
 }
 
 /**
@@ -194,7 +333,9 @@ export interface RunMigrationsOptions {
  */
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
+  baseDir,
 }: RunMigrationsOptions = {}) {
+  yield* assertCirceDatabase(baseDir);
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0

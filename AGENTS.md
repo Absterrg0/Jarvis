@@ -92,7 +92,7 @@ There is no acceptance requirement for a standalone pure-T3 build from this fork
 ## The three ways to hurt yourself
 
 1. **Killing by pattern.** Never use `pkill -f`, `pgrep | kill`, or a PID found by matching a name, path, or worktree string. Kill only a PID captured when you started the process, or a port owner verified through `/proc/<pid>/cwd`.
-2. **Writing to the live install.** `~/.t3/userdata` is the developer's real Circe database. Never start a development server against it, open it read-write, or clean it up.
+2. **Writing to the live install.** `~/.circe/userdata` is Circe's real database. Never start a development server against it, open it read-write, or clean it up. `~/.t3` and `~/.jarvis` belong to other products' installs; Circe must never open, migrate, or clean them.
 3. **Baking in origins.** Never set `VITE_HTTP_URL` or `VITE_WS_URL` for development. Vite proxies `/api`, `/ws`, `/oauth`, and `/.well-known`; baked localhost URLs break remote clients.
 
 ## Hit every applicable path
