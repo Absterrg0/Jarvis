@@ -251,7 +251,9 @@ export function WelcomeWizard({
                 )
               }
               onPaired={(environmentId) => {
-                setSelection(new Set([...selectedIds, environmentId]));
+                // Functional update: pairing resolves while the user may still
+                // be toggling rows, and a render-time snapshot would drop those.
+                setSelection((current) => new Set([...(current ?? selectedIds), environmentId]));
               }}
             />
           ) : step === "agents" ? (
@@ -357,7 +359,15 @@ export function ConnectionStep({
     }
   };
   const handleContinue = async () => {
-    if (localAvailable && !(await saveDeviceLabel())) return;
+    // The rename only matters when this computer is part of the setup. A
+    // remote-only selection must not be gated on the local name.
+    if (
+      localAvailable &&
+      primaryEnvironmentId !== null &&
+      selectedIds.has(primaryEnvironmentId) &&
+      !(await saveDeviceLabel())
+    )
+      return;
     onContinue();
   };
   return (
@@ -372,10 +382,18 @@ export function ConnectionStep({
         <legend className="sr-only">Computers to set up</legend>
         {directEnvironments.map((environment) => {
           const isLocal = localAvailable && environment.environmentId === primaryEnvironmentId;
+          // The local row carries a text input, so it stays a div: wrapping it
+          // in a label would steal focus on every row click. Remote rows stay
+          // labels so clicking anywhere toggles, as before.
+          const Row = isLocal ? "div" : "label";
           return (
-            <div
+            <Row
               key={environment.environmentId}
-              className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-3"
+              className={
+                isLocal
+                  ? "flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-3"
+                  : "flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-background px-3 py-3"
+              }
             >
               <Checkbox
                 aria-label={`Set up ${environment.label}`}
@@ -393,6 +411,7 @@ export function ConnectionStep({
                   {isLocal ? (
                     <Input
                       id="onboarding-device-name"
+                      aria-label="Name this computer"
                       value={deviceLabel}
                       maxLength={80}
                       disabled={deviceSaving}
@@ -437,9 +456,31 @@ export function ConnectionStep({
                   </span>
                 ) : null}
               </span>
-            </div>
+            </Row>
           );
         })}
+        {directEnvironments.length === 0 && !localAvailable ? (
+          <p className="py-3 text-sm text-muted-foreground">
+            No computers found yet. Add one below.
+          </p>
+        ) : null}
+        {localAvailable &&
+        !directEnvironments.some(
+          (environment) => environment.environmentId === primaryEnvironmentId,
+        ) ? (
+          <div className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-3">
+            <MonitorIcon className="size-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 space-y-1">
+              <span className="flex items-center justify-between gap-3">
+                <span className="min-w-0 truncate text-sm font-medium">This computer</span>
+                <span className="shrink-0 text-xs text-muted-foreground">Connecting…</span>
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                Waiting for this node to connect…
+              </span>
+            </span>
+          </div>
+        ) : null}
       </fieldset>
       <div className="mt-4 space-y-2">
         {cloudEnabled ? (
@@ -517,10 +558,19 @@ function ConnectAccountOption({
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
   const serverConfig = useAtomValue(primaryServerConfigAtom);
-  const { linked, managedTunnelActive, publishAgentActivity, reconcileCloudState, linkState } =
-    useCloudLinkController();
+  const {
+    linked,
+    managedTunnelActive,
+    publishAgentActivity,
+    operationError,
+    reconcileCloudState,
+    linkState,
+  } = useCloudLinkController();
   const [expanded, setExpanded] = useState(true);
   const [addingThisComputer, setAddingThisComputer] = useState(false);
+  // Optimistic target: the switch reflects intent immediately instead of
+  // waiting for the relay round-trip and state refresh, mirroring Settings.
+  const [pendingAvailable, setPendingAvailable] = useState<boolean | null>(null);
   const [discoveryReady, setDiscoveryReady] = useState(false);
   const onDiscoveryReady = useCallback(() => setDiscoveryReady(true), []);
   // The onboarding lists this machine as a first-class target. While the local
@@ -534,9 +584,14 @@ function ConnectAccountOption({
     publishAgentActivity,
   });
   const setAvailableToMyDevices = async (enabled: boolean) => {
+    setPendingAvailable(enabled);
     setAddingThisComputer(true);
-    await reconcileCloudState({ managedTunnel: enabled, publish: enabled });
-    setAddingThisComputer(false);
+    try {
+      await reconcileCloudState({ managedTunnel: enabled, publish: enabled });
+    } finally {
+      setAddingThisComputer(false);
+      setPendingAvailable(null);
+    }
   };
 
   return (
@@ -584,12 +639,17 @@ function ConnectAccountOption({
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">Available to my other devices</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {canLinkThisComputer ? meshAvailability.description : "Waiting for this node…"}
+                    {addingThisComputer
+                      ? "Applying…"
+                      : (operationError ??
+                        (canLinkThisComputer
+                          ? meshAvailability.description
+                          : "Waiting for this node…"))}
                   </p>
                 </div>
                 <Switch
                   aria-label="Available to my other devices"
-                  checked={meshAvailability.checked}
+                  checked={pendingAvailable ?? meshAvailability.checked}
                   disabled={addingThisComputer || !canLinkThisComputer}
                   onCheckedChange={(next) => void setAvailableToMyDevices(next)}
                 />

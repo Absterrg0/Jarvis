@@ -1768,6 +1768,9 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
       <SettingsRow
         title={searchableSetting("publish-agent-activity").title}
         description="Send activity to mobile notifications and Live Activities without Circe Mesh."
+        status={
+          isBusy ? "Applying Circe Mesh settings…" : (operationError ?? primaryCloudLinkState.error)
+        }
         control={
           <CloudLinkSwitch
             ariaLabel="Publish agent activity to mobile clients"
