@@ -11,7 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useSearch } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
@@ -1685,6 +1685,11 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
   } = useCloudLinkController();
   const [isUpdating, setIsUpdating] = useState(false);
   const [isUpdatingPreference, setIsUpdatingPreference] = useState(false);
+  // Optimistic targets: the switch reflects the user's intent immediately
+  // instead of waiting seconds for the relay round-trip and state refresh.
+  const [pendingManagedTunnel, setPendingManagedTunnel] = useState<boolean | null>(null);
+  const [pendingPublishActivity, setPendingPublishActivity] = useState<boolean | null>(null);
+  const navigate = useNavigate();
 
   const disabledReason = !isSignedIn
     ? "Sign in to Circe Mesh to manage this environment."
@@ -1694,8 +1699,11 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
   const isBusy = isUpdating || isUpdatingPreference;
 
   const updateManagedTunnel = async (enabled: boolean) => {
+    setPendingManagedTunnel(enabled);
     setIsUpdating(true);
     const ok = await reconcileCloudState({ managedTunnel: enabled, publish: publishAgentActivity });
+    setIsUpdating(false);
+    setPendingManagedTunnel(null);
     if (ok) {
       // Turning the tunnel off while publishing stays on downgrades the link
       // rather than removing it — say so instead of claiming an unlink.
@@ -1713,12 +1721,14 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
             : "This environment is no longer available through Circe Mesh.",
       });
     }
-    setIsUpdating(false);
   };
 
   const updatePublishAgentActivity = async (enabled: boolean) => {
+    setPendingPublishActivity(enabled);
     setIsUpdatingPreference(true);
     const ok = await reconcileCloudState({ managedTunnel: managedTunnelActive, publish: enabled });
+    setIsUpdatingPreference(false);
+    setPendingPublishActivity(null);
     if (ok) {
       toastManager.add({
         type: "success",
@@ -1728,7 +1738,6 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
           : "This environment will stop publishing agent activity.",
       });
     }
-    setIsUpdatingPreference(false);
   };
 
   return (
@@ -1741,10 +1750,14 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
               ? "This environment is available to your other devices through Circe Mesh."
               : "Make this environment available to your other devices through Circe Mesh."
           }
-          status={operationError ?? primaryCloudLinkState.error}
+          status={
+            isBusy
+              ? "Applying Circe Mesh settings…"
+              : (operationError ?? primaryCloudLinkState.error)
+          }
           control={
             <CloudLinkSwitch
-              checked={managedTunnelActive}
+              checked={pendingManagedTunnel ?? managedTunnelActive}
               disabled={!canManageRelay || !isSignedIn || primaryCloudLinkState.isPending || isBusy}
               disabledReason={disabledReason}
               onCheckedChange={(enabled) => void updateManagedTunnel(enabled)}
@@ -1755,14 +1768,26 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
       <SettingsRow
         title={searchableSetting("publish-agent-activity").title}
         description="Send activity to mobile notifications and Live Activities without Circe Mesh."
+        status={
+          isBusy ? "Applying Circe Mesh settings…" : (operationError ?? primaryCloudLinkState.error)
+        }
         control={
           <CloudLinkSwitch
             ariaLabel="Publish agent activity to mobile clients"
-            checked={publishAgentActivity}
+            checked={pendingPublishActivity ?? publishAgentActivity}
             disabled={!canManageRelay || !isSignedIn || primaryCloudLinkState.isPending || isBusy}
             disabledReason={disabledReason}
             onCheckedChange={(enabled) => void updatePublishAgentActivity(enabled)}
           />
+        }
+      />
+      <SettingsRow
+        title="Set up Circe Mesh"
+        description="Open the setup wizard to link this computer and review the devices on your account."
+        control={
+          <Button variant="outline" size="sm" onClick={() => void navigate({ to: "/welcome" })}>
+            Open setup
+          </Button>
         }
       />
     </>

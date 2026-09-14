@@ -74,10 +74,12 @@ import {
   circeOnboardingDeviceNameHint,
   validateCirceNodeLabel,
 } from "./deviceName";
+import { resolveOnboardingMeshAvailability } from "./meshAvailability";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Input } from "../ui/input";
+import { Switch } from "../ui/switch";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { ScrollArea } from "../ui/scroll-area";
 import { Spinner } from "../ui/spinner";
@@ -249,7 +251,9 @@ export function WelcomeWizard({
                 )
               }
               onPaired={(environmentId) => {
-                setSelection(new Set([...selectedIds, environmentId]));
+                // Functional update: pairing resolves while the user may still
+                // be toggling rows, and a render-time snapshot would drop those.
+                setSelection((current) => new Set([...(current ?? selectedIds), environmentId]));
               }}
             />
           ) : step === "agents" ? (
@@ -270,7 +274,7 @@ export function WelcomeWizard({
 
 // ── Step 1: connection choice ────────────────────────────────
 
-function ConnectionStep({
+export function ConnectionStep({
   localAvailable,
   autoSelectedComputers,
   expandPairingInitially,
@@ -355,7 +359,15 @@ function ConnectionStep({
     }
   };
   const handleContinue = async () => {
-    if (localAvailable && !(await saveDeviceLabel())) return;
+    // The rename only matters when this computer is part of the setup. A
+    // remote-only selection must not be gated on the local name.
+    if (
+      localAvailable &&
+      primaryEnvironmentId !== null &&
+      selectedIds.has(primaryEnvironmentId) &&
+      !(await saveDeviceLabel())
+    )
+      return;
     onContinue();
   };
   return (
@@ -366,49 +378,25 @@ function ConnectionStep({
       <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground">
         Choose one or more computers. We’ll set up agents and projects on each.
       </p>
-      {localAvailable ? (
-        <div className="mt-5 rounded-lg border border-border bg-background p-3">
-          <label className="block space-y-1.5">
-            <span className="text-sm font-medium">Name this device</span>
-            <Input
-              id="onboarding-device-name"
-              value={deviceLabel}
-              maxLength={80}
-              disabled={deviceSaving}
-              placeholder="This device"
-              aria-invalid={deviceError !== null}
-              aria-describedby={deviceError !== null ? "onboarding-device-name-error" : undefined}
-              onChange={(event) => {
-                setDeviceDraft(event.target.value);
-                setDeviceError(null);
-              }}
-            />
-          </label>
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            {primaryEnvironmentId === null
-              ? "Waiting for this node to connect…"
-              : circeOnboardingDeviceNameHint(primaryEnvironment?.entry.target._tag)}
-          </p>
-          {deviceError ? (
-            <p
-              id="onboarding-device-name-error"
-              className="mt-1.5 text-xs text-destructive-foreground"
-              role="alert"
-            >
-              {deviceError}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-      {directEnvironments.length > 0 ? (
-        <fieldset className="mt-5 space-y-2">
-          <legend className="sr-only">Computers to set up</legend>
-          {directEnvironments.map((environment) => (
-            <label
+      <fieldset className="mt-5 space-y-2">
+        <legend className="sr-only">Computers to set up</legend>
+        {directEnvironments.map((environment) => {
+          const isLocal = localAvailable && environment.environmentId === primaryEnvironmentId;
+          // The local row carries a text input, so it stays a div: wrapping it
+          // in a label would steal focus on every row click. Remote rows stay
+          // labels so clicking anywhere toggles, as before.
+          const Row = isLocal ? "div" : "label";
+          return (
+            <Row
               key={environment.environmentId}
-              className="flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-background px-3 py-3"
+              className={
+                isLocal
+                  ? "flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-3"
+                  : "flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-background px-3 py-3"
+              }
             >
               <Checkbox
+                aria-label={`Set up ${environment.label}`}
                 checked={selectedIds.has(environment.environmentId)}
                 onCheckedChange={(checked) => {
                   const next = new Set(selectedIds);
@@ -418,25 +406,82 @@ function ConnectionStep({
                 }}
               />
               <MonitorIcon className="size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">
-                <span className="flex items-baseline justify-between gap-3">
-                  <span className="min-w-0 text-sm font-medium break-words">
-                    {environment.label}
-                  </span>
+              <span className="min-w-0 flex-1 space-y-1">
+                <span className="flex items-center justify-between gap-3">
+                  {isLocal ? (
+                    <Input
+                      id="onboarding-device-name"
+                      aria-label="Name this computer"
+                      value={deviceLabel}
+                      maxLength={80}
+                      disabled={deviceSaving}
+                      placeholder="This computer"
+                      className="h-7 max-w-[16rem] px-2 text-sm"
+                      aria-invalid={deviceError !== null}
+                      aria-describedby={
+                        deviceError !== null ? "onboarding-device-name-error" : undefined
+                      }
+                      onChange={(event) => {
+                        setDeviceDraft(event.target.value);
+                        setDeviceError(null);
+                      }}
+                    />
+                  ) : (
+                    <span className="min-w-0 truncate text-sm font-medium">
+                      {environment.label}
+                    </span>
+                  )}
                   <span className="shrink-0 text-xs text-muted-foreground">
                     {environment.connection.phase === "connected" ? "Connected" : "Connecting…"}
                   </span>
                 </span>
-                {environment.displayUrl ? (
-                  <span className="mt-0.5 block text-xs break-all text-muted-foreground">
+                {isLocal ? (
+                  <span className="block text-xs text-muted-foreground">
+                    {primaryEnvironmentId === null
+                      ? "This computer · waiting for this node to connect…"
+                      : `This computer · ${circeOnboardingDeviceNameHint(primaryEnvironment?.entry.target._tag)}`}
+                  </span>
+                ) : environment.displayUrl ? (
+                  <span className="block text-xs break-all text-muted-foreground">
                     {environment.displayUrl}
                   </span>
                 ) : null}
+                {isLocal && deviceError ? (
+                  <span
+                    id="onboarding-device-name-error"
+                    className="block text-xs text-destructive-foreground"
+                    role="alert"
+                  >
+                    {deviceError}
+                  </span>
+                ) : null}
               </span>
-            </label>
-          ))}
-        </fieldset>
-      ) : null}
+            </Row>
+          );
+        })}
+        {directEnvironments.length === 0 && !localAvailable ? (
+          <p className="py-3 text-sm text-muted-foreground">
+            No computers found yet. Add one below.
+          </p>
+        ) : null}
+        {localAvailable &&
+        !directEnvironments.some(
+          (environment) => environment.environmentId === primaryEnvironmentId,
+        ) ? (
+          <div className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-3">
+            <MonitorIcon className="size-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 space-y-1">
+              <span className="flex items-center justify-between gap-3">
+                <span className="min-w-0 truncate text-sm font-medium">This computer</span>
+                <span className="shrink-0 text-xs text-muted-foreground">Connecting…</span>
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                Waiting for this node to connect…
+              </span>
+            </span>
+          </div>
+        ) : null}
+      </fieldset>
       <div className="mt-4 space-y-2">
         {cloudEnabled ? (
           <ConnectAccountOption
@@ -456,7 +501,7 @@ function ConnectionStep({
             render={
               <Button
                 variant="ghost"
-                className="h-auto min-h-14 w-full justify-start gap-3 px-3 py-3 text-left whitespace-normal sm:h-auto"
+                className="h-auto min-h-9 w-full justify-start gap-3 px-3 py-2.5 text-left text-sm font-medium whitespace-normal"
               />
             }
           >
@@ -512,17 +557,41 @@ function ConnectAccountOption({
   const { environments } = useEnvironments();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
-  const primaryEnvironment = usePrimaryEnvironment();
-  const { linked, reconcileCloudState } = useCloudLinkController();
+  const serverConfig = useAtomValue(primaryServerConfigAtom);
+  const {
+    linked,
+    managedTunnelActive,
+    publishAgentActivity,
+    operationError,
+    reconcileCloudState,
+    linkState,
+  } = useCloudLinkController();
   const [expanded, setExpanded] = useState(true);
   const [addingThisComputer, setAddingThisComputer] = useState(false);
+  // Optimistic target: the switch reflects intent immediately instead of
+  // waiting for the relay round-trip and state refresh, mirroring Settings.
+  const [pendingAvailable, setPendingAvailable] = useState<boolean | null>(null);
   const [discoveryReady, setDiscoveryReady] = useState(false);
   const onDiscoveryReady = useCallback(() => setDiscoveryReady(true), []);
-  const primaryLabel = primaryEnvironment?.serverConfig?.environment.label ?? "This computer";
-  const addThisComputer = async () => {
+  // The onboarding lists this machine as a first-class target. While the local
+  // link target is still registering, show a waiting state instead of hiding
+  // the switch.
+  const isLocalNode = window.desktopBridge !== undefined || serverConfig !== null;
+  const canLinkThisComputer = linkState.target !== null;
+  const meshAvailability = resolveOnboardingMeshAvailability({
+    linked,
+    managedTunnelActive,
+    publishAgentActivity,
+  });
+  const setAvailableToMyDevices = async (enabled: boolean) => {
+    setPendingAvailable(enabled);
     setAddingThisComputer(true);
-    await reconcileCloudState({ managedTunnel: true, publish: true });
-    setAddingThisComputer(false);
+    try {
+      await reconcileCloudState({ managedTunnel: enabled, publish: enabled });
+    } finally {
+      setAddingThisComputer(false);
+      setPendingAvailable(null);
+    }
   };
 
   return (
@@ -564,7 +633,28 @@ function ConnectAccountOption({
       </CollapsibleTrigger>
       <CollapsiblePanel keepMounted>
         <div className="px-3 pb-3">
-          <div className="mb-3 space-y-1.5">
+          <div className="space-y-1.5">
+            {isSignedIn && isLocalNode ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">Available to my other devices</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {addingThisComputer
+                      ? "Applying…"
+                      : (operationError ??
+                        (canLinkThisComputer
+                          ? meshAvailability.description
+                          : "Waiting for this node…"))}
+                  </p>
+                </div>
+                <Switch
+                  aria-label="Available to my other devices"
+                  checked={pendingAvailable ?? meshAvailability.checked}
+                  disabled={addingThisComputer || !canLinkThisComputer}
+                  onCheckedChange={(next) => void setAvailableToMyDevices(next)}
+                />
+              </div>
+            ) : null}
             {isSignedIn ? (
               <CloudEnvironmentConnectRows
                 primaryEnvironmentId={null}
@@ -574,41 +664,37 @@ function ConnectAccountOption({
                 selection={{ selectedIds, onChange: onToggleEnvironment, autoSelectedComputers }}
                 refreshWhileEmpty
                 empty={
-                  <p className="py-3 text-sm text-muted-foreground">No computers linked yet.</p>
+                  <p className="py-3 text-sm text-muted-foreground">
+                    No other computers on your account yet.
+                  </p>
                 }
               />
             ) : null}
-            {isSignedIn && primaryEnvironment ? (
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2.5">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{primaryLabel}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    {linked ? "Connected to Circe Mesh" : "This computer"}
-                  </p>
-                </div>
-                {linked ? (
-                  <span className="shrink-0 text-xs text-muted-foreground">Connected</span>
-                ) : (
-                  <Button
-                    size="sm"
-                    disabled={addingThisComputer}
-                    onClick={() => void addThisComputer()}
-                  >
-                    {addingThisComputer ? "Adding…" : "Add this computer"}
-                  </Button>
-                )}
-              </div>
-            ) : null}
           </div>
-          <p className="text-sm text-muted-foreground">
-            {primaryEnvironment
-              ? "Or connect a headless computer with the CLI."
-              : "Run this on each computer you want to connect."}
-          </p>
-          <CommandBlock command="npx @absterrg0/circe connect" className="mt-3" />
           <p className="mt-3 text-xs text-muted-foreground">
-            Keep {CIRCE_BRAND_NAME} running. Select the computers you want to set up above.
+            Keep {CIRCE_BRAND_NAME} running while you set up the computers you selected.
           </p>
+          <Collapsible className="mt-3 rounded-lg border border-border bg-background">
+            <CollapsibleTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  className="h-auto min-h-9 w-full justify-between px-3 py-2 text-left text-xs font-medium"
+                />
+              }
+            >
+              <span>Advanced: connect a headless computer</span>
+              <ChevronRightIcon className="size-3.5 text-muted-foreground" />
+            </CollapsibleTrigger>
+            <CollapsiblePanel>
+              <div className="px-3 pb-3">
+                <p className="text-xs text-muted-foreground">
+                  Run this on a computer without the {CIRCE_BRAND_NAME} desktop app.
+                </p>
+                <CommandBlock command="npx @absterrg0/circe connect" className="mt-2" />
+              </div>
+            </CollapsiblePanel>
+          </Collapsible>
         </div>
       </CollapsiblePanel>
     </Collapsible>
