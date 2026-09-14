@@ -2579,4 +2579,16 @@ describe("v1 simple-command hardening", () => {
       },
     });
   });
+
+  it("still errors on a stale saved default instead of falling through", () => {
+    // A saved default that went unavailable is user intent gone stale. The
+    // Director must say so, never silently substitute the next provider.
+    const input = context({
+      utterance: "Fix authentication.",
+      providers: [{ ...codex, availability: "unavailable" }, fableProvider],
+      nodeDefaultModelSelection: taskModelSelection,
+    });
+    const result = interpret(input, proposal("start", "Fix authentication."));
+    expect(result).toMatchObject({ status: "needs-input", reason: "provider-unavailable" });
+  });
 });

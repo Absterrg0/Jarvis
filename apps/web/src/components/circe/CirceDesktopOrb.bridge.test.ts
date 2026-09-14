@@ -201,6 +201,60 @@ describe("CirceDesktopOrb bridge", () => {
       false,
     );
   });
+
+  it("skips shortlist rows whose only model slug is empty", () => {
+    const catalog = buildDesktopCirceOrbCatalog({
+      providers: [
+        provider("node-a", "blank", {
+          models: [{ slug: "", name: "Blank", isCustom: false, capabilities: null }],
+        }),
+        provider("node-a", "claudeAgent"),
+      ],
+      nodeId: "node-a" as never,
+      selected: null,
+    });
+
+    expect(catalog.providers.map((entry) => entry.instanceId)).toEqual(["claudeAgent"]);
+  });
+
+  it("appends the suggested pick when it falls outside the six rendered rows", () => {
+    const providers = [
+      ...Array.from({ length: 6 }, (_, index) => provider("node-a", `dead-${index}`, {}, false)),
+      provider("node-a", "alive"),
+    ];
+    const suggested = { instanceId: "alive", model: "alpha" };
+    expect(selectDesktopCirceOrbFallback(providers, "node-a" as never)).toEqual(suggested);
+    const catalog = buildDesktopCirceOrbCatalog({
+      providers,
+      nodeId: "node-a" as never,
+      selected: suggested,
+      suggestedSelection: suggested,
+    });
+
+    expect(catalog.providers.map((entry) => entry.instanceId)).toEqual([
+      "dead-0",
+      "dead-1",
+      "dead-2",
+      "dead-3",
+      "dead-4",
+      "dead-5",
+      "alive",
+    ]);
+    expect(catalog.suggestedSelection).toEqual(suggested);
+    expect(isDesktopCirceOrbSelectionValid(suggested, catalog)).toBe(true);
+  });
+
+  it("marks no suggestion once a default is saved", () => {
+    const catalog = buildDesktopCirceOrbCatalog({
+      providers: [provider("node-a", "claudeAgent")],
+      nodeId: "node-a" as never,
+      selected: { instanceId: "claudeAgent", model: "alpha" },
+      suggestedSelection: null,
+    });
+
+    expect(catalog.suggestedSelection).toBeNull();
+    expect(catalog.providers).toHaveLength(1);
+  });
 });
 
 describe("desktop activity catalog", () => {

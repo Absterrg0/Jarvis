@@ -50,13 +50,15 @@ export function CirceDesktopOrbReporter({
   }, [config]);
 
   // With no saved default, show the provider the Director will actually pick
-  // (first available on this node) so the panel never looks unpicked.
+  // (first available on this node) so the panel never looks unpicked. The
+  // pick stays marked as a suggestion until the user saves it.
   const fallbackSelection = useMemo<DesktopCirceOrbSelection | null>(
     () =>
       catalog === null ? null : selectDesktopCirceOrbFallback(catalog.providers, environmentId),
     [catalog, environmentId],
   );
   const effectiveSelection = serverSelection ?? fallbackSelection;
+  const suggestedSelection = serverSelection === null ? fallbackSelection : null;
 
   const orbCatalog = useMemo(
     () =>
@@ -64,11 +66,20 @@ export function CirceDesktopOrbReporter({
         providers: catalog?.providers ?? [],
         nodeId: environmentId,
         selected: effectiveSelection,
+        suggestedSelection,
         pendingSelection,
         error,
         agents,
       }),
-    [catalog, environmentId, effectiveSelection, pendingSelection, error, agents],
+    [
+      catalog,
+      environmentId,
+      effectiveSelection,
+      suggestedSelection,
+      pendingSelection,
+      error,
+      agents,
+    ],
   );
 
   // Push the real catalog whenever it changes. Fire-and-forget: the orb

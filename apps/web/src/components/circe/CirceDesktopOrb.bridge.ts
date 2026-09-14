@@ -7,6 +7,7 @@ export interface DesktopOrbCatalogInput {
   readonly providers: ReadonlyArray<CirceMeshProvider>;
   readonly nodeId: EnvironmentId;
   readonly selected: DesktopCirceOrbSelection | null;
+  readonly suggestedSelection?: DesktopCirceOrbSelection | null;
   readonly pendingSelection?: DesktopCirceOrbSelection | null;
   readonly error?: string | null;
   readonly agents?: DesktopCirceOrbCatalog["agents"];
@@ -57,7 +58,12 @@ export function buildDesktopCirceOrbCatalog(input: DesktopOrbCatalogInput): Desk
     const models = provider.snapshot.models ?? [];
     if (models.length === 0) continue;
     const preferred = models.find((model) => model.isDefault === true) ?? models[0];
-    if (preferred === undefined || typeof preferred.slug !== "string") continue;
+    if (
+      preferred === undefined ||
+      typeof preferred.slug !== "string" ||
+      preferred.slug.length === 0
+    )
+      continue;
     shortlist.push({
       instanceId: provider.snapshot.instanceId,
       displayName: provider.snapshot.displayName ?? provider.snapshot.driver,
@@ -66,9 +72,38 @@ export function buildDesktopCirceOrbCatalog(input: DesktopOrbCatalogInput): Desk
       models: [{ slug: preferred.slug, name: preferred.name ?? preferred.slug }],
     });
   }
+  const suggested = input.suggestedSelection ?? null;
+  // The fallback scans every provider while the picker renders six rows. When
+  // the effective pick falls outside the shortlist, append its row so the
+  // highlight the Director will use is always rendered and clickable.
+  if (
+    suggested !== null &&
+    !shortlist.some(
+      (row) =>
+        row.instanceId === suggested.instanceId &&
+        row.models.some((model) => model.slug === suggested.model),
+    )
+  ) {
+    const provider = input.providers.find(
+      (candidate) =>
+        candidate.nodeId === input.nodeId && candidate.snapshot.instanceId === suggested.instanceId,
+    );
+    if (provider !== undefined) {
+      const models = provider.snapshot.models ?? [];
+      const named = models.find((model) => model.slug === suggested.model);
+      shortlist.push({
+        instanceId: provider.snapshot.instanceId,
+        displayName: provider.snapshot.displayName ?? provider.snapshot.driver,
+        driver: provider.snapshot.driver,
+        available: provider.available,
+        models: [{ slug: suggested.model, name: named?.name ?? suggested.model }],
+      });
+    }
+  }
   return {
     providers: shortlist,
     selected: input.selected,
+    suggestedSelection: suggested,
     pendingSelection: input.pendingSelection ?? null,
     error: input.error ?? null,
     agents: input.agents ?? [],
