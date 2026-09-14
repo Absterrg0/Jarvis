@@ -21,6 +21,10 @@ const normalizeAddress = (value: string): string =>
     .replace(/^www\./u, "")
     .replace(/\/+$/u, "");
 
+// "www." is presentation, not a different host: strip it where it starts a
+// token so the utterance and the proposed address normalize the same way.
+const stripWww = (value: string): string => value.replace(/(^|[^a-z0-9.])www\./g, "$1");
+
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 
 /**
@@ -80,5 +84,8 @@ export function circeWebsiteUrl(value: string, sourceUtterance?: string): string
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
   if (url.username.length > 0 || url.password.length > 0) return null;
-  return containsToken(source, normalizeAddress(url.href)) ? url.href : null;
+  const address = normalizeAddress(url.href);
+  return containsToken(source, address) || containsToken(stripWww(source), address)
+    ? url.href
+    : null;
 }

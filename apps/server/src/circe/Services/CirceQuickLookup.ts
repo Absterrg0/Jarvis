@@ -37,6 +37,27 @@ const placeLabel = (place: typeof Place.Type) =>
   [...new Set([place.name, place.admin1, place.country].filter(Boolean))].join(", ");
 const normalized = (text: string) =>
   text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().trim();
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+/** Fold to a space-separated token stream so punctuation cannot hide a boundary. */
+const placeTokens = (text: string): string =>
+  text
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+/**
+ * The location must appear in the utterance as a whole token phrase. Plain
+ * substring matching let the model invent a fragment of a real place
+ * ("castle" from Newcastle, "ham" from Birmingham); a boundary check refuses
+ * the fragment while still accepting the named place.
+ */
+const placeMentioned = (source: string, location: string): boolean => {
+  const needle = placeTokens(location);
+  if (needle.length === 0) return false;
+  const pattern = needle.split(" ").map(escapeRegExp).join("\\s+");
+  return new RegExp(`(?:^|\\s)${pattern}(?:\\s|$)`, "u").test(placeTokens(source));
+};
 const condition = (code: number) => {
   if (code === 0) return "clear skies";
   if (code <= 3) return "partly cloudy to overcast skies";
@@ -68,7 +89,7 @@ export const runCirceQuickLookup = (
     const input = yield* decodeLookupInput(rawInput);
     if (
       input.sourceUtterance !== undefined &&
-      !normalized(input.sourceUtterance).includes(normalized(input.location))
+      !placeMentioned(input.sourceUtterance, input.location)
     ) {
       return {
         status: "unavailable",

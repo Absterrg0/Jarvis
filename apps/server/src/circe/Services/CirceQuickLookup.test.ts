@@ -138,6 +138,22 @@ describe("Circe quick lookup", () => {
       expect(calls).toHaveLength(0);
     }),
   );
+  it.effect("refuses a location that only appears inside another word", () =>
+    Effect.gen(function* () {
+      for (const [location, source] of [
+        ["castle", "weather in Newcastle"],
+        ["ham", "time in Birmingham"],
+      ] as const) {
+        const { http, calls } = fixture();
+        const result = yield* runCirceQuickLookup(
+          { ...input, location, sourceUtterance: source },
+          "full",
+        ).pipe(Effect.provideService(HttpClient.HttpClient, http));
+        expect(result.status).toBe("unavailable");
+        expect(calls).toHaveLength(0);
+      }
+    }),
+  );
   it.effect("accepts a place copied verbatim from the utterance", () =>
     Effect.gen(function* () {
       const { http } = fixture();

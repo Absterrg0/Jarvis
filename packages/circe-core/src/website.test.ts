@@ -42,6 +42,17 @@ describe("grounded website launches", () => {
     expect(circeWebsiteUrl("example.com", "open example.com.")).toBe("https://example.com/");
   });
 
+  it("treats www. as presentation, not a different host", () => {
+    expect(circeWebsiteUrl("https://www.example.com", "open www.example.com")).toBe(
+      "https://www.example.com/",
+    );
+    expect(circeWebsiteUrl("https://www.example.com", "open https://www.example.com")).toBe(
+      "https://www.example.com/",
+    );
+    expect(circeWebsiteUrl("www.example.com", "open example.com")).toBe("https://www.example.com/");
+    expect(circeWebsiteUrl("example.com", "open www.example.com")).toBe("https://example.com/");
+  });
+
   it("does not match an alias inside another word or a longer domain", () => {
     expect(circeWebsiteUrl("yt", "python tutorial")).toBeNull();
     expect(circeWebsiteUrl("yt", "open yt.example")).toBeNull();
