@@ -260,6 +260,7 @@ export const circeRpcScopeExtension = {
   [WS_METHODS.circeRegisterPushToken]: AuthOrchestrationReadScope,
   [WS_METHODS.circeUnregisterPushToken]: AuthOrchestrationReadScope,
   [WS_METHODS.circeVoiceLiveStart]: AuthOrchestrationOperateScope,
+  [WS_METHODS.circeVoiceLiveRelease]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<
   Record<RpcGroup.Rpcs<typeof CirceWsRpcGroup>["_tag"], AuthEnvironmentScope>
 >;
@@ -376,6 +377,14 @@ export const CirceWsRpcHandlerExtensionLive = Layer.effect(
                 WS_METHODS.circeCancelRequest,
                 circe.cancelRequest({ ...input, executionNodeId }),
                 { "rpc.aggregate": "circe" },
+              ),
+            [WS_METHODS.circeVoiceLiveRelease]: (input) =>
+              context.observeRpcEffect(
+                WS_METHODS.circeVoiceLiveRelease,
+                liveVoice
+                  .releaseSession(input)
+                  .pipe(Effect.mapError(toCirceVoiceLiveStartClientError)),
+                { "rpc.aggregate": "circe.voice" },
               ),
             [WS_METHODS.circeVoiceLiveStart]: (input) =>
               context.observeRpcEffect(

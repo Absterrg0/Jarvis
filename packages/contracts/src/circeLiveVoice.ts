@@ -25,7 +25,14 @@ export const CirceLiveVoiceCreateInput = Schema.Struct({
 });
 export type CirceLiveVoiceCreateInput = typeof CirceLiveVoiceCreateInput.Type;
 
+export const CirceLiveVoiceReleaseInput = Schema.Struct({
+  sessionId: TrimmedNonEmptyString,
+});
+export type CirceLiveVoiceReleaseInput = typeof CirceLiveVoiceReleaseInput.Type;
+
 export const CirceLiveVoiceCreateResult = Schema.Struct({
+  /** Cloud sessions must be closed through the node to free their relay reservation. */
+  releaseRequired: Schema.optionalKey(Schema.Boolean),
   sessionId: TrimmedNonEmptyString,
   sdpAnswer: Schema.String.check(
     Schema.isMinLength(1),

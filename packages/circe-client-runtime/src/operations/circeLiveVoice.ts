@@ -1,4 +1,8 @@
-import { WS_METHODS, type CirceLiveVoiceCreateInput } from "@t3tools/contracts";
+import {
+  WS_METHODS,
+  type CirceLiveVoiceReleaseInput,
+  type CirceLiveVoiceCreateInput,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import { request } from "@t3tools/client-runtime/rpc";
@@ -12,4 +16,10 @@ export const startCirceVoiceLiveSession = Effect.fn("Circe.voiceLiveStart")(func
   input: CirceLiveVoiceCreateInput,
 ) {
   return yield* request(WS_METHODS.circeVoiceLiveStart, input);
+});
+
+export const releaseCirceVoiceLiveSession = Effect.fn("Circe.voiceLiveRelease")(function* (
+  input: CirceLiveVoiceReleaseInput,
+) {
+  return yield* request(WS_METHODS.circeVoiceLiveRelease, input);
 });

@@ -6,6 +6,7 @@ import {
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { usePrimaryCloudLinkState } from "../../cloud/primaryCloudLinkState";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { circeLiveVoiceEnvironment } from "../../state/circeLiveVoice";
 import { circeMeshCatalogAtom } from "../../state/circeMesh";
@@ -15,6 +16,7 @@ import { getCirceTargetSnapshot } from "../../circeBus";
 import { toastManager } from "../ui/toast";
 import {
   consumeCirceLiveVoiceActivationReason,
+  getCirceLiveVoiceEnabled,
   getCirceLiveVoiceSink,
   getCirceLiveVoiceUiState,
   setCirceLiveVoiceActive,
@@ -42,13 +44,33 @@ function CirceLiveVoiceEnvironmentRuntime({
     reportFailure: false,
     reportDefect: false,
   });
+  const releaseSession = useAtomCommand(circeLiveVoiceEnvironment.release, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const releaseSessionRef = useRef(releaseSession);
+  useEffect(() => {
+    releaseSessionRef.current = releaseSession;
+  }, [releaseSession]);
+  const closingRef = useRef(Promise.resolve());
   const catalog = useAtomValue(circeMeshCatalogAtom);
   const catalogRef = useRef(catalog);
-  catalogRef.current = catalog;
+  useEffect(() => {
+    catalogRef.current = catalog;
+  }, [catalog]);
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
-  const enabled = (config?.settings.circeLiveVoice.apiKey.length ?? 0) > 0;
+  const currentModel = config?.settings.circeDefaultModelSelection?.model;
+  const modelRef = useRef(currentModel);
+  useEffect(() => {
+    modelRef.current = currentModel;
+  }, [currentModel]);
+  const cloudLink = usePrimaryCloudLinkState();
+  const enabled =
+    cloudLink.data?.linked === true || (config?.settings.circeLiveVoice.apiKey.length ?? 0) > 0;
   const startSessionRef = useRef(startSession);
-  startSessionRef.current = startSession;
+  useEffect(() => {
+    startSessionRef.current = startSession;
+  }, [startSession]);
   const [uiState, setUiState] = useState(getCirceLiveVoiceUiState);
   const active = uiState.active;
   const [level, setLevel] = useState(0);
@@ -81,6 +103,7 @@ function CirceLiveVoiceEnvironmentRuntime({
 
   useEffect(() => {
     if (!active) return;
+    let disposed = false;
     // Announcement sessions speak a report without listening: silent track,
     // input muted, no microphone prompt.
     const activationReason = consumeCirceLiveVoiceActivationReason();
@@ -89,7 +112,13 @@ function CirceLiveVoiceEnvironmentRuntime({
       // Announcement sessions only read a report; keep them short so the
       // voice channel is not billed while nothing is being spoken.
       ...(activationReason === "announcement" ? { idleTimeoutMs: 45_000 } : {}),
+      release: async (sessionId) => {
+        const result = await releaseSessionRef.current({ environmentId, input: { sessionId } });
+        if (result._tag === "Failure") throw new Error(liveVoiceFailureMessage(result));
+      },
       start: async ({ sdpOffer, context }) => {
+        await closingRef.current;
+        if (disposed) throw new Error("Live voice startup was cancelled.");
         const result = await startSessionRef.current({
           environmentId,
           input: { sdpOffer, ...(context === undefined ? {} : { context }) },
@@ -105,6 +134,7 @@ function CirceLiveVoiceEnvironmentRuntime({
       delegate: (utterance, delegationId) =>
         submitCirceLiveVoiceDelegation(utterance, delegationId),
       onStatus: (status) => {
+        if (disposed) return;
         setCirceLiveVoiceStatus(status);
         if (status === "failed") setCirceLiveVoiceActive(false);
         if (status !== "live") setLevel(0);
@@ -116,7 +146,9 @@ function CirceLiveVoiceEnvironmentRuntime({
       },
       // Idle, max-duration, and remote closes must release the toggle too, or
       // the button and orb keep claiming a session that is already gone.
-      onClosed: () => setCirceLiveVoiceActive(false),
+      onClosed: () => {
+        if (!disposed) setCirceLiveVoiceActive(false);
+      },
       onFailure,
       context: () => {
         const current = catalogRef.current;
@@ -139,9 +171,7 @@ function CirceLiveVoiceEnvironmentRuntime({
             ? {}
             : { currentTaskTitle: target.contextThreadTitle }),
           ...(target?.recentTasks === undefined ? {} : { recentTasks: target.recentTasks }),
-          ...(config?.settings.circeDefaultModelSelection?.model === undefined
-            ? {}
-            : { currentModel: config.settings.circeDefaultModelSelection.model }),
+          ...(modelRef.current === undefined ? {} : { currentModel: modelRef.current }),
           ...(target?.recentTasks === undefined
             ? {}
             : {
@@ -160,12 +190,13 @@ function CirceLiveVoiceEnvironmentRuntime({
     }
     void controller.start();
     return () => {
+      disposed = true;
       // Drop the sink first so late reports fall back to the ordinary lane
       // while the session closes.
       if (getCirceLiveVoiceSink()?.speak === controller.speak) {
         setCirceLiveVoiceSink(null);
       }
-      void controller.close();
+      closingRef.current = controller.close();
     };
   }, [active, environmentId, onFailure]);
 
@@ -184,6 +215,18 @@ export function CirceLiveVoiceRuntime() {
   useEffect(
     () =>
       window.desktopBridge?.circeLiveVoice?.onToggle(() => {
+        if (!getCirceLiveVoiceEnabled() && !getCirceLiveVoiceUiState().active) {
+          // The shortcut works; the session cannot start without a key. Say so
+          // instead of leaving the press with no visible effect.
+          toastManager.add({
+            type: "warning",
+            title: "Live voice is not configured",
+            description:
+              "Link this node to Circe Mesh or add an OpenAI live voice key in its agent settings, then try again.",
+            timeout: 12_000,
+          });
+          return;
+        }
         setCirceLiveVoiceActive(!getCirceLiveVoiceUiState().active);
       }),
     [],

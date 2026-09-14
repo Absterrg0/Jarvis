@@ -1,5 +1,3 @@
-// @effect-diagnostics globalFetch:off globalTimers:off -- the GPT-Live sideband is a
-// Workers WebSocket upgrade, which HttpClient and Effect timers cannot express.
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -9,8 +7,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 
 export const OPENAI_LIVE_SESSIONS_URL = "https://api.openai.com/v1/live/sessions";
 const CREATE_TIMEOUT = "30 seconds";
-/** Bounded wait for the upstream to acknowledge `session.close`. */
-const END_TIMEOUT_MS = 5_000;
+const END_TIMEOUT = "10 seconds";
 
 const LiveSessionResponse = Schema.Struct({
   session: Schema.Struct({ id: Schema.String.check(Schema.isMinLength(1)) }),
@@ -39,11 +36,7 @@ export interface LiveVoiceUpstreamShape {
     { readonly sessionId: string; readonly sdpAnswer: string },
     LiveVoiceUpstreamCreateFailed
   >;
-  /**
-   * Ends the upstream session over its sideband socket and resolves only after
-   * the service acknowledges `session.closed`. A failure here means the session
-   * may still be live, so the caller must not free its account slot.
-   */
+  /** A confirmed hangup or exact session_id_not_found response proves the slot is free. */
   readonly end: (input: {
     readonly apiKey: Redacted.Redacted<string>;
     readonly sessionId: string;
@@ -54,58 +47,12 @@ export class LiveVoiceUpstream extends Context.Service<LiveVoiceUpstream, LiveVo
   "@circe/relay/voice/LiveVoiceUpstream",
 ) {}
 
-/** Closes the sideband socket after a verified `session.closed`, or on failure. */
-async function closeSideband(apiKey: Redacted.Redacted<string>, sessionId: string): Promise<void> {
-  const response = await fetch(
-    `${OPENAI_LIVE_SESSIONS_URL}/${encodeURIComponent(sessionId)}/attach`,
-    {
-      headers: {
-        Upgrade: "websocket",
-        Authorization: `Bearer ${Redacted.value(apiKey)}`,
-      },
-    },
-  );
-  const socket = (response as unknown as { readonly webSocket?: WebSocket }).webSocket;
-  if (socket === undefined) {
-    throw new Error("The live session sideband is unavailable");
-  }
-  socket.accept();
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        socket.close();
-      } catch {
-        // The socket may already be closed by the peer.
-      }
-      if (error) reject(error);
-      else resolve();
-    };
-    const timer = setTimeout(
-      () => finish(new Error("Timed out waiting for session.closed")),
-      END_TIMEOUT_MS,
-    );
-    socket.addEventListener("message", (event) => {
-      try {
-        const parsed: unknown = JSON.parse(String(event.data));
-        if (
-          typeof parsed === "object" &&
-          parsed !== null &&
-          (parsed as { readonly type?: unknown }).type === "session.closed"
-        ) {
-          finish();
-        }
-      } catch {
-        // Ignore non-JSON frames; the timeout remains the backstop.
-      }
-    });
-    socket.addEventListener("error", () => finish(new Error("Sideband socket error")));
-    socket.send(JSON.stringify({ type: "session.close", event_id: "relay-close" }));
-  });
-}
+const SessionNotFound = Schema.Struct({
+  error: Schema.Struct({
+    code: Schema.Literal("session_id_not_found"),
+    param: Schema.Literal("session_id"),
+  }),
+});
 
 export const layer = Layer.effect(
   LiveVoiceUpstream,
@@ -165,10 +112,32 @@ export const layer = Layer.effect(
             })),
           ),
       end: (input) =>
-        Effect.tryPromise({
-          try: () => closeSideband(input.apiKey, input.sessionId),
-          catch: (cause) => new LiveVoiceUpstreamEndFailed({ sessionId: input.sessionId, cause }),
-        }),
+        client
+          .execute(
+            HttpClientRequest.post(
+              `${OPENAI_LIVE_SESSIONS_URL}/${encodeURIComponent(input.sessionId)}/hangup`,
+            ).pipe(
+              HttpClientRequest.setHeader(
+                "Authorization",
+                `Bearer ${Redacted.value(input.apiKey)}`,
+              ),
+            ),
+          )
+          .pipe(
+            Effect.flatMap((response) => {
+              if (response.status >= 200 && response.status < 300) return Effect.void;
+              // A generic 404 is not proof: it could be a missing route or proxy response.
+              if (response.status === 404)
+                return HttpClientResponse.schemaBodyJson(SessionNotFound)(response).pipe(
+                  Effect.asVoid,
+                );
+              return HttpClientResponse.filterStatusOk(response).pipe(Effect.asVoid);
+            }),
+            Effect.timeout(END_TIMEOUT),
+            Effect.mapError(
+              (cause) => new LiveVoiceUpstreamEndFailed({ sessionId: input.sessionId, cause }),
+            ),
+          ),
     });
   }),
 );
