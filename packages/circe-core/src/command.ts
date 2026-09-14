@@ -696,6 +696,14 @@ function unknownProjectInput(text: string, input: CirceCommandContext): CirceCom
     reason: "control-target-required",
     prompt: `I couldn't match ${text} to a project.`,
     choices: input.projects.map((candidate) => candidate.title),
+    // Carry exact identities so a paused multi-command turn can resume this
+    // same choice without re-reading an unstable name.
+    projectClarification: {
+      candidates: input.projects.slice(0, 5).map((project) => ({
+        projectId: project.id,
+        label: project.title,
+      })),
+    },
   };
 }
 
@@ -1781,17 +1789,26 @@ export function interpretCircePlan(
   steps: ReadonlyArray<CirceSemanticStep>,
 ):
   | { readonly status: "plan"; readonly commands: ReadonlyArray<CirceCommand> }
-  | CirceCommandNeedsInput {
+  | {
+      readonly status: "needs-input";
+      /** Index into `steps` of the step awaiting the answer. */
+      readonly index: number;
+      readonly needsInput: CirceCommandNeedsInput;
+    } {
   if (steps.length < 2) {
     return {
       status: "needs-input",
-      reason: "unsupported-command",
-      prompt: "That is one request. Say it on its own.",
-      choices: [],
+      index: 0,
+      needsInput: {
+        status: "needs-input",
+        reason: "unsupported-command",
+        prompt: "That is one request. Say it on its own.",
+        choices: [],
+      },
     };
   }
   const commands: Array<CirceCommand> = [];
-  for (const step of steps) {
+  for (const [index, step] of steps.entries()) {
     const interpretation = interpretCirceCommandProposal(input, prepared, {
       action: step.action,
       refs: step.refs,
@@ -1799,7 +1816,9 @@ export function interpretCircePlan(
       effort: step.effort,
       answer: step.answer,
     });
-    if (interpretation.status !== "command") return interpretation;
+    if (interpretation.status !== "command") {
+      return { status: "needs-input", index, needsInput: interpretation };
+    }
     commands.push(interpretation.command);
   }
   return { status: "plan", commands };

@@ -28,6 +28,7 @@ import {
   CircePresentationEvent,
   CircePushToken,
   CircePushRegistrationInput,
+  CircePendingInteraction,
 } from "./circe.ts";
 
 const decodeProposal = Schema.decodeUnknownSync(CirceSemanticProposal);
@@ -560,6 +561,45 @@ describe("Circe multi-command execution", () => {
         status: "plan",
         message: "x",
         steps: [{ action: "stop", status: "bogus", message: "y" }],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("Circe plan clarification frame", () => {
+  const decodePendingInteraction = Schema.decodeUnknownSync(CircePendingInteraction);
+  it("carries the remaining steps and the pending question", () => {
+    expect(
+      decodePendingInteraction({
+        kind: "plan",
+        frame: {
+          frameId: "frame-1",
+          originalUtterance: "Switch to Nowhere, then list my projects.",
+          originProjectId: "project-1",
+          steps: [
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+          ],
+          clarification: "project",
+          prompt: "I couldn't match Nowhere to a project.",
+          projectCandidates: [{ projectId: "project-2", label: "Beacon" }],
+          createdAt: "2026-08-12T00:00:00.000Z",
+          expiresAt: "2026-08-12T00:05:00.000Z",
+        },
+      }),
+    ).toMatchObject({ kind: "plan" });
+    expect(() =>
+      decodePendingInteraction({
+        kind: "plan",
+        frame: {
+          originalUtterance: "x",
+          originProjectId: "project-1",
+          steps: [],
+          clarification: "project",
+          prompt: "y",
+          createdAt: "2026-08-12T00:00:00.000Z",
+          expiresAt: "2026-08-12T00:05:00.000Z",
+        },
       }),
     ).toThrow();
   });

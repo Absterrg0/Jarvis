@@ -582,6 +582,54 @@ export const CirceProjectClarificationFrame = Schema.Struct({
 });
 export type CirceProjectClarificationFrame = typeof CirceProjectClarificationFrame.Type;
 
+/**
+ * A multi-command turn paused at the step that needs an answer. It keeps the
+ * remaining ordered steps and the question, so the answer continues the plan
+ * at that step instead of restarting it. Already-run steps are never in the
+ * frame, so a resume can never repeat them.
+ */
+export const CircePlanClarificationFrame = Schema.Struct({
+  // See CirceTaskClarificationFrame.frameId: identity for exact-reply binding.
+  frameId: Schema.optional(TrimmedNonEmptyString),
+  originalUtterance: TrimmedNonEmptyString,
+  sourceUtterance: Schema.optional(CirceVerbatimUtterance),
+  originProjectId: ProjectId,
+  originNodeId: Schema.optional(CirceNodeId),
+  contextThreadId: Schema.optional(ThreadId),
+  referenceThreadId: Schema.optional(ThreadId),
+  continueContext: Schema.optional(Schema.Boolean),
+  modelSelection: Schema.optional(ModelSelection),
+  requestMetadata: Schema.optional(CirceRequestMetadata),
+  expectedReply: Schema.optional(Schema.NullOr(CirceExpectedReply)),
+  /** Remaining proposal steps, starting with the one awaiting the answer. */
+  steps: Schema.Array(CirceSemanticStep).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
+  /** What the paused step needs: a project, a task, or a provider/model. */
+  clarification: Schema.Literals(["project", "task", "model"]),
+  prompt: TrimmedNonEmptyString,
+  projectCandidates: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        projectId: ProjectId,
+        nodeId: Schema.optional(CirceNodeId),
+        label: TrimmedNonEmptyString,
+        learnedAlias: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
+      }),
+    ).check(Schema.isMinLength(1), Schema.isMaxLength(5)),
+  ),
+  taskCandidates: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        threadId: ThreadId,
+        taskRef: Schema.optional(CirceTaskRef),
+        label: TrimmedNonEmptyString,
+      }),
+    ).check(Schema.isMinLength(1), Schema.isMaxLength(5)),
+  ),
+  createdAt: Schema.DateTimeUtcFromString,
+  expiresAt: Schema.DateTimeUtcFromString,
+});
+export type CircePlanClarificationFrame = typeof CircePlanClarificationFrame.Type;
+
 /** The one blocking interaction a session may have at a time. */
 export const CircePendingInteraction = Schema.Union([
   Schema.Struct({
@@ -591,6 +639,10 @@ export const CircePendingInteraction = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("project"),
     frame: CirceProjectClarificationFrame,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("plan"),
+    frame: CircePlanClarificationFrame,
   }),
 ]);
 export type CircePendingInteraction = typeof CircePendingInteraction.Type;

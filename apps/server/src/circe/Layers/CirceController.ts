@@ -12,7 +12,9 @@ import {
   TextGenerationError,
   type CirceCancelRequestInput,
   type CirceCancelRequestResult,
+  type CircePlanClarificationFrame,
   type CirceRequestMetadata,
+  type CirceSemanticStep,
   type OrchestrationProjectShell,
   type OrchestrationThread,
   type TurnId,
@@ -54,6 +56,7 @@ import {
   prepareCirceSemanticTurn,
   validateCirceModelSelection,
   type CirceCommandContext,
+  type CirceCommandNeedsInput,
   type CirceCommandTask,
 } from "@circe/core/command";
 import {
@@ -1041,6 +1044,7 @@ export const makeCirceControllerLive = <R>(
             };
           }
           const selected =
+            pending.kind !== "plan" &&
             /^(?:yes|yeah|yep|confirm|correct|that one)$/u.test(answer) &&
             pending.frame.candidates.length === 1
               ? 0
@@ -2498,6 +2502,311 @@ export const makeCirceControllerLive = <R>(
           readonly result: Deferred.Deferred<CirceExecutionResult, CirceControllerError>;
         }
       >();
+      /** Persist the remaining steps of a paused plan so the answer resumes it. */
+      const persistPlanFrame = Effect.fn("CirceController.persistPlanFrame")(function* (args: {
+        readonly input: CirceControllerExecuteInput;
+        readonly steps: ReadonlyArray<CirceSemanticStep>;
+        readonly needsInput: CirceCommandNeedsInput;
+      }) {
+        const now = yield* DateTime.now;
+        const frameId = yield* uuid();
+        yield* taskDesk.setPendingInteraction({
+          sessionId: args.input.sessionId,
+          interaction: {
+            kind: "plan",
+            frame: {
+              frameId,
+              originalUtterance: args.input.utterance,
+              ...(args.input.sourceUtterance === undefined
+                ? {}
+                : { sourceUtterance: args.input.sourceUtterance }),
+              originProjectId: args.input.projectId,
+              ...(args.input.executionNodeId === undefined
+                ? {}
+                : { originNodeId: args.input.executionNodeId }),
+              ...(args.input.contextThreadId === undefined
+                ? {}
+                : { contextThreadId: args.input.contextThreadId }),
+              ...(args.input.referenceThreadId === undefined
+                ? {}
+                : { referenceThreadId: args.input.referenceThreadId }),
+              ...(args.input.continueContext === undefined
+                ? {}
+                : { continueContext: args.input.continueContext }),
+              ...(args.input.modelSelection === undefined
+                ? {}
+                : { modelSelection: args.input.modelSelection }),
+              ...(args.input.requestMetadata === undefined
+                ? {}
+                : { requestMetadata: args.input.requestMetadata }),
+              ...(args.input.expectedReply === undefined
+                ? {}
+                : { expectedReply: args.input.expectedReply }),
+              steps: [...args.steps],
+              clarification:
+                args.needsInput.projectClarification !== undefined
+                  ? "project"
+                  : args.needsInput.taskClarification !== undefined
+                    ? "task"
+                    : "model",
+              prompt: args.needsInput.prompt,
+              ...(args.needsInput.projectClarification === undefined
+                ? {}
+                : { projectCandidates: args.needsInput.projectClarification.candidates }),
+              ...(args.needsInput.taskClarification === undefined
+                ? {}
+                : { taskCandidates: args.needsInput.taskClarification.candidates }),
+              createdAt: now,
+              expiresAt: DateTime.add(now, { minutes: 5 }),
+            },
+          },
+        });
+        return frameId;
+      });
+
+      /** Run the validated commands in order; pause with a durable frame on input. */
+      const dispatchPlanSteps = Effect.fn("CirceController.dispatchPlanSteps")(function* (
+        input: CirceControllerExecuteInput,
+        steps: ReadonlyArray<CirceSemanticStep>,
+        firstIndex: number,
+      ) {
+        // The plan frame is consumed before its steps run, so a step must not
+        // carry the consumed frame id into its own execute body.
+        const { clarificationFrameId: _consumedFrameId, ...stepBase } = input;
+        const results: Array<CirceExecutionResult> = [];
+        for (const [offset, step] of steps.entries()) {
+          const index = firstIndex + offset;
+          const stepLease = yield* Ref.make<CircePreAcceptLease | undefined>(undefined);
+          const stepInput: CirceControllerExecuteInput = {
+            ...stepBase,
+            semanticProposal: step,
+            ...(stepBase.requestMetadata === undefined
+              ? {}
+              : {
+                  requestMetadata: {
+                    ...stepBase.requestMetadata,
+                    requestId: `${stepBase.requestMetadata.requestId}::step${index}`,
+                  },
+                }),
+          };
+          const result = yield* executeBody(stepInput, undefined, stepLease).pipe(
+            Effect.ensuring(
+              Ref.get(stepLease).pipe(
+                Effect.flatMap((lease) => closeCommit(requestCancellation, lease)),
+              ),
+            ),
+          );
+          results.push(result);
+          if (result.status === "needs-input") {
+            const frameId = yield* persistPlanFrame({
+              input,
+              steps: steps.slice(offset),
+              needsInput: result,
+            });
+            return { ...result, clarificationFrameId: frameId };
+          }
+        }
+        return {
+          status: "plan" as const,
+          message: composePlanMessage(results),
+          steps: results.map(planStepEntry),
+        };
+      });
+
+      /**
+       * Validate every step of a plan against the authoritative catalogs, then
+       * run the validated commands in order. When a step needs an answer, the
+       * remaining steps are persisted as a plan frame so the answer resumes at
+       * that step instead of restarting the turn.
+       */
+      const executePlanSteps = Effect.fn("CirceController.executePlanSteps")(function* (args: {
+        readonly input: CirceControllerExecuteInput;
+        readonly steps: ReadonlyArray<CirceSemanticStep>;
+        readonly firstIndex: number;
+      }) {
+        const shell = yield* projections.getShellSnapshot();
+        const aliases = yield* projectLexicon.list();
+        const desk = yield* taskDesk.get(args.input.sessionId);
+        const context = yield* buildTurnContext({
+          input: args.input,
+          shell,
+          aliases,
+          desk,
+          confirmedTaskId: args.input.confirmedTaskId,
+        });
+        const prepared = prepareCirceSemanticTurn(context.context);
+        if (prepared.status === "needs-input") return prepared;
+        const plan = interpretCircePlan(context.context, prepared, args.steps);
+        if (plan.status === "needs-input") {
+          const frameId = yield* persistPlanFrame({
+            input: args.input,
+            steps: args.steps.slice(plan.index),
+            needsInput: plan.needsInput,
+          });
+          return { ...plan.needsInput, clarificationFrameId: frameId };
+        }
+        return yield* dispatchPlanSteps(args.input, args.steps, args.firstIndex);
+      });
+
+      /**
+       * Continue a paused multi-command turn from the step awaiting an answer.
+       * The already-run steps are not in the frame, so they cannot repeat.
+       * Returns null when the answer is really a fresh command, so the caller
+       * falls through to ordinary processing.
+       */
+      const resumePlan = Effect.fn("CirceController.resumePlan")(function* (args: {
+        readonly input: CirceControllerExecuteInput;
+        readonly frame: CircePlanClarificationFrame;
+      }) {
+        const { frame } = args;
+        const now = yield* DateTime.now;
+        const frameId = frame.frameId;
+        const consume = () =>
+          taskDesk.consumePendingInteraction({
+            sessionId: args.input.sessionId,
+            ...(frameId === undefined ? {} : { expectedFrameId: frameId }),
+          });
+        const staleReply = {
+          status: "needs-input" as const,
+          reason: "control-target-required" as const,
+          prompt:
+            "That answer no longer matches the current question. Please answer the current question or restate your request.",
+          choices: [] as ReadonlyArray<string>,
+        };
+        if (
+          args.input.clarificationFrameId !== undefined &&
+          args.input.clarificationFrameId !== frameId
+        ) {
+          return staleReply;
+        }
+        if (DateTime.toEpochMillis(frame.expiresAt) <= DateTime.toEpochMillis(now)) {
+          const expired = yield* consume();
+          if (expired === null) return staleReply;
+          return {
+            status: "needs-input" as const,
+            reason: "control-target-required" as const,
+            prompt: "That selection expired. Please restate the request.",
+            choices: [] as ReadonlyArray<string>,
+          };
+        }
+        const answer = normalizeTaskDeskAnswer(args.input.utterance);
+        if (/^(?:cancel|never mind|none|no)$/u.test(answer)) {
+          const cancelled = yield* consume();
+          if (cancelled === null) return staleReply;
+          return {
+            status: "acknowledged" as const,
+            action: "focused" as const,
+            projectId: args.input.projectId,
+            message: "Cancelled the remaining steps.",
+          };
+        }
+        let resumeInput: CirceControllerExecuteInput = {
+          ...args.input,
+          utterance: frame.originalUtterance,
+          projectId: frame.originProjectId,
+          ...(frame.sourceUtterance === undefined
+            ? {}
+            : { sourceUtterance: frame.sourceUtterance }),
+          ...(frame.originNodeId === undefined ? {} : { executionNodeId: frame.originNodeId }),
+          ...(frame.contextThreadId === undefined
+            ? {}
+            : { contextThreadId: frame.contextThreadId }),
+          ...(frame.referenceThreadId === undefined
+            ? {}
+            : { referenceThreadId: frame.referenceThreadId }),
+          ...(frame.continueContext === undefined
+            ? {}
+            : { continueContext: frame.continueContext }),
+          ...(frame.modelSelection === undefined ? {} : { modelSelection: frame.modelSelection }),
+          ...(frame.requestMetadata === undefined
+            ? {}
+            : { requestMetadata: frame.requestMetadata }),
+          ...(frame.expectedReply === undefined ? {} : { expectedReply: frame.expectedReply }),
+          semanticProposal: {
+            action: "sequence",
+            refs: [],
+            model: null,
+            effort: null,
+            answer: null,
+            steps: [...frame.steps],
+          },
+        };
+        if (frame.clarification === "project") {
+          const shell = yield* projections.getShellSnapshot();
+          const aliases = yield* projectLexicon.list();
+          const candidates = frame.projectCandidates ?? [];
+          const resolved = resolveCirceProjectClarificationChoice({
+            answer: args.input.utterance,
+            candidates: candidates.map((candidate) => ({
+              projectId: candidate.projectId,
+              label: candidate.label,
+            })),
+            projects: shell.projects,
+            aliases,
+          });
+          if (resolved === null) {
+            if (
+              looksLikeCirceBoundedCommand({
+                utterance: args.input.utterance,
+                projects: shell.projects,
+                aliases,
+              })
+            ) {
+              const retired = yield* consume();
+              if (retired === null) return staleReply;
+              return null;
+            }
+            return {
+              status: "needs-input" as const,
+              reason: "control-target-required" as const,
+              prompt: frame.prompt,
+              choices: candidates.map((candidate) => candidate.label),
+              ...(frameId === undefined ? {} : { clarificationFrameId: frameId }),
+            };
+          }
+          resumeInput = {
+            ...resumeInput,
+            projectId: resolved.projectId,
+            confirmedProjectId: resolved.projectId,
+          };
+        } else if (frame.clarification === "task") {
+          const candidates = frame.taskCandidates ?? [];
+          const selected =
+            /^(?:yes|yeah|yep|confirm|correct|that one)$/u.test(answer) && candidates.length === 1
+              ? 0
+              : ordinalTaskChoice(answer);
+          const candidate = selected === undefined ? undefined : candidates[selected];
+          if (candidate === undefined) {
+            return {
+              status: "needs-input" as const,
+              reason: "control-target-required" as const,
+              prompt: frame.prompt,
+              choices: candidates.map((item) => item.label),
+              ...(frameId === undefined ? {} : { clarificationFrameId: frameId }),
+            };
+          }
+          resumeInput = {
+            ...resumeInput,
+            contextThreadId: candidate.threadId,
+            referenceThreadId: candidate.threadId,
+            confirmedTaskId: candidate.threadId,
+          };
+        } else if (args.input.modelSelection === undefined) {
+          // Model clarification: the client resolves it and resends a
+          // selection. Without one there is nothing new to apply.
+          return {
+            status: "needs-input" as const,
+            reason: "selection-unavailable" as const,
+            prompt: frame.prompt,
+            choices: [] as ReadonlyArray<string>,
+            ...(frameId === undefined ? {} : { clarificationFrameId: frameId }),
+          };
+        }
+        const consumed = yield* consume();
+        if (consumed === null) return staleReply;
+        return yield* executePlanSteps({ input: resumeInput, steps: frame.steps, firstIndex: 0 });
+      });
+
       return CirceController.of({
         execute: (input: CirceControllerExecuteInput) => {
           // The acceptance key is derived once and captured: the execute
@@ -2508,58 +2817,21 @@ export const makeCirceControllerLive = <R>(
           // remove the owner's commit.
           const acceptanceKey = preAcceptKeyFor(input);
           return Effect.gen(function* () {
-            // Multi-command turn: validate every step against the same
-            // catalogs and typed state the ordinary Director uses, then
-            // dispatch the validated commands in order. Nothing runs until
-            // all steps resolve, so an ambiguous or unknown later step can
-            // never leave earlier steps dispatched. Each step keeps a derived
-            // request id so a retry of the whole turn stays idempotent.
+            // Durable plan resume: an answer to a paused multi-command turn
+            // continues its remaining steps. Checked only when no new proposal
+            // is supplied, so a fresh command still routes normally.
+            if (input.semanticProposal === undefined) {
+              const resumeDesk = yield* taskDesk.get(input.sessionId);
+              const pendingInteraction = resumeDesk.pendingInteraction;
+              if (pendingInteraction !== null && pendingInteraction.kind === "plan") {
+                const resumed = yield* resumePlan({ input, frame: pendingInteraction.frame });
+                if (resumed !== null) return resumed;
+              }
+            }
+            // Multi-command turn: validate every step then run them in order.
             const sequenceSteps = decodeCirceSequenceSteps(input.semanticProposal);
             if (sequenceSteps !== null) {
-              const sequenceShell = yield* projections.getShellSnapshot();
-              const sequenceAliases = yield* projectLexicon.list();
-              const sequenceDesk = yield* taskDesk.get(input.sessionId);
-              const sequenceContext = yield* buildTurnContext({
-                input,
-                shell: sequenceShell,
-                aliases: sequenceAliases,
-                desk: sequenceDesk,
-                confirmedTaskId: undefined,
-              });
-              const prepared = prepareCirceSemanticTurn(sequenceContext.context);
-              if (prepared.status === "needs-input") return prepared;
-              const plan = interpretCircePlan(sequenceContext.context, prepared, sequenceSteps);
-              if (plan.status === "needs-input") return plan;
-              const results: Array<CirceExecutionResult> = [];
-              for (const [index, step] of sequenceSteps.entries()) {
-                const stepLease = yield* Ref.make<CircePreAcceptLease | undefined>(undefined);
-                const stepInput: CirceControllerExecuteInput = {
-                  ...input,
-                  semanticProposal: step,
-                  ...(input.requestMetadata === undefined
-                    ? {}
-                    : {
-                        requestMetadata: {
-                          ...input.requestMetadata,
-                          requestId: `${input.requestMetadata.requestId}::step${index}`,
-                        },
-                      }),
-                };
-                const result = yield* executeBody(stepInput, undefined, stepLease).pipe(
-                  Effect.ensuring(
-                    Ref.get(stepLease).pipe(
-                      Effect.flatMap((lease) => closeCommit(requestCancellation, lease)),
-                    ),
-                  ),
-                );
-                results.push(result);
-                if (result.status === "needs-input") break;
-              }
-              return {
-                status: "plan" as const,
-                message: composePlanMessage(results),
-                steps: results.map(planStepEntry),
-              };
+              return yield* executePlanSteps({ input, steps: sequenceSteps, firstIndex: 0 });
             }
             const { sessionId: _sessionId, ...request } = input;
             const payload = canonicalizePayload(request);

@@ -148,7 +148,9 @@ T3 creates a linked review thread, copies the latest final assistant output into
 
 ### Two commands in one turn
 
-Join two separate requests with "then", "and", or a comma, for example "Stop the authentication task, then create a deployment task." Circe reads the whole turn once, validates every command against the real projects, tasks, providers, and pending requests, and only then runs them in order. If any command is ambiguous or unknown, nothing runs and Circe asks about that command. The turn answers as one combined report. A single request that happens to use "and" to describe one task, like "fix auth with retries and backoff", stays one task.
+Join two separate requests with "then", "and", or a comma, for example "Stop the authentication task, then create a deployment task." Circe reads the whole turn once, validates every command against the real projects, tasks, providers, and pending requests, and only then runs them in order. The turn answers as one combined report. A single request that happens to use "and" to describe one task, like "fix auth with retries and backoff", stays one task.
+
+If one command needs a detail, Circe asks and holds the rest of the plan. Answer the question and it continues from that command; the commands that already ran do not repeat. Say "cancel" to drop the remaining commands. Nothing is dispatched until the whole turn validates, so an unknown or ambiguous command never leaves earlier commands half-run.
 
 ## Talk and listen
 

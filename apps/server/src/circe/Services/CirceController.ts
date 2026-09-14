@@ -176,6 +176,8 @@ export interface CirceControllerExecuteInput {
   readonly modelSelection?: ModelSelection | undefined;
   /** Host-confirmed real project identity used to resume a durable clarification. */
   readonly confirmedProjectId?: ProjectId | undefined;
+  /** Host-confirmed task identity used to resume a durable plan step. Internal only. */
+  readonly confirmedTaskId?: ThreadId | undefined;
   /**
    * Client-pinned pending request this utterance answers, verified against
    * live state. Null pins an explicit snapshot of no unique pending request.

@@ -1045,6 +1045,136 @@ describe("CirceController", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  const pausedPlanProposal = () => {
+    const source = "Switch to Nowhere, then list my projects.";
+    const at = source.indexOf("Nowhere");
+    return {
+      source,
+      proposal: {
+        action: "sequence" as const,
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        steps: [
+          {
+            action: "focus-project" as const,
+            refs: [
+              {
+                span: { start: at, end: at + "Nowhere".length, text: "Nowhere" },
+                role: "destination" as const,
+                value: "Nowhere",
+              },
+            ],
+            model: null,
+            effort: null,
+            answer: null,
+          },
+          { action: "list-projects" as const, refs: [], model: null, effort: null, answer: null },
+        ],
+      },
+    };
+  };
+
+  const resumePlanLayer = (dispatch: () => Effect.Effect<{ sequence: number }>) =>
+    TestCirceControllerLive.pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch,
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+  it.effect("resumes a paused plan from the step that needed a project answer", () => {
+    const layer = resumePlanLayer(() => Effect.die("A focus plus list plan must not dispatch"));
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const { source, proposal } = pausedPlanProposal();
+      const paused = yield* manager.execute({
+        sessionId,
+        utterance: source,
+        projectId: project.id,
+        sourceUtterance: source,
+        semanticProposal: proposal,
+      });
+      expect(paused).toMatchObject({ status: "needs-input" });
+      if (paused.status !== "needs-input") return;
+      expect(paused.clarificationFrameId).toEqual(expect.any(String));
+
+      // The answer continues the plan instead of restarting it, and the step
+      // that already resolved is not repeated.
+      const resumed = yield* manager.execute({
+        sessionId,
+        utterance: "Beacon",
+        projectId: project.id,
+        ...(paused.clarificationFrameId === undefined
+          ? {}
+          : { clarificationFrameId: paused.clarificationFrameId }),
+      });
+      expect(resumed).toMatchObject({ status: "plan" });
+      if (resumed.status !== "plan") return;
+      expect(resumed.steps.map((step) => step.status)).toEqual(["acknowledged", "acknowledged"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("cancels the remaining steps of a paused plan", () => {
+    const layer = resumePlanLayer(() => Effect.die("A cancelled plan must not dispatch"));
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const { source, proposal } = pausedPlanProposal();
+      const paused = yield* manager.execute({
+        sessionId,
+        utterance: source,
+        projectId: project.id,
+        sourceUtterance: source,
+        semanticProposal: proposal,
+      });
+      if (paused.status !== "needs-input") return;
+      const cancelled = yield* manager.execute({
+        sessionId,
+        utterance: "cancel",
+        projectId: project.id,
+        ...(paused.clarificationFrameId === undefined
+          ? {}
+          : { clarificationFrameId: paused.clarificationFrameId }),
+      });
+      expect(cancelled).toMatchObject({
+        status: "acknowledged",
+        message: "Cancelled the remaining steps.",
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("answers a general question without creating project work", () => {
     const interpreterLayer = Layer.succeed(CirceControllerInterpreter, {
       interpret: () =>
