@@ -129,7 +129,10 @@ export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
     return join(NodeOS.homedir(), ".circe");
   }
   const baseDir = resolve(yield* expandHomePath(raw.trim()));
-  if (FOREIGN_PRODUCT_HOMES.some((name) => baseDir === join(NodeOS.homedir(), name))) {
+  // `userInfo()` reports the real account home even when callers stub
+  // `homedir()`, so a test base directory is never mistaken for the home.
+  const realHome = NodeOS.userInfo().homedir;
+  if (FOREIGN_PRODUCT_HOMES.some((name) => baseDir === join(realHome, name))) {
     return yield* Effect.die(new ForeignBaseDirectoryError({ baseDir }));
   }
   return baseDir;
