@@ -371,13 +371,14 @@ export function createDesktopCirceShell(input: DesktopCirceShellInput): DesktopC
     overlayDragStart = null;
     if (typeof window.getBounds !== "function") return;
     try {
+      const orbCenter = desktopCirceOverlayOrbCenter(window.getBounds());
       const workArea =
         input.getOverlayWorkArea?.() ??
-        Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).workArea;
-      overlayAnchor = snapDesktopCirceOverlayAnchor(
-        workArea,
-        desktopCirceOverlayOrbCenter(window.getBounds()),
-      );
+        Electron.screen.getDisplayNearestPoint({
+          x: Math.round(orbCenter.x),
+          y: Math.round(orbCenter.y),
+        }).workArea;
+      overlayAnchor = snapDesktopCirceOverlayAnchor(workArea, orbCenter);
       const snapped = resolveDesktopCirceOverlayBounds(workArea, overlayExpanded, overlayAnchor);
       if (typeof window.setBounds === "function") window.setBounds(snapped, false);
       else if (typeof window.setPosition === "function")

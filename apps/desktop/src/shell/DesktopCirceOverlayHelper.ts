@@ -76,8 +76,8 @@ function parseOverlayCommand(line: string): OverlayCommand | null {
 
 export async function runDesktopCirceOverlayHelper(): Promise<void> {
   await app.whenReady();
-  // Middle-right, matching the window-surface orb: XWayland owns placement,
-  // so anchor to the primary display's work area.
+  // Middle-right on the primary display for the first show: XWayland owns the
+  // initial placement. Later moves and resizes pick the display under the orb.
   const area = screen.getPrimaryDisplay().workArea;
   const collapsedBounds = resolveDesktopCirceOverlayBounds(area, false);
   const window = new BrowserWindow({
@@ -109,6 +109,11 @@ export async function runDesktopCirceOverlayHelper(): Promise<void> {
     readonly windowX: number;
     readonly windowY: number;
   } | null = null;
+  // The helper can be dragged across monitors, so resolve the display from the
+  // orb rather than assuming the primary one.
+  const workAreaForOrb = (orbCenter: DesktopCirceOverlayAnchor) =>
+    screen.getDisplayNearestPoint({ x: Math.round(orbCenter.x), y: Math.round(orbCenter.y) })
+      .workArea;
   const handleDrag = (event: DesktopCirceOrbDragEvent): void => {
     if (window.isDestroyed()) return;
     if (event.phase === "start") {
@@ -132,8 +137,9 @@ export async function runDesktopCirceOverlayHelper(): Promise<void> {
       return;
     }
     dragStart = null;
-    const area = screen.getPrimaryDisplay().workArea;
-    anchor = snapDesktopCirceOverlayAnchor(area, desktopCirceOverlayOrbCenter(window.getBounds()));
+    const orbCenter = desktopCirceOverlayOrbCenter(window.getBounds());
+    const area = workAreaForOrb(orbCenter);
+    anchor = snapDesktopCirceOverlayAnchor(area, orbCenter);
     window.setBounds(resolveDesktopCirceOverlayBounds(area, false, anchor), false);
   };
   // Orb picker selections leave the document as console lines. Forward them
@@ -164,8 +170,9 @@ export async function runDesktopCirceOverlayHelper(): Promise<void> {
         );
         return;
       case "resize": {
+        const orbCenter = anchor ?? desktopCirceOverlayOrbCenter(window.getBounds());
         const bounds = resolveDesktopCirceOverlayBounds(
-          screen.getPrimaryDisplay().workArea,
+          workAreaForOrb(orbCenter),
           command.expanded,
           anchor ?? undefined,
         );

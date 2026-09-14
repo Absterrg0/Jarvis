@@ -109,29 +109,65 @@ export function desktopCirceOverlayOrbCenter(
 export const DESKTOP_CIRCE_ORB_SNAP_THRESHOLD = 56;
 const SNAP_VERTICAL_STEPS = 5;
 
+/** Window footprint for a work area, shrunk when the work area cannot hold it. */
+function desktopCirceOverlayWindowSize(
+  workArea: DesktopCirceOverlayWorkArea,
+  expanded: boolean,
+): { readonly width: number; readonly height: number } {
+  return {
+    width: Math.min(
+      expanded ? DESKTOP_CIRCE_ORB_WINDOW_WIDTH : DESKTOP_CIRCE_ORB_COLLAPSED_WIDTH,
+      Math.max(48, workArea.width - DESKTOP_CIRCE_ORB_MARGIN * 2),
+    ),
+    height: Math.min(
+      expanded ? DESKTOP_CIRCE_ORB_WINDOW_HEIGHT : DESKTOP_CIRCE_ORB_COLLAPSED_HEIGHT,
+      Math.max(48, workArea.height - DESKTOP_CIRCE_ORB_MARGIN * 2),
+    ),
+  };
+}
+
 /**
  * Free placement with edge magnetism: the orb stays where it was dropped
  * unless its centre is near the left/right margin or a row of the vertical
- * mesh, in which case it settles onto that line. No full-screen overlay is
- * needed, so dragging stays cheap.
+ * mesh, in which case it settles onto the nearest line. No full-screen overlay
+ * is needed, so dragging stays cheap.
+ *
+ * The targets are first pulled inside the region where the expanded panel can
+ * be shown around the orb. The orb sits at the window's right edge, so the
+ * left and top/bottom targets are well inside the work area, not at its edge.
+ * Clamping to that region is what keeps the orb from jumping when the panel
+ * opens: an anchor this function returns is never moved by
+ * `resolveDesktopCirceOverlayBounds`.
  */
 export function snapDesktopCirceOverlayAnchor(
   workArea: DesktopCirceOverlayWorkArea,
   anchor: DesktopCirceOverlayAnchor,
   threshold = DESKTOP_CIRCE_ORB_SNAP_THRESHOLD,
 ): DesktopCirceOverlayAnchor {
-  const insetX = DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT;
-  const insetY = DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT;
-  const minX = workArea.x + insetX;
-  const maxX = workArea.x + workArea.width - insetX;
-  const minY = workArea.y + insetY;
-  const maxY = workArea.y + workArea.height - insetY;
-  const withinThreshold = (value: number, target: number) => Math.abs(value - target) <= threshold;
-  const snapTo = (value: number, targets: ReadonlyArray<number>) => {
+  const expanded = desktopCirceOverlayWindowSize(workArea, true);
+  const marginX = Math.min(
+    DESKTOP_CIRCE_ORB_MARGIN,
+    Math.max(0, workArea.width - expanded.width) / 2,
+  );
+  const marginY = Math.min(
+    DESKTOP_CIRCE_ORB_MARGIN,
+    Math.max(0, workArea.height - expanded.height) / 2,
+  );
+  const minX = workArea.x + marginX + (expanded.width - DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT);
+  const maxX = workArea.x + workArea.width - marginX - DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT;
+  const minY = workArea.y + marginY + expanded.height / 2;
+  const maxY = workArea.y + workArea.height - marginY - expanded.height / 2;
+  const snapTo = (value: number, targets: ReadonlyArray<number>): number => {
+    let best = value;
+    let bestDistance = Number.POSITIVE_INFINITY;
     for (const target of targets) {
-      if (withinThreshold(value, target)) return target;
+      const distance = Math.abs(value - target);
+      if (distance <= threshold && distance < bestDistance) {
+        best = target;
+        bestDistance = distance;
+      }
     }
-    return value;
+    return best;
   };
 
   const clampedX = clamp(anchor.x, minX, maxX);
@@ -156,14 +192,7 @@ export function resolveDesktopCirceOverlayBounds(
   expanded: boolean,
   anchor?: DesktopCirceOverlayAnchor,
 ): DesktopCirceOverlayBounds {
-  const width = Math.min(
-    expanded ? DESKTOP_CIRCE_ORB_WINDOW_WIDTH : DESKTOP_CIRCE_ORB_COLLAPSED_WIDTH,
-    Math.max(48, workArea.width - DESKTOP_CIRCE_ORB_MARGIN * 2),
-  );
-  const height = Math.min(
-    expanded ? DESKTOP_CIRCE_ORB_WINDOW_HEIGHT : DESKTOP_CIRCE_ORB_COLLAPSED_HEIGHT,
-    Math.max(48, workArea.height - DESKTOP_CIRCE_ORB_MARGIN * 2),
-  );
+  const { width, height } = desktopCirceOverlayWindowSize(workArea, expanded);
   if (anchor === undefined) {
     return {
       x: Math.round(workArea.x + workArea.width - width - DESKTOP_CIRCE_ORB_MARGIN),
