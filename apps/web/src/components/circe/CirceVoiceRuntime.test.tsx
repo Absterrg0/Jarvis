@@ -413,6 +413,63 @@ describe("Circe voice runtime", () => {
     });
     expect(consume).toHaveBeenCalledTimes(1);
   });
+  it("applies a plan's focus and start outcomes instead of returning early", async () => {
+    const focusedProject = ProjectId.make("focused-project");
+    const startedThread = ThreadId.make("plan-task");
+    state.desk.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        focusedTask: null,
+        recentTasks: [
+          {
+            threadId: startedThread,
+            title: "Release notes",
+            taskRef: { executionNodeId: nodeId, threadId: startedThread },
+            pendingReply: null,
+          },
+        ],
+      },
+    });
+    state.execute.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        status: "plan",
+        message: "Switched to Beacon. Started the task.",
+        steps: [
+          {
+            action: "focused",
+            status: "acknowledged",
+            message: "Switched to Beacon.",
+            projectId: focusedProject,
+          },
+          {
+            action: "start",
+            status: "started",
+            message: "Started the task.",
+            threadId: startedThread,
+            projectId: focusedProject,
+            taskRef: { executionNodeId: nodeId, threadId: startedThread },
+          },
+        ],
+      },
+    });
+    await ready();
+    transcript("switch to Beacon, then start the task", {
+      captureId: "capture",
+      purpose: "command",
+    });
+    await state.drain?.();
+    await vi.waitFor(() =>
+      expect(events.some((entry) => entry === "speech:Switched to Beacon. Started the task.")).toBe(
+        true,
+      ),
+    );
+    // The focused step moved the selection; the started step pinned its task
+    // and subscribed reports. Without the plan handler both were skipped.
+    expect(hooks.values()).toContainEqual({ nodeId, projectId: focusedProject });
+    expect(started).toHaveBeenCalledWith(nodeId, startedThread);
+    expect(consume).toHaveBeenCalled();
+  });
   it("preserves the original instruction and sends a typed provider/model answer", async () => {
     const modelCatalog: CirceMeshCatalog = {
       ...catalog,

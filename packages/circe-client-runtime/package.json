@@ -27,6 +27,10 @@
       "types": "./src/circe/routeGrounding.ts",
       "default": "./src/circe/routeGrounding.ts"
     },
+    "./circe/planPresentation": {
+      "types": "./src/circe/planPresentation.ts",
+      "default": "./src/circe/planPresentation.ts"
+    },
     "./circe/liveVoice": {
       "types": "./src/circe/liveVoice.ts",
       "default": "./src/circe/liveVoice.ts"

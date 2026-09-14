@@ -96,6 +96,17 @@ export const CirceSemanticSourceSpan = Schema.Struct({
 });
 export type CirceSemanticSourceSpan = typeof CirceSemanticSourceSpan.Type;
 
+/**
+ * The exact UTF-16 clause range for one step of a compound turn. The host
+ * derives that step's instruction from this slice, so no model wording ever
+ * dispatches. Offsets are validated against the original transcript.
+ */
+export const CirceSemanticClauseSpan = Schema.Struct({
+  start: Schema.Int,
+  end: Schema.Int,
+});
+export type CirceSemanticClauseSpan = typeof CirceSemanticClauseSpan.Type;
+
 export const CirceSemanticRole = Schema.Literals([
   "destination",
   "task",
@@ -161,6 +172,12 @@ export type CirceSemanticStepAction = typeof CirceSemanticStepAction.Type;
 export const CirceSemanticStep = Schema.Struct({
   action: CirceSemanticStepAction,
   refs: Schema.Array(CirceSemanticRef),
+  /**
+   * The exact UTF-16 range of this step's own clause in the original
+   * transcript. It scopes the derived instruction so a compound turn never
+   * hands one step's wording to another. A single command omits it.
+   */
+  sourceSpan: Schema.optional(CirceSemanticClauseSpan),
   model: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
   effort: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
   answer: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(400))),
@@ -181,9 +198,13 @@ export const CirceSemanticProposal = Schema.Struct({
   ),
   /**
    * Ordered, independent commands for one turn. Present only for `sequence`,
-   * bounded, and executed in order by the host. Steps never nest.
+   * bounded, and executed in order by the host. Steps never nest. A supervisor
+   * that mirrors the documented shape may send an explicit null for a
+   * single-command turn; the host normalizes it to absent.
    */
-  steps: Schema.optional(Schema.Array(CirceSemanticStep).check(Schema.isMaxLength(4))),
+  steps: Schema.optional(
+    Schema.NullOr(Schema.Array(CirceSemanticStep).check(Schema.isMaxLength(4))),
+  ),
 });
 export type CirceSemanticProposal = typeof CirceSemanticProposal.Type;
 
@@ -422,6 +443,8 @@ export const CirceExecutionPlanStep = Schema.Struct({
   message: TrimmedNonEmptyString.check(Schema.isMaxLength(400)),
   threadId: Schema.optional(ThreadId),
   projectId: Schema.optional(ProjectId),
+  /** Exact node-qualified identity for a focus or started step. */
+  taskRef: Schema.optional(CirceTaskRef),
 });
 export type CirceExecutionPlanStep = typeof CirceExecutionPlanStep.Type;
 
@@ -583,10 +606,23 @@ export const CirceProjectClarificationFrame = Schema.Struct({
 export type CirceProjectClarificationFrame = typeof CirceProjectClarificationFrame.Type;
 
 /**
+ * A typed identity a deterministic answer pinned for one step of a paused
+ * plan. Persisted so a later pause cannot re-ask a question the user already
+ * answered, and applied only to that step.
+ */
+export const CircePlanFrameStepBinding = Schema.Struct({
+  /** Index into the frame's `steps`. */
+  index: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  confirmedTaskId: Schema.optional(ThreadId),
+  confirmedProjectId: Schema.optional(ProjectId),
+});
+export type CircePlanFrameStepBinding = typeof CircePlanFrameStepBinding.Type;
+
+/**
  * A multi-command turn paused at the step that needs an answer. It keeps the
- * remaining ordered steps and the question, so the answer continues the plan
- * at that step instead of restarting it. Already-run steps are never in the
- * frame, so a resume can never repeat them.
+ * unexecuted ordered steps and the question, so the answer continues the plan
+ * at that step instead of restarting it. Steps that already dispatched are
+ * never in the frame, so a resume can never repeat them.
  */
 export const CircePlanClarificationFrame = Schema.Struct({
   // See CirceTaskClarificationFrame.frameId: identity for exact-reply binding.
@@ -601,8 +637,41 @@ export const CircePlanClarificationFrame = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   requestMetadata: Schema.optional(CirceRequestMetadata),
   expectedReply: Schema.optional(Schema.NullOr(CirceExpectedReply)),
-  /** Remaining proposal steps, starting with the one awaiting the answer. */
+  /**
+   * Full ordered proposal for the turn. A validation pause keeps every
+   * unexecuted step, including the prefix that never dispatched, so the answer
+   * resumes at `pendingIndex` without losing work. A dispatch pause keeps only
+   * the steps that have not run yet.
+   */
   steps: Schema.Array(CirceSemanticStep).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
+  /** Index into `steps` of the step the answer resolves. Absent means the first step. */
+  pendingIndex: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  /**
+   * Absolute position of `steps[0]` in the original plan. Keeps per-step
+   * request ids unique when a resume dispatches a later suffix.
+   */
+  firstIndex: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  /**
+   * Destructive steps resolved during validation, keyed by their index into
+   * `steps`. Confirming executes exactly these node-qualified identities, so a
+   * confirmation can never be retargeted by context that changed while the
+   * question was pending.
+   */
+  destructiveTargets: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        index: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+        taskRef: CirceTaskRef,
+      }),
+    ).check(Schema.isMaxLength(4)),
+  ),
+  /**
+   * Typed identities already resolved for earlier steps of this plan. They are
+   * re-applied on resume so a second pause never re-asks an answered question.
+   */
+  stepBindings: Schema.optional(
+    Schema.Array(CircePlanFrameStepBinding).check(Schema.isMaxLength(4)),
+  ),
   /**
    * What the paused plan needs: a project, a task, a provider/model, or a
    * yes/no confirmation before a destructive step runs.

@@ -564,6 +564,46 @@ describe("Circe multi-command execution", () => {
       }),
     ).toThrow();
   });
+
+  it("keeps the node-qualified task identity on focus and started steps", () => {
+    expect(
+      decodeExecutionResult({
+        status: "plan",
+        message: "Switched to Beacon. Here are your projects.",
+        steps: [
+          {
+            action: "focused",
+            status: "acknowledged",
+            message: "Switched to Beacon.",
+            projectId: "project-2",
+            taskRef: { executionNodeId: "node-1", threadId: "thread-1" },
+          },
+          { action: "projects-listed", status: "acknowledged", message: "Two projects." },
+        ],
+      }),
+    ).toMatchObject({
+      status: "plan",
+      steps: [
+        { taskRef: { executionNodeId: "node-1", threadId: "thread-1" } },
+        { action: "projects-listed" },
+      ],
+    });
+  });
+
+  it("accepts an explicit null steps on a single-command proposal", () => {
+    expect(
+      decodeProposal({
+        action: "list-projects",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        lookup: null,
+        website: null,
+        steps: null,
+      }),
+    ).toMatchObject({ action: "list-projects" });
+  });
 });
 
 describe("Circe plan clarification frame", () => {
@@ -602,5 +642,40 @@ describe("Circe plan clarification frame", () => {
         },
       }),
     ).toThrow();
+  });
+
+  it("carries the pending index and pinned destructive targets", () => {
+    expect(
+      decodePendingInteraction({
+        kind: "plan",
+        frame: {
+          frameId: "frame-2",
+          originalUtterance: "Stop the current task, then list my projects.",
+          originProjectId: "project-1",
+          originNodeId: "node-1",
+          steps: [
+            { action: "stop", refs: [], model: null, effort: null, answer: null },
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+          ],
+          pendingIndex: 0,
+          firstIndex: 0,
+          destructiveTargets: [
+            { index: 0, taskRef: { executionNodeId: "node-1", threadId: "thread-1" } },
+          ],
+          stepBindings: [{ index: 1, confirmedProjectId: "project-2" }],
+          clarification: "confirm",
+          prompt: 'This turn includes stopping a task. Say "confirm" to run all 2 steps.',
+          createdAt: "2026-08-12T00:00:00.000Z",
+          expiresAt: "2026-08-12T00:05:00.000Z",
+        },
+      }),
+    ).toMatchObject({
+      kind: "plan",
+      frame: {
+        pendingIndex: 0,
+        destructiveTargets: [{ index: 0, taskRef: { threadId: "thread-1" } }],
+        stepBindings: [{ index: 1, confirmedProjectId: "project-2" }],
+      },
+    });
   });
 });

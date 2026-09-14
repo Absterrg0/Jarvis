@@ -29,6 +29,11 @@ export type MobileCirceDraft = MobileCirceDraftBase & {
 export type MobileCirceTurn = MobileCirceDraft & {
   readonly projectRef: CirceProjectRef;
   readonly taskRef?: CirceTaskRef;
+  /**
+   * Every task this interaction started. A compound turn can start more than
+   * one; the origin presentation listener must stay until all are terminal.
+   */
+  readonly taskRefs?: ReadonlyArray<CirceTaskRef>;
   readonly contextThreadId?: ThreadId;
   readonly referenceThreadId?: ThreadId;
   readonly expectedReply?: CirceExpectedReply | null;
@@ -62,7 +67,24 @@ export function attachMobileCirceTask(
   turn: MobileCirceTurn,
   taskRef: CirceTaskRef | undefined,
 ): MobileCirceTurn {
-  return taskRef === undefined ? turn : { ...turn, taskRef };
+  return attachMobileCirceTasks(turn, taskRef === undefined ? [] : [taskRef]);
+}
+
+/** Attach every task one compound turn started, in order. */
+export function attachMobileCirceTasks(
+  turn: MobileCirceTurn,
+  taskRefs: ReadonlyArray<CirceTaskRef>,
+): MobileCirceTurn {
+  if (taskRefs.length === 0) return turn;
+  return { ...turn, taskRef: taskRefs[0], taskRefs };
+}
+
+/** Every started task on a turn, whether recorded as one ref or many. */
+export function mobileTurnTaskRefs(
+  turn: Pick<MobileCirceTurn, "taskRef" | "taskRefs">,
+): ReadonlyArray<CirceTaskRef> {
+  if (turn.taskRefs !== undefined && turn.taskRefs.length > 0) return turn.taskRefs;
+  return turn.taskRef === undefined ? [] : [turn.taskRef];
 }
 
 export type MobileCirceDeskTaskIdentity = {

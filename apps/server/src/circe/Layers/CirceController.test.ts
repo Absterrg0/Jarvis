@@ -441,6 +441,7 @@ function testSemanticIntent(prompt: string): CirceSemanticProposal {
 }
 
 const decodeTestSemanticIntent = Schema.decodeUnknownEffect(CirceSemanticProposal);
+const decodeTestSemanticProposalSync = Schema.decodeUnknownSync(CirceSemanticProposal);
 
 // The supervisor classifies direction only: replies below are proposed as
 // continuations, and the deterministic validator authorizes which live
@@ -1287,6 +1288,594 @@ describe("CirceController", () => {
         message: "Cancelled the remaining steps.",
       });
     }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("review regression: resumes a final-step clarification", () => {
+    const layer = resumePlanLayer(() => Effect.die("No execution expected"));
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const { source, proposal } = pausedPlanProposal();
+      const paused = yield* manager.execute({
+        sessionId,
+        utterance: source,
+        projectId: project.id,
+        sourceUtterance: source,
+        semanticProposal: { ...proposal, steps: proposal.steps.toReversed() },
+      });
+      expect(paused.status).toBe("needs-input");
+      const resumed = yield* manager.execute({
+        sessionId,
+        utterance: "Beacon",
+        projectId: project.id,
+      });
+      expect(resumed).toMatchObject({ status: "plan" });
+      if (resumed.status === "plan") expect(resumed.steps).toHaveLength(2);
+    }).pipe(Effect.provide(layer));
+  });
+  it.effect("review regression: preserves unexecuted prefix after clarification", () => {
+    const layer = resumePlanLayer(() => Effect.die("No execution expected"));
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const { source, proposal } = pausedPlanProposal();
+      const paused = yield* manager.execute({
+        sessionId,
+        utterance: source,
+        projectId: project.id,
+        sourceUtterance: source,
+        semanticProposal: { ...proposal, steps: [proposal.steps[1]!, ...proposal.steps] },
+      });
+      expect(paused.status).toBe("needs-input");
+      const resumed = yield* manager.execute({
+        sessionId,
+        utterance: "Beacon",
+        projectId: project.id,
+      });
+      expect(resumed.status).toBe("plan");
+      if (resumed.status === "plan") expect(resumed.steps).toHaveLength(3);
+    }).pipe(Effect.provide(layer));
+  });
+  it.effect("review regression: applies corrected model selection on resume", () => {
+    const layer = resumePlanLayer(() => Effect.succeed({ sequence: 1 }));
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const paused = yield* manager.execute({
+        sessionId,
+        utterance: "Create a new task then list projects",
+        projectId: project.id,
+        modelSelection: { instanceId: codexProvider.instanceId, model: "nonexistent" },
+        semanticProposal: {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            { action: "start", refs: [], model: null, effort: null, answer: null },
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+          ],
+        },
+      });
+      expect(paused.status).toBe("needs-input");
+      const resumed = yield* manager.execute({
+        sessionId,
+        utterance: "Use Sol",
+        projectId: project.id,
+        modelSelection: { instanceId: codexProvider.instanceId, model: "gpt-5.6-sol" },
+      });
+      expect(resumed).toMatchObject({ status: "plan" });
+    }).pipe(Effect.provide(layer));
+  });
+  it.effect("review regression: gives each created task only its own instruction", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const layer = TestCirceControllerLive.pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const utterance =
+        "Create a new task to fix auth, then create a new task to add release notes.";
+      const firstEnd = utterance.indexOf(", then");
+      const secondStart = firstEnd + ", then ".length;
+      const result = yield* manager.execute({
+        sessionId,
+        projectId: project.id,
+        utterance,
+        modelSelection: { instanceId: codexProvider.instanceId, model: "gpt-5.6-sol" },
+        semanticProposal: {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            {
+              action: "start",
+              refs: [],
+              sourceSpan: { start: 0, end: firstEnd },
+              model: null,
+              effort: null,
+              answer: null,
+            },
+            {
+              action: "start",
+              refs: [],
+              sourceSpan: { start: secondStart, end: utterance.length },
+              model: null,
+              effort: null,
+              answer: null,
+            },
+          ],
+        },
+      });
+      expect(result.status).toBe("plan");
+      const starts = commands.filter((c) => c.type === "thread.turn.start");
+      expect(starts).toHaveLength(2);
+      expect(starts[0]?.message.text).not.toContain("release notes");
+      expect(starts[1]?.message.text).not.toContain("fix auth");
+      expect(starts[0]?.message.text).toContain("fix auth");
+      expect(starts[1]?.message.text).toContain("release notes");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("scopes clauses against the verbatim source, not the trimmed utterance", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const layer = TestCirceControllerLive.pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      // Verbatim source keeps surrounding whitespace; the utterance is trimmed.
+      // Spans and clauses index the source, so the plan must still scope right.
+      const source =
+        " Create a new task to fix auth, then create a new task to add release notes. ";
+      const firstEnd = source.indexOf(", then");
+      const secondStart = firstEnd + ", then ".length;
+      const result = yield* manager.execute({
+        sessionId,
+        projectId: project.id,
+        utterance: source.trim(),
+        sourceUtterance: source,
+        modelSelection: { instanceId: codexProvider.instanceId, model: "gpt-5.6-sol" },
+        semanticProposal: {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            {
+              action: "start",
+              refs: [],
+              sourceSpan: { start: 0, end: firstEnd },
+              model: null,
+              effort: null,
+              answer: null,
+            },
+            {
+              action: "start",
+              refs: [],
+              sourceSpan: { start: secondStart, end: source.length },
+              model: null,
+              effort: null,
+              answer: null,
+            },
+          ],
+        },
+      });
+      expect(result.status).toBe("plan");
+      const starts = commands.filter((c) => c.type === "thread.turn.start");
+      expect(starts).toHaveLength(2);
+      expect(starts[0]?.message.text).toContain("fix auth");
+      expect(starts[1]?.message.text).toContain("release notes");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("review regression: preserves the task chosen for an ambiguous plan", () => {
+    const executionNodeId = EnvironmentId.make("review-node");
+    const threads = [1, 2].map((n) => ({
+      ...sourceThread,
+      id: ThreadId.make(`review-auth-${n}`),
+      title: "Authentication",
+    }));
+    const layer = TestCirceControllerLive.pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: threads.map((t) => ({
+            threadId: t.id,
+            taskRef: { executionNodeId, threadId: t.id },
+            projectRef: { nodeId: executionNodeId, projectId: t.projectId },
+          })),
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: (id) =>
+            Effect.succeed(Option.fromNullishOr(threads.find((t) => t.id === id))),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: () => Effect.die("Status plus list must not dispatch"),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const source = "Check Authentication status, then list my projects.";
+      const at = source.indexOf("Authentication");
+      const paused = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        projectId: project.id,
+        utterance: source,
+        sourceUtterance: source,
+        semanticProposal: {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            {
+              action: "status",
+              refs: [
+                {
+                  role: "task",
+                  value: "Authentication",
+                  span: { start: at, end: at + 14, text: "Authentication" },
+                },
+              ],
+              model: null,
+              effort: null,
+              answer: null,
+            },
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+          ],
+        },
+      });
+      expect(paused.status).toBe("needs-input");
+      if (paused.status !== "needs-input") return;
+      expect(paused.taskClarification?.candidates).toHaveLength(2);
+      const resumed = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "first",
+        projectId: project.id,
+        clarificationFrameId: paused.clarificationFrameId,
+      });
+      expect(resumed).toMatchObject({ status: "plan" });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("review regression: keeps an answered step across a second clarification", () => {
+    const executionNodeId = EnvironmentId.make("review-node");
+    const threads = [1, 2].map((n) => ({
+      ...sourceThread,
+      id: ThreadId.make(`review-auth-${n}`),
+      title: "Authentication",
+    }));
+    const layer = TestCirceControllerLive.pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: threads.map((t) => ({
+            threadId: t.id,
+            taskRef: { executionNodeId, threadId: t.id },
+            projectRef: { nodeId: executionNodeId, projectId: t.projectId },
+          })),
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: (id) =>
+            Effect.succeed(Option.fromNullishOr(threads.find((t) => t.id === id))),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: () => Effect.die("Status plus list must not dispatch"),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const source =
+        "Check Authentication status, then check Authentication status, then list my projects.";
+      const statusStep = (start: number) => ({
+        action: "status" as const,
+        refs: [
+          {
+            role: "task" as const,
+            value: "Authentication",
+            span: { start, end: start + "Authentication".length, text: "Authentication" },
+          },
+        ],
+        model: null,
+        effort: null,
+        answer: null,
+      });
+      const firstAt = source.indexOf("Authentication");
+      const secondAt = source.indexOf("Authentication", firstAt + "Authentication".length);
+      const first = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        projectId: project.id,
+        utterance: source,
+        sourceUtterance: source,
+        semanticProposal: {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            statusStep(firstAt),
+            statusStep(secondAt),
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+          ],
+        },
+      });
+      expect(first.status).toBe("needs-input");
+      if (first.status !== "needs-input") return;
+      const second = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "first",
+        projectId: project.id,
+        clarificationFrameId: first.clarificationFrameId,
+      });
+      // The second ambiguous step still needs its own answer.
+      expect(second.status).toBe("needs-input");
+      if (second.status !== "needs-input") return;
+      // The first answer must survive: without the persisted binding this
+      // resume re-asks the first step instead of finishing the plan.
+      const third = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "second",
+        projectId: project.id,
+        clarificationFrameId: second.clarificationFrameId,
+      });
+      expect(third).toMatchObject({ status: "plan" });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("review regression: binds destructive confirmation to its original task", () => {
+    const executionNodeId = EnvironmentId.make("review-node");
+    const threads = [1, 2].map((n) => ({
+      ...sourceThread,
+      id: ThreadId.make(`review-auth-${n}`),
+      title: `Task ${n}`,
+    }));
+    const stopped: string[] = [];
+    const layer = TestCirceControllerLive.pipe(
+      Layer.provideMerge(
+        Layer.mock(CirceFollowUpQueue)({
+          enqueue: () => Effect.void,
+          claimNext: () => Effect.succeed(Option.none()),
+          markDispatched: () => Effect.void,
+          reconcileAccepted: () => Effect.void,
+          release: () => Effect.void,
+          resetRunning: () => Effect.void,
+          statusOf: () => Effect.succeed(Option.none()),
+          cancelPending: (id) =>
+            Effect.sync(() => {
+              stopped.push(id);
+              return 0;
+            }),
+          listPendingThreadIds: () => Effect.succeed([]),
+          pendingCount: () => Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: threads.map((t) => ({
+            threadId: t.id,
+            taskRef: { executionNodeId, threadId: t.id },
+            projectRef: { nodeId: executionNodeId, projectId: t.projectId },
+          })),
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: (id) =>
+            Effect.succeed(Option.fromNullishOr(threads.find((t) => t.id === id))),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: () => Effect.die("Status plus list must not dispatch"),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const source = "Stop the current task, then list my projects.";
+      const paused = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        projectId: project.id,
+        utterance: source,
+        sourceUtterance: source,
+        semanticProposal: {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            { action: "stop", refs: [], model: null, effort: null, answer: null },
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+          ],
+        },
+      });
+      expect(paused.status).toBe("needs-input");
+      if (paused.status !== "needs-input") return;
+      expect(paused.prompt).toContain("stopping a task");
+      const resumed = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "confirm",
+        projectId: project.id,
+        contextThreadId: threads[1]!.id,
+        clarificationFrameId: paused.clarificationFrameId,
+      });
+      expect(resumed).toMatchObject({ status: "plan" });
+      expect(stopped).toEqual([threads[0]!.id]);
+    }).pipe(Effect.provide(layer));
+  });
+  it("review regression: decodes the documented fast supervisor single-command shape", () => {
+    expect(() =>
+      decodeTestSemanticProposalSync({
+        action: "list-projects",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        lookup: null,
+        website: null,
+        steps: null,
+      }),
+    ).not.toThrow();
   });
 
   it.effect("answers a general question without creating project work", () => {

@@ -1039,6 +1039,31 @@ function resolveNavigationTask(
   };
 }
 
+/**
+ * A typed task identity that no longer names a live candidate. The Director
+ * never silently substitutes another task: the question is re-asked against
+ * the current bounded catalog.
+ */
+function staleControlTaskInput(input: CirceCommandContext): CirceCommandNeedsInput {
+  const candidates = commandTaskCandidates(input).slice(0, 5);
+  const choices = candidates.map(
+    (task, index) => `${index + 1}. ${task.title} — ${task.state}: ${task.objective}`,
+  );
+  return {
+    status: "needs-input",
+    reason: "control-target-required",
+    prompt: "That task is no longer available. Choose a current task and try again.",
+    choices,
+    taskClarification: {
+      candidates: candidates.map((task, index) => ({
+        threadId: task.threadId,
+        ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
+        label: choices[index]!,
+      })),
+    },
+  };
+}
+
 function resolveCommandTask(
   input: CirceCommandContext,
   entity: string | null,
@@ -1047,6 +1072,10 @@ function resolveCommandTask(
   if (input.confirmedTaskId !== undefined) {
     const confirmed = candidates.find((task) => task.threadId === input.confirmedTaskId);
     if (confirmed !== undefined) return confirmed;
+    // A typed confirmation outranks any proposal citation. When the exact
+    // identity no longer names a candidate it must never fall through to
+    // another task; re-ask against the current catalog instead.
+    return candidates.length === 0 ? needsFocus() : staleControlTaskInput(input);
   }
   if (entity === null) return candidates[0] ?? needsFocus();
   const matches = matchItemsByNames(candidates, (task) => [task.title, task.objective], entity);
@@ -1787,6 +1816,71 @@ function interpretCirceCommandProposal(
 }
 
 /**
+ * Identities a deterministic answer pinned for one step of a resumed plan.
+ * Applied only to that step's context, so a task or project chosen for one
+ * command never retargets an unrelated later command.
+ */
+export type CircePlanStepBinding = Partial<
+  Pick<CirceCommandContext, "confirmedTaskId" | "confirmedProjectId">
+>;
+
+/**
+ * Scope a step's refs to its own clause. Returns the clause slice and the refs
+ * rebased into it, or null when the step has no usable sourceSpan (absent, out
+ * of bounds, empty, or cutting a cited ref). Null means the caller keeps the
+ * whole-turn behavior instead of inventing or dropping wording.
+ */
+export function scopeCirceStepClause(
+  source: string,
+  step: Pick<CirceSemanticStep, "refs" | "sourceSpan">,
+): { readonly clause: string; readonly refs: CirceSemanticStep["refs"] } | null {
+  const span = step.sourceSpan;
+  if (span === undefined) return null;
+  if (
+    !Number.isInteger(span.start) ||
+    !Number.isInteger(span.end) ||
+    span.start < 0 ||
+    span.end > source.length ||
+    span.start >= span.end
+  ) {
+    return null;
+  }
+  const clause = source.slice(span.start, span.end);
+  if (!/[\p{Letter}\p{Number}]/u.test(clause)) return null;
+  // Every ref must sit inside the clause; a span that would hide a cited ref
+  // is unusable, so fall back rather than silently drop it.
+  if (step.refs.some((ref) => ref.span.start < span.start || ref.span.end > span.end)) {
+    return null;
+  }
+  const refs = step.refs.map((ref) => ({
+    ...ref,
+    span: { ...ref.span, start: ref.span.start - span.start, end: ref.span.end - span.start },
+  }));
+  return { clause, refs };
+}
+
+/**
+ * Scope one step to its own clause when it cites a valid `sourceSpan`. The
+ * clause slice becomes that step's instruction source and its refs are rebased
+ * into the slice, so a compound turn never runs one step with another step's
+ * wording.
+ */
+function resolveStepClause(
+  prepared: Extract<PreparedCirceSemanticTurn, { status: "ready" }>,
+  step: CirceSemanticStep,
+): {
+  readonly prepared: Extract<PreparedCirceSemanticTurn, { status: "ready" }>;
+  readonly refs: CirceSemanticStep["refs"];
+} | null {
+  const scoped = scopeCirceStepClause(prepared.sourceUtterance, step);
+  if (scoped === null) return null;
+  return {
+    prepared: { status: "ready", utterance: scoped.clause, sourceUtterance: scoped.clause },
+    refs: scoped.refs,
+  };
+}
+
+/**
  * Validate every step of a multi-command turn against the same catalogs and
  * typed state the ordinary Director uses. The host executes nothing until
  * all steps resolve to commands, so an ambiguous or unknown later step can
@@ -1796,6 +1890,12 @@ export function interpretCircePlan(
   input: CirceCommandContext,
   prepared: Extract<PreparedCirceSemanticTurn, { status: "ready" }>,
   steps: ReadonlyArray<CirceSemanticStep>,
+  options?: {
+    /** A resumed remainder may legitimately hold a single step. */
+    readonly allowSingleStep?: boolean;
+    /** Per-step identities pinned by a deterministic clarification answer. */
+    readonly bindings?: ReadonlyMap<number, CircePlanStepBinding>;
+  },
 ):
   | { readonly status: "plan"; readonly commands: ReadonlyArray<CirceCommand> }
   | {
@@ -1804,7 +1904,7 @@ export function interpretCircePlan(
       readonly index: number;
       readonly needsInput: CirceCommandNeedsInput;
     } {
-  if (steps.length < 2) {
+  if (steps.length < 2 && options?.allowSingleStep !== true) {
     return {
       status: "needs-input",
       index: 0,
@@ -1818,9 +1918,12 @@ export function interpretCircePlan(
   }
   const commands: Array<CirceCommand> = [];
   for (const [index, step] of steps.entries()) {
-    const interpretation = interpretCirceCommandProposal(input, prepared, {
+    const binding = options?.bindings?.get(index);
+    const stepInput = binding === undefined ? input : { ...input, ...binding };
+    const clause = resolveStepClause(prepared, step);
+    const interpretation = interpretCirceCommandProposal(stepInput, clause?.prepared ?? prepared, {
       action: step.action,
-      refs: step.refs,
+      refs: clause?.refs ?? step.refs,
       model: step.model,
       effort: step.effort,
       answer: step.answer,

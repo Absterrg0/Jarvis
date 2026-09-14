@@ -17,6 +17,7 @@ import {
   resolveCirceLiveContextTask,
   type CirceClientContextTask,
 } from "@circe/client-runtime/circe/commandContext";
+import { circePlanTargetOutcomes } from "@circe/client-runtime/circe/planPresentation";
 import {
   formatCirceVoiceDispatching,
   formatCirceVoiceReceipt,
@@ -2566,13 +2567,89 @@ export function CirceVoiceRuntime({
           return;
         }
         if (result.status === "plan") {
-          // A validated multi-command turn already ran in order. Speak the
-          // combined, server-composed summary; the steps were host-decided.
+          // A validated multi-command turn already ran in order. Apply every
+          // step's focus or start in order — the same state transitions an
+          // ordinary single result performs — then speak the combined summary.
           voiceSubmissionSnapshotsRef.current.delete(voiceSubmission.captureId);
           if (pendingVoiceClarification?.captureId !== undefined) {
             voiceSubmissionSnapshotsRef.current.delete(pendingVoiceClarification.captureId);
           }
           if (pendingVoiceClarification !== null) voiceClarificationRef.current = null;
+          const focusDeskIdentity = async (
+            nodeId: EnvironmentId,
+            threadId: ThreadId,
+            taskRef: CirceTaskRef,
+          ): Promise<{ title: string | undefined; pendingReply: CirceTaskPendingReply | null }> => {
+            try {
+              const deskResult = await getTaskDesk({ nodeId });
+              if (deskResult._tag === "Success") {
+                const candidates =
+                  deskResult.value.focusedTask === null
+                    ? deskResult.value.recentTasks
+                    : [deskResult.value.focusedTask, ...deskResult.value.recentTasks];
+                const match = candidates.find(
+                  (task) =>
+                    task.taskRef.threadId === taskRef.threadId &&
+                    task.taskRef.executionNodeId === taskRef.executionNodeId,
+                );
+                if (match !== undefined) {
+                  return { title: match.title, pendingReply: match.pendingReply ?? null };
+                }
+              }
+            } catch {
+              return { title: undefined, pendingReply: null };
+            }
+            return { title: undefined, pendingReply: null };
+          };
+          for (const outcome of circePlanTargetOutcomes(
+            result.steps,
+            submissionTarget.projectRef,
+          )) {
+            if (outcome.kind === "start") {
+              userClearedTargetRef.current = false;
+              setSelectedProjectRef(outcome.projectRef);
+              const identity = await focusDeskIdentity(
+                outcome.projectRef.nodeId,
+                outcome.threadId,
+                outcome.taskRef,
+              );
+              setSelectedTask(
+                toSelectedTask({
+                  projectRef: outcome.projectRef,
+                  threadId: outcome.threadId,
+                  title: identity.title,
+                  taskRef: outcome.taskRef,
+                  pendingReply: identity.pendingReply,
+                }),
+              );
+              setTargetVersion((version) => version + 1);
+              await onThreadStarted(outcome.projectRef.nodeId, outcome.threadId);
+              continue;
+            }
+            userClearedTargetRef.current = false;
+            if (outcome.kind === "project") {
+              setSelectedTask(null);
+              setSelectedProjectRef(outcome.projectRef);
+              setTargetVersion((version) => version + 1);
+              continue;
+            }
+            const identity = await focusDeskIdentity(
+              outcome.projectRef.nodeId,
+              outcome.taskRef.threadId,
+              outcome.taskRef,
+            );
+            setSelectedProjectRef(outcome.projectRef);
+            setSelectedTask(
+              toSelectedTask({
+                projectRef: outcome.projectRef,
+                threadId: outcome.taskRef.threadId,
+                title: identity.title,
+                taskRef: outcome.taskRef,
+                pendingReply: identity.pendingReply,
+              }),
+            );
+            setTargetVersion((version) => version + 1);
+          }
           const feedback = circeExecutionFeedback(result);
           emitFeedback({
             text: feedback.speech,
