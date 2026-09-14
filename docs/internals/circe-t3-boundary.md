@@ -64,7 +64,8 @@ are the smallest honest integration point.
   client. Delegated utterances reuse the ordinary submission queue. The supervisor proposes bounded
   `lookup` and `open-website` actions alongside the task actions: the model names the action, the host
   validates the place and the website target against the transcript (an allowlisted shortcut or an
-  address the user actually spoke), and no provider thread is created. Lookups run on the node; website launches belong to the originating
+  address the user actually spoke), refuses quick actions that carry project or task refs as
+  compounds, and no provider thread is created. Lookups run on the node; website launches belong to the originating
   client, while node desktop tools still act on their own node. All other work uses ordinary grounding
   and provider execution. Headless has no voice or quick-lookup capability.
 - `apps/server/src/circe/` owns the server-side Circe adapters and composition. The generic

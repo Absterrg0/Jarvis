@@ -14,7 +14,7 @@ import * as Effect from "effect/Effect";
 
 import {
   circeRpcScopeExtension,
-  groundCirceWebsiteProposal,
+  groundCirceQuickActionProposal,
   runCirceVoiceLiveStart,
   toCirceExecuteClientError,
   toCirceInterpretClientError,
@@ -177,17 +177,51 @@ describe("Circe WebSocket RPC extension", () => {
       answer: null,
       website,
     });
-    expect(groundCirceWebsiteProposal(proposal("YouTube"), "Open YouTube")).toMatchObject({
+    expect(groundCirceQuickActionProposal(proposal("YouTube"), "Open YouTube")).toMatchObject({
       action: "open-website",
       website: "YouTube",
     });
     expect(
-      groundCirceWebsiteProposal(proposal("https://example.com"), "open https://example.com"),
+      groundCirceQuickActionProposal(proposal("https://example.com"), "open https://example.com"),
     ).toMatchObject({ action: "open-website", website: "https://example.com" });
     // Regression: an ungrounded target never reaches a client launcher.
     expect(
-      groundCirceWebsiteProposal(proposal("https://evil.example"), "Open YouTube"),
+      groundCirceQuickActionProposal(proposal("https://evil.example"), "Open YouTube"),
     ).toMatchObject({ action: "unsupported" });
+  });
+
+  it("downgrades a quick action that carries refs instead of dropping work", () => {
+    const ref = {
+      span: { start: 0, end: 7, text: "YouTube" },
+      role: "destination" as const,
+      value: "youtube",
+    };
+    expect(
+      groundCirceQuickActionProposal(
+        {
+          action: "open-website" as const,
+          refs: [ref],
+          model: null,
+          effort: null,
+          answer: null,
+          website: "YouTube",
+        },
+        "Open YouTube and find a video",
+      ),
+    ).toMatchObject({ action: "unsupported", refs: [] });
+    expect(
+      groundCirceQuickActionProposal(
+        {
+          action: "lookup" as const,
+          refs: [ref],
+          model: null,
+          effort: null,
+          answer: null,
+          lookup: { kind: "weather" as const, location: "Ahmedabad", day: "now" as const },
+        },
+        "Weather in Ahmedabad and start the auth task",
+      ),
+    ).toMatchObject({ action: "unsupported", refs: [] });
   });
 
   it("recognizes typed errors that crossed a serialization boundary", () => {

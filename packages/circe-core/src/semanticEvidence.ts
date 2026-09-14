@@ -74,8 +74,9 @@ export const CirceSemanticProposalAction = Schema.Literals([
   "lookup",
   /**
    * Open a named website or web URL on the device where the user asked. The
-   * host validates the target against the shared allowlist and the originating
-   * client performs the launch; a node browser is never the destination.
+   * host only allows an allowlisted shortcut or an address the user actually
+   * spoke, and the originating client performs the launch; a node browser is
+   * never the destination.
    */
   "open-website",
   /**

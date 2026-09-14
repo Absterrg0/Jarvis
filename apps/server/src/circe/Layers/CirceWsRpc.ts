@@ -153,14 +153,20 @@ export function toCirceInterpretClientError(error: unknown): CirceExecutionError
 }
 
 /**
- * The host authorizes a proposed website launch before any client sees it.
- * A target that cannot be grounded in the user's own utterance is downgraded
- * to `unsupported`, so a hallucinated alias or URL never reaches a launcher.
+ * The host authorizes a proposed quick action before any client sees it.
+ * A website target that cannot be grounded in the user's own utterance is
+ * downgraded to `unsupported`, so a hallucinated alias or URL never reaches
+ * a launcher. A quick action that carries project or task refs is a compound
+ * the wire format cannot express, so it is downgraded too: the Director
+ * answers it loudly instead of a client silently dropping the extra work.
  */
-export function groundCirceWebsiteProposal(
+export function groundCirceQuickActionProposal(
   proposal: CirceSemanticProposal,
   sourceUtterance: string,
 ): CirceSemanticProposal {
+  if (proposal.action !== "open-website" && proposal.action !== "lookup") return proposal;
+  if (proposal.refs.length > 0)
+    return { action: "unsupported", refs: [], model: null, effort: null, answer: null };
   if (proposal.action !== "open-website") return proposal;
   return typeof proposal.website === "string" &&
     circeWebsiteUrl(proposal.website, sourceUtterance) !== null
@@ -383,7 +389,7 @@ export const CirceWsRpcHandlerExtensionLive = Layer.effect(
                           }),
                         }),
                   });
-                  return groundCirceWebsiteProposal(proposal, input.utterance);
+                  return groundCirceQuickActionProposal(proposal, input.utterance);
                 }).pipe(
                   Effect.tapCause((cause) =>
                     Effect.logWarning("Circe interpret failed", {

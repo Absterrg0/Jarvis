@@ -87,10 +87,7 @@ export const runCirceQuickLookup = (
         message: "Quick assistant lookups need a Full or Controller node.",
       };
     const input = yield* decodeLookupInput(rawInput);
-    if (
-      input.sourceUtterance !== undefined &&
-      !placeMentioned(input.sourceUtterance, input.location)
-    ) {
+    if (!placeMentioned(input.sourceUtterance, input.location)) {
       return {
         status: "unavailable",
         message:
@@ -132,9 +129,10 @@ export const runCirceQuickLookup = (
     }
     const label = placeLabel(selected);
     if (input.kind === "time") {
-      // This tool reports the current local time only. A future day cannot be
-      // answered, so refuse it instead of returning the wrong clock.
-      if (input.day !== "now")
+      // This tool reports the current local time only. "Today" asks for the
+      // same clock; a future day cannot be answered, so refuse it instead of
+      // returning the wrong time.
+      if (input.day !== "now" && input.day !== "today")
         return {
           status: "unavailable",
           message: "I can only tell you the current local time. Ask again with the place.",

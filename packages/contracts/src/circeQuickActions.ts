@@ -7,10 +7,11 @@ export const CirceQuickLookupInput = Schema.Struct({
   location: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
   day: Schema.Literals(["now", "today", "tomorrow"]),
   /**
-   * The verbatim utterance the location was copied from. The node refuses a
-   * place that does not appear here, so a model can never invent a location.
+   * The verbatim utterance the location was copied from. Required: the node
+   * refuses a place that does not appear here, so a model can never invent a
+   * location, including by omitting this field.
    */
-  sourceUtterance: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(16_000))),
+  sourceUtterance: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
 });
 export type CirceQuickLookupInput = typeof CirceQuickLookupInput.Type;
 

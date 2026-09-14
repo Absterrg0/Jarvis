@@ -42,7 +42,12 @@ function fixture(places = [ahmedabad], weather: unknown = forecast, status = 200
   );
   return { calls, http };
 }
-const input = { kind: "weather", location: "Ahmedabad", day: "now" } as const;
+const input = {
+  kind: "weather",
+  location: "Ahmedabad",
+  day: "now",
+  sourceUtterance: "What's the weather in Ahmedabad?",
+} as const;
 
 describe("Circe quick lookup", () => {
   it.effect("fetches current weather from bounded APIs without provider services", () =>
@@ -89,7 +94,12 @@ describe("Circe quick lookup", () => {
     Effect.gen(function* () {
       const { http } = fixture([ahmedabad, { ...ahmedabad, id: 2, country: "Elsewhere" }]);
       const result = yield* runCirceQuickLookup(
-        { ...input, location: "Ahmedabad, Gujarat, India", day: "tomorrow" },
+        {
+          ...input,
+          location: "Ahmedabad, Gujarat, India",
+          day: "tomorrow",
+          sourceUtterance: "Weather in Ahmedabad, Gujarat, India tomorrow.",
+        },
         "full",
       ).pipe(Effect.provideService(HttpClient.HttpClient, http));
       expect(result.message).toContain("25 to 33°C");
@@ -99,9 +109,26 @@ describe("Circe quick lookup", () => {
   it.effect("reports a place's local time without a weather request", () =>
     Effect.gen(function* () {
       const { http, calls } = fixture();
-      const result = yield* runCirceQuickLookup({ ...input, kind: "time" }, "full").pipe(
-        Effect.provideService(HttpClient.HttpClient, http),
-      );
+      const result = yield* runCirceQuickLookup(
+        { ...input, kind: "time", sourceUtterance: "What time is it in Ahmedabad?" },
+        "full",
+      ).pipe(Effect.provideService(HttpClient.HttpClient, http));
+      expect(result.status).toBe("answer");
+      expect(calls).toHaveLength(1);
+    }),
+  );
+  it.effect("answers a time request phrased with today on the current clock", () =>
+    Effect.gen(function* () {
+      const { http, calls } = fixture();
+      const result = yield* runCirceQuickLookup(
+        {
+          ...input,
+          kind: "time",
+          day: "today",
+          sourceUtterance: "What time is it in Ahmedabad today?",
+        },
+        "full",
+      ).pipe(Effect.provideService(HttpClient.HttpClient, http));
       expect(result.status).toBe("answer");
       expect(calls).toHaveLength(1);
     }),

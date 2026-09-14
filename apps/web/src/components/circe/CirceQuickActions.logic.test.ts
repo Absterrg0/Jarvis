@@ -24,6 +24,13 @@ describe("Circe visible website launcher", () => {
     vi.stubGlobal("window", { open: vi.fn().mockReturnValue(null) });
     expect(await openCirceWebsite("https://www.youtube.com/", source)).toBe(false);
   });
+  it("reports a throwing desktop shell as a failed launch", async () => {
+    const openExternal = vi.fn().mockRejectedValue(new Error("shell gone"));
+    const open = vi.fn();
+    vi.stubGlobal("window", { desktopBridge: { openExternal }, open });
+    await expect(openCirceWebsite("https://www.youtube.com/", source)).resolves.toBe(false);
+    expect(open).not.toHaveBeenCalled();
+  });
   it("refuses a target the user never named", async () => {
     const open = vi.fn();
     vi.stubGlobal("window", { open });
