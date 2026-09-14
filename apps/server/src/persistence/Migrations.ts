@@ -10,6 +10,8 @@
 
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -163,6 +165,56 @@ const migrationEntries = [
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
+/**
+ * A database whose recorded history disagrees with the shipped manifest belongs
+ * to another product line (upstream T3 Code, or the pre-rebrand Jarvis build).
+ * Running Circe migrations against it would collide on renumbered slots, so the
+ * runner refuses before applying anything.
+ */
+export class ForeignDatabaseError extends Schema.TaggedError<ForeignDatabaseError>()(
+  "ForeignDatabaseError",
+  {
+    migrationId: Schema.Number,
+    recordedName: Schema.String,
+    expectedName: Schema.String,
+  },
+) {
+  override get message(): string {
+    return [
+      "Refusing to migrate a database that belongs to a different product.",
+      `Migration ${this.migrationId} is recorded as "${this.recordedName}" but Circe expects "${this.expectedName}".`,
+      "Circe stores its data in a .circe directory; do not point --base-dir or T3CODE_HOME at a T3 Code or Jarvis data directory.",
+    ].join(" ");
+  }
+}
+
+const assertCirceDatabase = Effect.fn("Migrations.assertCirceDatabase")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const trackingTable = yield* sql<{ readonly name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  if (trackingTable.length === 0) {
+    return;
+  }
+  const recorded = yield* sql<{
+    readonly migration_id: number;
+    readonly name: string;
+  }>`SELECT migration_id, name FROM effect_sql_migrations`;
+  const expectedById = new Map<number, string>(migrationManifest.map(([id, name]) => [id, name]));
+  for (const row of recorded) {
+    const expected = expectedById.get(Number(row.migration_id));
+    if (expected !== undefined && expected !== row.name) {
+      return yield* Effect.die(
+        new ForeignDatabaseError({
+          migrationId: Number(row.migration_id),
+          recordedName: row.name,
+          expectedName: expected,
+        }),
+      );
+    }
+  }
+});
+
 const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
@@ -195,6 +247,7 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
+  yield* assertCirceDatabase();
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0

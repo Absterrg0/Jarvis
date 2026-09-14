@@ -105,7 +105,9 @@ export const expandHomePath = Effect.fn(function* (input: string) {
 export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
   const { join, resolve } = yield* Path.Path;
   if (!raw || raw.trim().length === 0) {
-    return join(NodeOS.homedir(), ".t3");
+    // Circe owns `.circe`. `.t3` is the separate T3 Code product's home; opening
+    // it here would run Circe migrations against another app's database.
+    return join(NodeOS.homedir(), ".circe");
   }
   return resolve(yield* expandHomePath(raw.trim()));
 });
