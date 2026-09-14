@@ -1,6 +1,12 @@
 import { isValidElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ProjectId, ThreadId, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ThreadId,
+  ProviderInstanceId,
+  circeNodeCapabilitiesForPreset,
+} from "@t3tools/contracts";
 import type { CirceMeshCatalog } from "@circe/client-runtime/circe/mesh";
 import { reactHookHarness as hooks } from "../../../../web/src/test/reactHookHarness";
 
@@ -14,6 +20,8 @@ const state = vi.hoisted(() => ({
   focus: vi.fn(),
   lookup: vi.fn(),
   converse: vi.fn(),
+  quickLookup: vi.fn(),
+  openWebsite: vi.fn(),
   cancelRequest: vi.fn(),
   save: vi.fn(),
 }));
@@ -34,6 +42,7 @@ vi.mock("react/compiler-runtime", async () => {
 });
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => crypto.randomUUID() }));
 vi.mock("react-native", () => ({
+  Linking: { openURL: (url: string) => state.openWebsite(url) },
   AppState: { currentState: "active", addEventListener: () => ({ remove: () => {} }) },
 }));
 vi.mock("@effect/atom-react", () => ({
@@ -45,7 +54,7 @@ vi.mock("../../state/preferences", () => ({
   mobilePreferencesAtom: "preferences",
   updateMobilePreferencesAtom: "save",
 }));
-vi.mock("../../state/circe", () => ({ circeEnvironment: {} }));
+vi.mock("../../state/circe", () => ({ circeEnvironment: { lookup: "quickLookup" } }));
 vi.mock("../../state/threads", () => ({ lookupThread: "lookup" }));
 vi.mock("../../state/circeMesh", () => ({
   circeMeshCatalogAtom: "catalog",
@@ -74,6 +83,7 @@ vi.mock("../../state/use-atom-command", () => ({
       | "desk"
       | "focus"
       | "lookup"
+      | "quickLookup"
       | "cancelRequest",
   ) => state[key],
 }));
@@ -800,5 +810,117 @@ describe("mobile provider request lifecycle", () => {
     await first;
     await vi.waitFor(() => expect(state.interpret).toHaveBeenCalledTimes(2));
     expect(state.converse).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("mobile assistant quick actions", () => {
+  it("opens a proposed website on the phone without a project or provider", async () => {
+    state.interpret.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        action: "open-website",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        website: "YouTube",
+      },
+    });
+    state.openWebsite.mockResolvedValue(undefined);
+    await instruction("open YouTube");
+    expect(state.openWebsite).toHaveBeenCalledWith("https://www.youtube.com/");
+    expect(state.execute).not.toHaveBeenCalled();
+  });
+  it("refuses a proposed website the user never named", async () => {
+    state.interpret.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        action: "open-website",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        website: "https://evil.example",
+      },
+    });
+    await instruction("open YouTube");
+    expect(state.openWebsite).not.toHaveBeenCalled();
+    expect(state.execute).not.toHaveBeenCalled();
+  });
+  it("routes a lookup to a lookup-capable node instead of a headless desk node", async () => {
+    const headlessId = EnvironmentId.make("vps-headless");
+    const fullId = EnvironmentId.make("laptop-full");
+    state.catalog = {
+      nodes: [
+        {
+          nodeId: headlessId,
+          label: "VPS",
+          reachability: "online",
+          capabilities: circeNodeCapabilitiesForPreset("headless"),
+        },
+        {
+          nodeId: fullId,
+          label: "Laptop",
+          reachability: "online",
+          capabilities: circeNodeCapabilitiesForPreset("full"),
+        },
+      ],
+      projects: [],
+      providers: [],
+    };
+    state.interpret.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        action: "lookup",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        lookup: { kind: "weather", location: "Ahmedabad", day: "now" },
+      },
+    });
+    state.quickLookup.mockResolvedValue({
+      _tag: "Success",
+      value: { status: "answer", message: "Ahmedabad: 31°C.", source: "https://open-meteo.com/" },
+    });
+    await instruction("weather in Ahmedabad");
+    expect(state.quickLookup).toHaveBeenCalledWith({
+      environmentId: fullId,
+      input: {
+        kind: "weather",
+        location: "Ahmedabad",
+        day: "now",
+        sourceUtterance: "weather in Ahmedabad",
+      },
+    });
+  });
+  it("runs a proposed weather lookup through the node without a project", async () => {
+    state.interpret.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        action: "lookup",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        lookup: { kind: "weather", location: "Ahmedabad", day: "now" },
+      },
+    });
+    state.quickLookup.mockResolvedValue({
+      _tag: "Success",
+      value: { status: "answer", message: "Ahmedabad: 31°C.", source: "https://open-meteo.com/" },
+    });
+    await instruction("weather in Ahmedabad");
+    expect(state.quickLookup).toHaveBeenCalledWith({
+      environmentId: nodeId,
+      input: {
+        kind: "weather",
+        location: "Ahmedabad",
+        day: "now",
+        sourceUtterance: "weather in Ahmedabad",
+      },
+    });
+    expect(render().message).toBe("Ahmedabad: 31°C.");
+    expect(state.execute).not.toHaveBeenCalled();
   });
 });

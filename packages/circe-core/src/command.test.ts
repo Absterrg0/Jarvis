@@ -2528,4 +2528,21 @@ describe("v1 simple-command hardening", () => {
     if (result.status !== "command" || result.command.type !== "start") return;
     expect(result.command.projectId).toBe(circe.id);
   });
+
+  it("refuses a lookup or website proposal that reaches the Director", () => {
+    // The originating client runs these bounded actions; a proposal that
+    // arrives here must never be misread as a new coding task.
+    const lookup = interpret(
+      context({ utterance: "What's the weather in Ahmedabad?" }),
+      proposal("lookup", "What's the weather in Ahmedabad?", [], {
+        lookup: { kind: "weather", location: "Ahmedabad", day: "now" },
+      }),
+    );
+    expect(lookup).toMatchObject({ status: "needs-input", reason: "unsupported-command" });
+    const website = interpret(
+      context({ utterance: "Open YouTube" }),
+      proposal("open-website", "Open YouTube", [], { website: "YouTube" }),
+    );
+    expect(website).toMatchObject({ status: "needs-input", reason: "unsupported-command" });
+  });
 });

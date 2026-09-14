@@ -1,3 +1,4 @@
+import { CirceQuickLookupInput, CirceQuickLookupResult } from "./circeQuickActions.ts";
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
@@ -292,6 +293,7 @@ export const WS_METHODS = {
   subscribeCircePresentation: "circe.subscribePresentation",
   circeRegisterPushToken: "circe.registerPushToken",
   circeUnregisterPushToken: "circe.unregisterPushToken",
+  circeQuickLookup: "circe.quickLookup",
   circeVoiceLiveStart: "circe.voiceLiveStart",
   circeVoiceLiveRelease: "circe.voiceLiveRelease",
 
@@ -515,6 +517,12 @@ const WsCirceUnregisterPushTokenRpc = Rpc.make(WS_METHODS.circeUnregisterPushTok
   payload: CircePushRegistrationInput,
   success: CircePushRegistrationResult,
   error: Schema.Union([CircePushRegistrationError, EnvironmentAuthorizationError]),
+});
+
+const WsCirceQuickLookupRpc = Rpc.make(WS_METHODS.circeQuickLookup, {
+  payload: CirceQuickLookupInput,
+  success: CirceQuickLookupResult,
+  error: EnvironmentAuthorizationError,
 });
 
 const WsCirceVoiceLiveReleaseRpc = Rpc.make(WS_METHODS.circeVoiceLiveRelease, {
@@ -1393,6 +1401,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeCircePresentationRpc,
   WsCirceRegisterPushTokenRpc,
   WsCirceUnregisterPushTokenRpc,
+  WsCirceQuickLookupRpc,
   WsCirceVoiceLiveStartRpc,
   WsCirceVoiceLiveReleaseRpc,
   WsServerSetEnvironmentLabelRpc,
@@ -1406,6 +1415,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeCircePresentationRpc,
   WsCirceRegisterPushTokenRpc,
   WsCirceUnregisterPushTokenRpc,
+  WsCirceQuickLookupRpc,
   WsCirceVoiceLiveStartRpc,
   WsCirceVoiceLiveReleaseRpc,
   WsServerProbeRpc,
@@ -1551,6 +1561,7 @@ export const CirceWsRpcGroup = RpcGroup.make(
   WsSubscribeCircePresentationRpc,
   WsCirceRegisterPushTokenRpc,
   WsCirceUnregisterPushTokenRpc,
+  WsCirceQuickLookupRpc,
   WsCirceVoiceLiveStartRpc,
   WsCirceVoiceLiveReleaseRpc,
 );
@@ -1567,6 +1578,7 @@ export const T3WsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.subscribeCircePresentation,
   WS_METHODS.circeRegisterPushToken,
   WS_METHODS.circeUnregisterPushToken,
+  WS_METHODS.circeQuickLookup,
   WS_METHODS.circeVoiceLiveStart,
   WS_METHODS.circeVoiceLiveRelease,
 );

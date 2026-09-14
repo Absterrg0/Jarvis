@@ -1,3 +1,5 @@
+import { FetchHttpClient } from "effect/unstable/http";
+import { runCirceQuickLookup } from "../Services/CirceQuickLookup.ts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -22,6 +24,7 @@ import {
   type CirceTaskDeskState,
   type CirceTaskDeskTask,
   type CirceTaskDeskTaskView,
+  type CirceSemanticProposal,
   type CirceTaskDeskView,
   type OrchestrationShellSnapshot,
   circeNodeCapabilitiesForPreset,
@@ -36,6 +39,7 @@ import { AuthSessionRepository } from "../../persistence/AuthSessions.ts";
 import { WsRpcHandlerExtension, type WsRpcExtensionContext } from "../../ws.ts";
 import { buildProjectVocabulary } from "@circe/core/buildProjectVocabulary";
 import { getPendingCirceReplyState } from "@circe/core/confirmation";
+import { circeWebsiteUrl } from "@circe/core/website";
 import { deriveCirceTaskState } from "@circe/core/deriveTaskState";
 import { circeRequestAcceptanceKey } from "@circe/core/requestIdentity";
 import * as CirceController from "../Services/CirceController.ts";
@@ -146,6 +150,28 @@ export function toCirceInterpretClientError(error: unknown): CirceExecutionError
     code: "dispatch-failed",
     message: "Circe could not interpret that request.",
   });
+}
+
+/**
+ * The host authorizes a proposed quick action before any client sees it.
+ * A website target that cannot be grounded in the user's own utterance is
+ * downgraded to `unsupported`, so a hallucinated alias or URL never reaches
+ * a launcher. A quick action that carries project or task refs is a compound
+ * the wire format cannot express, so it is downgraded too: the Director
+ * answers it loudly instead of a client silently dropping the extra work.
+ */
+export function groundCirceQuickActionProposal(
+  proposal: CirceSemanticProposal,
+  sourceUtterance: string,
+): CirceSemanticProposal {
+  if (proposal.action !== "open-website" && proposal.action !== "lookup") return proposal;
+  if (proposal.refs.length > 0)
+    return { action: "unsupported", refs: [], model: null, effort: null, answer: null };
+  if (proposal.action !== "open-website") return proposal;
+  return typeof proposal.website === "string" &&
+    circeWebsiteUrl(proposal.website, sourceUtterance) !== null
+    ? proposal
+    : { action: "unsupported", refs: [], model: null, effort: null, answer: null };
 }
 
 export function validateCirceFocusTaskIdentity(
@@ -259,6 +285,7 @@ export const circeRpcScopeExtension = {
   [WS_METHODS.subscribeCircePresentation]: AuthOrchestrationReadScope,
   [WS_METHODS.circeRegisterPushToken]: AuthOrchestrationReadScope,
   [WS_METHODS.circeUnregisterPushToken]: AuthOrchestrationReadScope,
+  [WS_METHODS.circeQuickLookup]: AuthOrchestrationOperateScope,
   [WS_METHODS.circeVoiceLiveStart]: AuthOrchestrationOperateScope,
   [WS_METHODS.circeVoiceLiveRelease]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<
@@ -350,7 +377,7 @@ export const CirceWsRpcHandlerExtensionLive = Layer.effect(
                         "This Circe node is configured as a controller and cannot run semantic interpretation.",
                     });
                   }
-                  return yield* circe.interpret({
+                  const proposal = yield* circe.interpret({
                     ...input,
                     executionNodeId,
                     ...(input.requestMetadata === undefined
@@ -362,6 +389,7 @@ export const CirceWsRpcHandlerExtensionLive = Layer.effect(
                           }),
                         }),
                   });
+                  return groundCirceQuickActionProposal(proposal, input.utterance);
                 }).pipe(
                   Effect.tapCause((cause) =>
                     Effect.logWarning("Circe interpret failed", {
@@ -377,6 +405,15 @@ export const CirceWsRpcHandlerExtensionLive = Layer.effect(
                 WS_METHODS.circeCancelRequest,
                 circe.cancelRequest({ ...input, executionNodeId }),
                 { "rpc.aggregate": "circe" },
+              ),
+            [WS_METHODS.circeQuickLookup]: (input) =>
+              context.observeRpcEffect(
+                WS_METHODS.circeQuickLookup,
+                runCirceQuickLookup(input, config.circeNodePreset ?? "full").pipe(
+                  Effect.provide(FetchHttpClient.layer),
+                  Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
+                ),
+                { "rpc.aggregate": "circe.quick" },
               ),
             // Release is intentionally not gated on presetOffersVoice like start
             // is: it is a cleanup path, and a session minted before a preset

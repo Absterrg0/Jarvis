@@ -67,6 +67,19 @@ export const CirceSemanticProposalAction = Schema.Literals([
   "list-projects",
   "converse",
   /**
+   * A bounded assistant lookup (weather or local time in a named place). The
+   * model names the place; the host runs the fixed lookup and speaks the
+   * grounded result. No project, task, provider, or thread is involved.
+   */
+  "lookup",
+  /**
+   * Open a named website or web URL on the device where the user asked. The
+   * host only allows an allowlisted shortcut or an address the user actually
+   * spoke, and the originating client performs the launch; a node browser is
+   * never the destination.
+   */
+  "open-website",
+  /**
    * Explicit refusal to act as one turn: compounds naming two independent
    * controls, and anything that needs no project or task work beyond a
    * clarification. The host always answers it with needs-input, so the
@@ -107,6 +120,14 @@ export const CirceSemanticStep = Schema.Struct({
 });
 export type CirceSemanticStep = typeof CirceSemanticStep.Type;
 
+/** Bounded assistant lookup payload. The place must appear in the source. */
+export const CirceSemanticLookup = Schema.Struct({
+  kind: Schema.Literals(["weather", "time"]),
+  location: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(160)),
+  day: Schema.Literals(["now", "today", "tomorrow"]),
+});
+export type CirceSemanticLookup = typeof CirceSemanticLookup.Type;
+
 /**
  * One supervisor inference. The proposal carries no project or task IDs,
  * no dispatch wording, and no spoken acknowledgement: the host resolves
@@ -133,6 +154,12 @@ export const CirceSemanticProposal = Schema.Struct({
    * answer in the proposal keeps conversation to one supervisor call.
    */
   answer: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(400))),
+  /** Present only when action is lookup; the host requires the place in source. */
+  lookup: Schema.optional(Schema.NullOr(CirceSemanticLookup)),
+  /** Present only when action is open-website: a named site or web URL. */
+  website: Schema.optional(
+    Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048))),
+  ),
   /** Ordered independent commands for `sequence`; bounded and never nested. */
   steps: Schema.optional(Schema.Array(CirceSemanticStep)),
 });

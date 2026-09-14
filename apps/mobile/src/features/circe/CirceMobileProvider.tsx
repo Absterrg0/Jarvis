@@ -1,6 +1,7 @@
+import { circeWebsiteUrl } from "@circe/core/website";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { AppState, type AppStateStatus } from "react-native";
+import { AppState, Linking, type AppStateStatus } from "react-native";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
   createContext,
@@ -29,6 +30,7 @@ import {
 } from "@circe/core/modelChoice";
 import {
   buildCirceInterpretInput,
+  selectCirceQuickLookupNode,
   selectCirceSemanticNode,
   type CirceMeshCatalog,
   type CirceMeshProject,
@@ -139,6 +141,10 @@ function formatMobileInterpretingMessage(utterance: string): string {
 
 export function CirceMobileProvider(props: { readonly children: ReactNode }) {
   const { connectedEnvironments } = useRemoteConnectionStatus();
+  const quickLookup = useMobileAtomCommand(circeEnvironment.lookup, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const refreshMesh = useMobileAtomCommand(circeMeshEnvironment.refresh, {
@@ -1373,6 +1379,74 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
         return;
       }
       const executionProposal = interpreted.value;
+      // A lookup or website launch is a bounded assistant action with no
+      // project, task, provider, or thread. The model proposed it; a node runs
+      // the lookup and this phone opens the site.
+      if (
+        executionProposal.action === "lookup" &&
+        executionProposal.lookup !== undefined &&
+        executionProposal.lookup !== null
+      ) {
+        // A lookup needs a Full or Controller node. Prefer the selected desk
+        // or semantic node only when it advertises that capability, otherwise
+        // pick another capable online node instead of the first connected one.
+        const lookupNode =
+          selectCirceQuickLookupNode(evidenceCatalog, [
+            taskDeskNodeIdRef.current,
+            semanticNode.nodeId,
+          ]) ?? liveSemanticNode;
+        const lookupNodeId = lookupNode.nodeId;
+        const lookup = executionProposal.lookup;
+        // Hold the submission slot across the await so a concurrent capture
+        // queues behind this action instead of racing a second interpret.
+        submittingRef.current = true;
+        setSubmitting(true);
+        try {
+          const lookupResult = await quickLookup({
+            environmentId: lookupNodeId,
+            input: { ...lookup, sourceUtterance: sourceUtterance.slice(0, 16_000) },
+          }).catch(() => null);
+          const value =
+            lookupResult !== null && lookupResult._tag === "Success" ? lookupResult.value : null;
+          setPreparedOriginInteractionId(nextOriginInteractionId());
+          setMessage(value?.message ?? "I couldn't complete that lookup. Try again in a moment.");
+        } finally {
+          submittingRef.current = false;
+          setSubmitting(false);
+          drainQueuedInput();
+        }
+        return;
+      }
+      if (
+        executionProposal.action === "open-website" &&
+        typeof executionProposal.website === "string"
+      ) {
+        const url = circeWebsiteUrl(executionProposal.website, sourceUtterance);
+        // Hold the submission slot across the launch so a concurrent capture
+        // queues behind this action instead of racing a second interpret.
+        submittingRef.current = true;
+        setSubmitting(true);
+        try {
+          const opened =
+            url === null
+              ? false
+              : await Linking.openURL(url).then(
+                  () => true,
+                  () => false,
+                );
+          setPreparedOriginInteractionId(nextOriginInteractionId());
+          setMessage(
+            opened
+              ? `Opening ${executionProposal.website} on this device.`
+              : `I couldn't open ${executionProposal.website} on this device.`,
+          );
+        } finally {
+          submittingRef.current = false;
+          setSubmitting(false);
+          drainQueuedInput();
+        }
+        return;
+      }
       // Converse is model-decided, never regex-shortcut before inference. Run
       // it project-free on the semantic node with the same request identity
       // so an explicit cancel aborts it; answers stay best-effort.
@@ -1640,6 +1714,8 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
     },
     [
       cancelServerFrame,
+      quickLookup,
+      connectedEnvironments,
       catalog,
       catalog?.nodes,
       catalog?.projects,

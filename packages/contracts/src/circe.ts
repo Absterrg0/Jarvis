@@ -126,10 +126,20 @@ export const CirceSemanticProposalAction = Schema.Literals([
   "focus-task",
   "list-projects",
   "converse",
+  "lookup",
+  "open-website",
   "unsupported",
   "sequence",
 ]);
 export type CirceSemanticProposalAction = typeof CirceSemanticProposalAction.Type;
+
+/** Bounded assistant lookup payload; the place must appear in the source. */
+export const CirceSemanticLookup = Schema.Struct({
+  kind: Schema.Literals(["weather", "time"]),
+  location: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(160)),
+  day: Schema.Literals(["now", "today", "tomorrow"]),
+});
+export type CirceSemanticLookup = typeof CirceSemanticLookup.Type;
 
 /** A single command inside a multi-command turn; steps never nest. */
 export const CirceSemanticStepAction = Schema.Literals([
@@ -163,6 +173,12 @@ export const CirceSemanticProposal = Schema.Struct({
   model: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
   effort: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
   answer: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(400))),
+  /** Present only when action is lookup; the host requires the place in source. */
+  lookup: Schema.optional(Schema.NullOr(CirceSemanticLookup)),
+  /** Present only when action is open-website: a named site or web URL. */
+  website: Schema.optional(
+    Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048))),
+  ),
   /**
    * Ordered, independent commands for one turn. Present only for `sequence`,
    * bounded, and executed in order by the host. Steps never nest.

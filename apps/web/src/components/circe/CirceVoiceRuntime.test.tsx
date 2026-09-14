@@ -21,6 +21,8 @@ const state = vi.hoisted(() => ({
   cancelRequest: vi.fn(),
   interpret: vi.fn(),
   converse: vi.fn(),
+  quickLookup: vi.fn(),
+  openWebsite: vi.fn(),
   drain: undefined as (() => Promise<void>) | undefined,
   speechEvents: [] as string[],
 }));
@@ -78,6 +80,13 @@ vi.mock("./CirceManager.logic", async (importOriginal) => {
 });
 vi.mock("../../state/environments", () => ({ usePrimaryEnvironmentId: () => "local" }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => state.catalog }));
+vi.mock("../../state/circeLiveVoice", () => ({
+  circeLiveVoiceEnvironment: { lookup: "quickLookup" },
+}));
+vi.mock("./CirceQuickActions.logic", () => ({
+  openCirceWebsite: (url: string, sourceUtterance: string) =>
+    state.openWebsite(url, sourceUtterance),
+}));
 vi.mock("../../state/circeMesh", () => ({
   circeMeshCatalogAtom: "catalog",
   circeMeshEnvironment: {
@@ -99,7 +108,8 @@ vi.mock("../../state/use-atom-command", () => ({
       | "desk"
       | "cancelRequest"
       | "interpret"
-      | "converse",
+      | "converse"
+      | "quickLookup",
   ) => state[command],
 }));
 vi.mock("../../circeIdentity", () => ({ circeReporterIdentity: () => "interaction" }));
@@ -210,6 +220,8 @@ describe("Circe voice runtime", () => {
       });
     };
     state.catalog = catalog;
+    state.quickLookup.mockReset();
+    state.openWebsite.mockReset();
     state.refresh.mockReset().mockResolvedValue({ _tag: "Success", value: catalog });
     state.refreshNode.mockReset().mockResolvedValue({ _tag: "Success", value: catalog });
     state.desk
@@ -244,6 +256,59 @@ describe("Circe voice runtime", () => {
 
   afterEach(() => {
     for (const cleanup of state.cleanups) cleanup();
+  });
+
+  it("answers a supervisor-proposed weather lookup without creating a task", async () => {
+    await ready();
+    state.interpret.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        action: "lookup",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        lookup: { kind: "weather", location: "Ahmedabad", day: "now" },
+      },
+    });
+    state.quickLookup.mockResolvedValue({
+      _tag: "Success",
+      value: { status: "answer", message: "Ahmedabad: 31°C.", source: "https://open-meteo.com/" },
+    });
+    transcript("What's the weather in Ahmedabad?", { captureId: "weather", purpose: "command" });
+    await state.drain?.();
+    expect(state.quickLookup).toHaveBeenCalledWith({
+      environmentId: "local",
+      input: {
+        kind: "weather",
+        location: "Ahmedabad",
+        day: "now",
+        sourceUtterance: "What's the weather in Ahmedabad?",
+      },
+    });
+    expect(state.execute).not.toHaveBeenCalled();
+    expect(events.some((event) => event.includes("31°C"))).toBe(true);
+  });
+
+  it("opens a supervisor-proposed website on this device even with a remote task selected", async () => {
+    routeNodeId = EnvironmentId.make("remote");
+    await ready();
+    state.interpret.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        action: "open-website",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        website: "YouTube",
+      },
+    });
+    state.openWebsite.mockResolvedValue(true);
+    transcript("Open YouTube", { captureId: "website", purpose: "command" });
+    await state.drain?.();
+    expect(state.openWebsite).toHaveBeenCalledWith("YouTube", "Open YouTube");
+    expect(state.execute).not.toHaveBeenCalled();
   });
 
   it.each(["local", "remote"])(

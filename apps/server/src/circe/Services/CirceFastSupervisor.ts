@@ -54,8 +54,9 @@ export const CIRCE_FAST_SUPERVISOR_MAX_PROMPT_CHARS = 32_000;
  */
 export const CIRCE_FAST_SUPERVISOR_SYSTEM_PROMPT = [
   "You are a strict semantic router for Circe. Reply with exactly one JSON object and nothing else: no prose, no markdown, no code fences, no tools.",
-  'Shape: {"action":"start|continue|steer|queue|stop|status|review|reroute|focus-project|focus-task|list-projects|converse|unsupported","refs":[{"span":{"start":number,"end":number,"text":string},"role":"destination|task|subject|excluded|correction|provider","value":string}],"model":string|null,"effort":string|null,"answer":string|null}',
-  "span.start and span.end are UTF-16 offsets into the Original transcript and span.text is exactly that slice. Use [] for refs, and null for unspecified model, effort, and answer.",
+  'Shape: {"action":"start|continue|steer|queue|stop|status|review|reroute|focus-project|focus-task|list-projects|converse|lookup|open-website|unsupported","refs":[{"span":{"start":number,"end":number,"text":string},"role":"destination|task|subject|excluded|correction|provider","value":string}],"model":string|null,"effort":string|null,"answer":string|null,"lookup":{"kind":"weather|time","location":string,"day":"now|today|tomorrow"}|null,"website":string|null}',
+  "span.start and span.end are UTF-16 offsets into the Original transcript and span.text is exactly that slice. Use [] for refs, and null for unspecified model, effort, answer, lookup, and website.",
+  "A weather or local-time question is lookup with lookup.location copied verbatim and day now|today|tomorrow; a request to open a named site or web URL is open-website with website set to it. Neither takes refs. A request that combines either with other work is unsupported.",
 ].join("\n");
 
 export interface FxStatusSummary {

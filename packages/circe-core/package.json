@@ -20,7 +20,8 @@
     "./modelChoice": "./src/modelChoice.ts",
     "./spokenSummary": "./src/spokenSummary.ts",
     "./timing": "./src/timing.ts",
-    "./extraction": "./src/extraction.ts"
+    "./extraction": "./src/extraction.ts",
+    "./website": "./src/website.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

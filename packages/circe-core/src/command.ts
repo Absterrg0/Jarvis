@@ -1236,6 +1236,18 @@ function interpretCirceCommandProposal(
       choices: [],
     };
   }
+  // A lookup or website launch is a bounded assistant action with no project
+  // or task. The originating client runs it through the quick-action endpoint
+  // or its own launcher, so a proposal that reaches the Director without that
+  // path is refused rather than misread as a new task.
+  if (proposal.action === "lookup" || proposal.action === "open-website") {
+    return {
+      status: "needs-input",
+      reason: "unsupported-command",
+      prompt: "I couldn't complete that on this device. Try again.",
+      choices: [],
+    };
+  }
   // One action per turn lives in explicit proposal bounds: the validator
   // rejects two destinations, two tasks, or two providers structurally, and
   // unsupported maps to needs-input above. No language heuristic vetoes a
