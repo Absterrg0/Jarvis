@@ -1,20 +1,21 @@
-import type {
-  CirceProjectAlias,
-  CirceModelDraft,
-  CirceNeedsInputReason,
-  CirceExpectedReply,
-  CirceProjectRef,
-  CirceRequestMetadata,
-  CirceTaskRef,
-  CirceTaskState,
-  ModelSelection,
-  OrchestrationProjectShell,
-  OrchestrationThread,
-  ProviderInteractionMode,
-  ProjectId,
-  RuntimeMode,
-  ServerProvider,
-  ThreadId,
+import {
+  isProviderAvailable,
+  type CirceProjectAlias,
+  type CirceModelDraft,
+  type CirceNeedsInputReason,
+  type CirceExpectedReply,
+  type CirceProjectRef,
+  type CirceRequestMetadata,
+  type CirceTaskRef,
+  type CirceTaskState,
+  type ModelSelection,
+  type OrchestrationProjectShell,
+  type OrchestrationThread,
+  type ProviderInteractionMode,
+  type ProjectId,
+  type RuntimeMode,
+  type ServerProvider,
+  type ThreadId,
 } from "@t3tools/contracts";
 import {
   getPendingCirceReplyState,
@@ -463,7 +464,8 @@ const available = (provider: ServerProvider): boolean =>
   provider.enabled &&
   provider.installed &&
   provider.status === "ready" &&
-  provider.auth.status !== "unauthenticated";
+  provider.auth.status !== "unauthenticated" &&
+  isProviderAvailable(provider);
 
 const providerNames = (provider: ServerProvider): ReadonlyArray<string> =>
   [provider.driver, provider.displayName].filter(

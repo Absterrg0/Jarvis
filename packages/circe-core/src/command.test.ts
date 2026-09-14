@@ -2562,4 +2562,21 @@ describe("v1 simple-command hardening", () => {
       },
     });
   });
+
+  it("skips a provider the catalog marks unavailable when falling back", () => {
+    // The orb and mesh read `availability` too, so the Director must not
+    // launch a provider the picker already renders unavailable.
+    const { nodeDefaultModelSelection: _omitDefault, ...input } = context({
+      utterance: "Fix authentication.",
+      providers: [{ ...codex, availability: "unavailable" }, fableProvider],
+    });
+    const result = interpret(input, proposal("start", "Fix authentication."));
+    expect(result).toMatchObject({
+      status: "command",
+      command: {
+        type: "start",
+        modelSelection: { instanceId: fableProvider.instanceId, model: "fable-reviewer" },
+      },
+    });
+  });
 });

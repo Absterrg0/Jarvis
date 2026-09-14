@@ -5,13 +5,19 @@ import {
   buildDesktopCirceOrbCatalog,
   buildDesktopCirceOrbAgents,
   isDesktopCirceOrbSelectionValid,
+  selectDesktopCirceOrbFallback,
 } from "./CirceDesktopOrb.bridge";
 
-function provider(nodeId: string, instanceId: string, overrides: Record<string, unknown> = {}) {
+function provider(
+  nodeId: string,
+  instanceId: string,
+  overrides: Record<string, unknown> = {},
+  available = true,
+) {
   return {
     nodeId,
     nodeLabel: nodeId,
-    available: true,
+    available,
     snapshot: {
       instanceId,
       driver: instanceId,
@@ -45,6 +51,44 @@ describe("CirceDesktopOrb bridge", () => {
     expect(catalog.selected).toBeNull();
     expect(catalog.pendingSelection).toBeNull();
     expect(catalog.error).toBeNull();
+  });
+
+  it("shows the first available provider's preferred model when none is saved", () => {
+    const fallback = selectDesktopCirceOrbFallback(
+      [
+        provider("node-b", "codex"),
+        provider("node-a", "claudeAgent", {
+          models: [
+            { slug: "alpha", name: "Alpha", isCustom: false, capabilities: null },
+            { slug: "beta", name: "Beta", isCustom: false, isDefault: true, capabilities: null },
+          ],
+        }),
+      ],
+      "node-a" as never,
+    );
+
+    // Owning node only, first available provider, and its isDefault model.
+    expect(fallback).toEqual({ instanceId: "claudeAgent", model: "beta" });
+  });
+
+  it("skips unavailable providers and providers on other nodes", () => {
+    const fallback = selectDesktopCirceOrbFallback(
+      [
+        provider("node-a", "dead", {}, false),
+        provider("node-b", "other"),
+        provider("node-a", "alive"),
+      ],
+      "node-a" as never,
+    );
+
+    expect(fallback).toEqual({ instanceId: "alive", model: "alpha" });
+  });
+
+  it("returns null when the node has no available provider", () => {
+    expect(
+      selectDesktopCirceOrbFallback([provider("node-a", "dead", {}, false)], "node-a" as never),
+    ).toBeNull();
+    expect(selectDesktopCirceOrbFallback([], "node-a" as never)).toBeNull();
   });
 
   it("prefers the isDefault model for each shortlist row", () => {

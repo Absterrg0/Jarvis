@@ -22,6 +22,28 @@ export interface DesktopOrbCatalogInput {
 export const DESKTOP_CIRCE_ORB_SHORTLIST_LIMIT = 6;
 
 /**
+ * Effective orb selection when no default is saved: the first available
+ * provider on the owning node and its preferred model. This mirrors the
+ * Director's fallback so the picker shows the provider that will actually run
+ * instead of an empty panel. Availability comes from the mesh catalog, which
+ * applies the same rule the Director does.
+ */
+export function selectDesktopCirceOrbFallback(
+  providers: ReadonlyArray<CirceMeshProvider>,
+  nodeId: EnvironmentId,
+): DesktopCirceOrbSelection | null {
+  for (const provider of providers) {
+    if (provider.nodeId !== nodeId || !provider.available) continue;
+    const models = provider.snapshot.models ?? [];
+    const preferred = models.find((model) => model.isDefault === true) ?? models[0];
+    const slug = preferred?.slug;
+    if (typeof slug !== "string" || slug.length === 0) continue;
+    return { instanceId: provider.snapshot.instanceId, model: slug };
+  }
+  return null;
+}
+
+/**
  * Build the orb picker catalog from the owning node's real provider
  * snapshot. Instance ids, display names, drivers, and model slugs pass
  * through verbatim; nothing is invented. Unavailable providers stay listed

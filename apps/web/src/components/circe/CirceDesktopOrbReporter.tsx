@@ -15,6 +15,7 @@ import {
   buildDesktopCirceOrbCatalog,
   buildDesktopCirceOrbAgents,
   isDesktopCirceOrbSelectionValid,
+  selectDesktopCirceOrbFallback,
 } from "./CirceDesktopOrb.bridge";
 import type { EnvironmentId } from "@t3tools/contracts";
 
@@ -50,17 +51,11 @@ export function CirceDesktopOrbReporter({
 
   // With no saved default, show the provider the Director will actually pick
   // (first available on this node) so the panel never looks unpicked.
-  const fallbackSelection = useMemo<DesktopCirceOrbSelection | null>(() => {
-    for (const provider of catalog?.providers ?? []) {
-      if (provider.nodeId !== environmentId || !provider.available) continue;
-      const models = provider.snapshot.models ?? [];
-      const model = models.find((candidate) => candidate.isDefault === true) ?? models[0];
-      if (model === undefined || typeof model.slug !== "string" || model.slug.length === 0)
-        continue;
-      return { instanceId: provider.snapshot.instanceId, model: model.slug };
-    }
-    return null;
-  }, [catalog, environmentId]);
+  const fallbackSelection = useMemo<DesktopCirceOrbSelection | null>(
+    () =>
+      catalog === null ? null : selectDesktopCirceOrbFallback(catalog.providers, environmentId),
+    [catalog, environmentId],
+  );
   const effectiveSelection = serverSelection ?? fallbackSelection;
 
   const orbCatalog = useMemo(
