@@ -26,5 +26,5 @@ export const APP_DISPLAY_NAME =
   formatAppDisplayName({ baseName: APP_BASE_NAME, stageLabel: APP_STAGE_LABEL });
 export const APP_RELEASE_TAG_BASE_URL =
   injectedDesktopAppBranding?.releaseTagBaseUrl ??
-  "https://github.com/pingdotgg/t3code/releases/tag";
+  "https://github.com/Absterrg0/Circe/releases/tag";
 export const APP_VERSION = import.meta.env.APP_VERSION || "0.0.0";

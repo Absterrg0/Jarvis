@@ -122,7 +122,7 @@ it("keeps migration identities and upstream references intact", () => {
   assert.include(desktopEnv, "https://github.com/Absterrg0/Circe/releases/tag");
 
   const branding = readSource("../apps/web/src/branding.ts");
-  assert.include(branding, "https://github.com/pingdotgg/t3code/releases/tag");
+  assert.include(branding, "https://github.com/Absterrg0/Circe/releases/tag");
 
   const triagePlaybook = readSource("../apps/server/src/cli/triagePrompt.ts");
   assert.include(triagePlaybook, "https://github.com/pingdotgg/t3code");

@@ -86,7 +86,7 @@ describe("branding", () => {
     expect(branding.APP_STAGE_LABEL).toBe("Latest");
     expect(branding.APP_DISPLAY_NAME).toBe("Circe");
     expect(branding.APP_RELEASE_TAG_BASE_URL).toBe(
-      "https://github.com/pingdotgg/t3code/releases/tag",
+      "https://github.com/Absterrg0/Circe/releases/tag",
     );
   });
 

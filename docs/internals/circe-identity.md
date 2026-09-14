@@ -18,7 +18,7 @@ Circe is the product name and the only name used across visible copy, code, pack
 
 - `T3CODE_*` settings that predate the fork.
 - `t3code:*` storage keys and the upstream mobile schemes.
-- The `pingdotgg/t3code` release URL and the `t3 triage` playbook copy that must stay byte-identical to `.github/triage/PLAYBOOK.md`.
+- The `t3 triage` playbook copy that must stay byte-identical to `.github/triage/PLAYBOOK.md`.
 
 ## Example catalog names
 
