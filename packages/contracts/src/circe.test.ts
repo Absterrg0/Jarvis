@@ -542,3 +542,25 @@ describe("Circe pre-accept request cancellation", () => {
     });
   });
 });
+
+describe("Circe multi-command execution", () => {
+  it("decodes a plan with ordered step outcomes", () => {
+    expect(
+      decodeExecutionResult({
+        status: "plan",
+        message: "Stopped authentication. Started a deployment task.",
+        steps: [
+          { action: "stop", status: "acknowledged", message: "Stopped authentication." },
+          { action: "start", status: "started", message: "Started a deployment task." },
+        ],
+      }),
+    ).toMatchObject({ status: "plan" });
+    expect(() =>
+      decodeExecutionResult({
+        status: "plan",
+        message: "x",
+        steps: [{ action: "stop", status: "bogus", message: "y" }],
+      }),
+    ).toThrow();
+  });
+});

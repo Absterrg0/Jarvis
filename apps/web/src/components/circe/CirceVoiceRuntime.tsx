@@ -2565,6 +2565,26 @@ export function CirceVoiceRuntime({
           }
           return;
         }
+        if (result.status === "plan") {
+          // A validated multi-command turn already ran in order. Speak the
+          // combined, server-composed summary; the steps were host-decided.
+          voiceSubmissionSnapshotsRef.current.delete(voiceSubmission.captureId);
+          if (pendingVoiceClarification?.captureId !== undefined) {
+            voiceSubmissionSnapshotsRef.current.delete(pendingVoiceClarification.captureId);
+          }
+          if (pendingVoiceClarification !== null) voiceClarificationRef.current = null;
+          const feedback = circeExecutionFeedback(result);
+          emitFeedback({
+            text: feedback.speech,
+            kind: "done",
+            inputMode,
+            captureId: voiceSubmission.captureId,
+            requestId,
+          });
+          onTargetConsumed();
+          syncPending();
+          return;
+        }
         voiceSubmissionSnapshotsRef.current.delete(voiceSubmission.captureId);
         if (pendingVoiceClarification?.captureId !== undefined) {
           voiceSubmissionSnapshotsRef.current.delete(pendingVoiceClarification.captureId);

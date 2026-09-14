@@ -944,6 +944,107 @@ describe("CirceController", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  const planLayer = (dispatch: () => Effect.Effect<{ sequence: number }>) =>
+    CirceControllerLive.pipe(
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch,
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+  it.effect("runs every validated step of a multi-command turn in order", () => {
+    const layer = planLayer(() => Effect.die("A list-only plan must not dispatch"));
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const source = "List my projects, then list them again.";
+      const result = yield* manager.execute({
+        sessionId,
+        utterance: source,
+        projectId: project.id,
+        sourceUtterance: source,
+        semanticProposal: {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+          ],
+        },
+      });
+      expect(result).toMatchObject({ status: "plan" });
+      if (result.status !== "plan") return;
+      expect(result.steps.map((step) => step.status)).toEqual(["acknowledged", "acknowledged"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("dispatches nothing when a later plan step cannot resolve", () => {
+    const layer = planLayer(() => Effect.die("An invalid plan must not dispatch"));
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const source = "List my projects, then fix auth in Nowhere.";
+      const destinationAt = source.indexOf("Nowhere");
+      const result = yield* manager.execute({
+        sessionId,
+        utterance: source,
+        projectId: project.id,
+        sourceUtterance: source,
+        semanticProposal: {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+            {
+              action: "start",
+              refs: [
+                {
+                  span: {
+                    start: destinationAt,
+                    end: destinationAt + "Nowhere".length,
+                    text: "Nowhere",
+                  },
+                  role: "destination",
+                  value: "Nowhere",
+                },
+              ],
+              model: null,
+              effort: null,
+              answer: null,
+            },
+          ],
+        },
+      });
+      expect(result).toMatchObject({ status: "needs-input" });
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("answers a general question without creating project work", () => {
     const interpreterLayer = Layer.succeed(CirceControllerInterpreter, {
       interpret: () =>

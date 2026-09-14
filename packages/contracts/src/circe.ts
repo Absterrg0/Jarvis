@@ -183,7 +183,7 @@ export const CirceSemanticProposal = Schema.Struct({
    * Ordered, independent commands for one turn. Present only for `sequence`,
    * bounded, and executed in order by the host. Steps never nest.
    */
-  steps: Schema.optional(Schema.Array(CirceSemanticStep)),
+  steps: Schema.optional(Schema.Array(CirceSemanticStep).check(Schema.isMaxLength(4))),
 });
 export type CirceSemanticProposal = typeof CirceSemanticProposal.Type;
 
@@ -415,6 +415,28 @@ export const CirceExecutionAcknowledged = Schema.Union([
 ]);
 export type CirceExecutionAcknowledged = typeof CirceExecutionAcknowledged.Type;
 
+/** One executed command of a multi-command turn, in order. */
+export const CirceExecutionPlanStep = Schema.Struct({
+  action: TrimmedNonEmptyString.check(Schema.isMaxLength(40)),
+  status: Schema.Literals(["started", "acknowledged", "needs-input", "failed"]),
+  message: TrimmedNonEmptyString.check(Schema.isMaxLength(400)),
+  threadId: Schema.optional(ThreadId),
+  projectId: Schema.optional(ProjectId),
+});
+export type CirceExecutionPlanStep = typeof CirceExecutionPlanStep.Type;
+
+/**
+ * A multi-command turn. Every step was validated before the first dispatch,
+ * so the steps array reports an ordered, already-decided plan; a step that
+ * needed input stops the plan at that point.
+ */
+export const CirceExecutionPlan = Schema.Struct({
+  status: Schema.Literal("plan"),
+  message: TrimmedNonEmptyString.check(Schema.isMaxLength(400)),
+  steps: Schema.Array(CirceExecutionPlanStep),
+});
+export type CirceExecutionPlan = typeof CirceExecutionPlan.Type;
+
 /**
  * A pre-accept cancel won the race against semantic interpretation: the
  * awaiting execute call reports this instead of an acknowledgement, and no
@@ -430,6 +452,7 @@ export const CirceExecutionResult = Schema.Union([
   CirceNeedsInput,
   CirceExecutionStarted,
   CirceExecutionAcknowledged,
+  CirceExecutionPlan,
   CirceExecutionCancelled,
 ]);
 export type CirceExecutionResult = typeof CirceExecutionResult.Type;

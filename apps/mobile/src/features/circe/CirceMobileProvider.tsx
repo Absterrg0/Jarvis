@@ -956,6 +956,11 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
           };
           replaceActiveTurn(turn);
         }
+      } else if (result.value.status === "plan") {
+        // A validated multi-command turn already ran in order; speak the
+        // server-composed summary of the steps.
+        setMessage(result.value.message);
+        removeActiveTurn(turn.originInteractionId);
       } else if (result.value.action === "focused") {
         // Explicit focus adopts the exact response identity: the task
         // node when a taskRef is present, else the execution turn node. A

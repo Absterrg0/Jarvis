@@ -17,6 +17,7 @@ import {
   decodeCirceSemanticProposal,
   resolveCirceInstruction,
   interpretCirceCommand,
+  interpretCircePlan,
   interpretPendingCirceReply,
   prepareCirceSemanticTurn,
   type CirceCommand,
@@ -24,6 +25,7 @@ import {
   type CirceCommandTask,
   type CirceSemanticProposal,
   type CirceSemanticProposalAction,
+  type CirceSemanticStep,
   type PreparedCirceSemanticTurn,
   type SemanticRef,
   type SemanticRole,
@@ -2590,5 +2592,47 @@ describe("v1 simple-command hardening", () => {
     });
     const result = interpret(input, proposal("start", "Fix authentication."));
     expect(result).toMatchObject({ status: "needs-input", reason: "provider-unavailable" });
+  });
+
+  it("validates every step of a multi-command plan before returning commands", () => {
+    const source = "List my projects, then answer what is new today.";
+    const input = context({ utterance: source });
+    const steps: ReadonlyArray<CirceSemanticStep> = [
+      { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+      { action: "converse", refs: [], model: null, effort: null, answer: "Nothing new." },
+    ];
+    const plan = interpretCircePlan(input, ready(input), steps);
+    expect(plan.status).toBe("plan");
+    if (plan.status !== "plan") return;
+    // A question in a project's scope runs as a durable conversation thread,
+    // so the second validated command is a start.
+    expect(plan.commands.map((command) => command.type)).toEqual(["list-projects", "start"]);
+  });
+
+  it("returns needs-input with no commands when a later step cannot resolve", () => {
+    const source = "List my projects, then fix auth in Nowhere.";
+    const input = context({ utterance: source });
+    const steps: ReadonlyArray<CirceSemanticStep> = [
+      { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+      {
+        action: "start",
+        refs: [ref(source, "destination", "in Nowhere", "Nowhere")],
+        model: null,
+        effort: null,
+        answer: null,
+      },
+    ];
+    expect(interpretCircePlan(input, ready(input), steps)).toMatchObject({
+      status: "needs-input",
+    });
+  });
+
+  it("does not treat a single step as a plan", () => {
+    const input = context({ utterance: "List my projects." });
+    expect(
+      interpretCircePlan(input, ready(input), [
+        { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+      ]),
+    ).toMatchObject({ status: "needs-input" });
   });
 });

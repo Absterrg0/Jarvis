@@ -161,7 +161,7 @@ export const CirceSemanticProposal = Schema.Struct({
     Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048))),
   ),
   /** Ordered independent commands for `sequence`; bounded and never nested. */
-  steps: Schema.optional(Schema.Array(CirceSemanticStep)),
+  steps: Schema.optional(Schema.Array(CirceSemanticStep).check(Schema.isMaxLength(4))),
 });
 export type CirceSemanticProposal = typeof CirceSemanticProposal.Type;
 

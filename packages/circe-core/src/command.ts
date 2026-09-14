@@ -36,6 +36,7 @@ import {
   validateSemanticProposal,
   type CirceSemanticProposal,
   type CirceSemanticProposalAction,
+  type CirceSemanticStep,
   type SemanticEvidenceCatalogs,
   type SemanticValidation,
 } from "./semanticEvidence.ts";
@@ -54,6 +55,7 @@ export {
   CirceSemanticProposal,
   CirceSemanticProposalAction,
   validateSemanticProposal,
+  type CirceSemanticStep,
   type SemanticEvidenceCatalogs,
   type SemanticEvidenceProject,
   type SemanticEvidenceProvider,
@@ -1765,6 +1767,42 @@ function interpretCirceCommandProposal(
       ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
     },
   };
+}
+
+/**
+ * Validate every step of a multi-command turn against the same catalogs and
+ * typed state the ordinary Director uses. The host executes nothing until
+ * all steps resolve to commands, so an ambiguous or unknown later step can
+ * never leave earlier steps dispatched. Steps never nest.
+ */
+export function interpretCircePlan(
+  input: CirceCommandContext,
+  prepared: Extract<PreparedCirceSemanticTurn, { status: "ready" }>,
+  steps: ReadonlyArray<CirceSemanticStep>,
+):
+  | { readonly status: "plan"; readonly commands: ReadonlyArray<CirceCommand> }
+  | CirceCommandNeedsInput {
+  if (steps.length < 2) {
+    return {
+      status: "needs-input",
+      reason: "unsupported-command",
+      prompt: "That is one request. Say it on its own.",
+      choices: [],
+    };
+  }
+  const commands: Array<CirceCommand> = [];
+  for (const step of steps) {
+    const interpretation = interpretCirceCommandProposal(input, prepared, {
+      action: step.action,
+      refs: step.refs,
+      model: step.model,
+      effort: step.effort,
+      answer: step.answer,
+    });
+    if (interpretation.status !== "command") return interpretation;
+    commands.push(interpretation.command);
+  }
+  return { status: "plan", commands };
 }
 
 /** Attach host-composed presentation copy after deterministic validation succeeds. */
