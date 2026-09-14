@@ -74,6 +74,7 @@ import {
   circeOnboardingDeviceNameHint,
   validateCirceNodeLabel,
 } from "./deviceName";
+import { resolveOnboardingMeshAvailability } from "./meshAvailability";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -271,7 +272,7 @@ export function WelcomeWizard({
 
 // ── Step 1: connection choice ────────────────────────────────
 
-function ConnectionStep({
+export function ConnectionStep({
   localAvailable,
   autoSelectedComputers,
   expandPairingInitially,
@@ -449,6 +450,40 @@ function ConnectionStep({
             onToggleEnvironment={onToggleEnvironment}
           />
         ) : null}
+        <Collapsible
+          open={pairingOpen}
+          onOpenChange={setPairingOpen}
+          className="rounded-lg border border-border bg-background"
+        >
+          <CollapsibleTrigger
+            disabled={isPairing}
+            render={
+              <Button
+                variant="ghost"
+                className="h-auto min-h-9 w-full justify-start gap-3 px-3 py-2.5 text-left text-sm font-medium whitespace-normal"
+              />
+            }
+          >
+            <LinkIcon className="size-4 text-muted-foreground" />
+            <span className="flex-1">Add a computer</span>
+            <ChevronRightIcon
+              className={cn("size-4 text-muted-foreground", pairingOpen && "rotate-90")}
+            />
+          </CollapsibleTrigger>
+          <CollapsiblePanel>
+            <div className="px-3 pb-3">
+              <PairingForm
+                isPairing={isPairing}
+                setIsPairing={setIsPairing}
+                onPaired={(environmentId) => {
+                  setPairingOpen(false);
+                  onPaired(environmentId);
+                  requestAnimationFrame(() => continueRef.current?.focus());
+                }}
+              />
+            </div>
+          </CollapsiblePanel>
+        </Collapsible>
       </div>
       <div className="mt-6 flex items-center justify-end gap-3">
         <Button
@@ -481,22 +516,23 @@ function ConnectAccountOption({
   const { environments } = useEnvironments();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
-  const primaryEnvironment = usePrimaryEnvironment();
   const serverConfig = useAtomValue(primaryServerConfigAtom);
-  const { linked, reconcileCloudState, linkState } = useCloudLinkController();
+  const { linked, managedTunnelActive, publishAgentActivity, reconcileCloudState, linkState } =
+    useCloudLinkController();
   const [expanded, setExpanded] = useState(true);
   const [addingThisComputer, setAddingThisComputer] = useState(false);
   const [discoveryReady, setDiscoveryReady] = useState(false);
   const onDiscoveryReady = useCallback(() => setDiscoveryReady(true), []);
-  // The onboarding lists this machine as a first-class target. Prefer the live
-  // link target; while the local environment is still registering, remember the
-  // intent and show a waiting state instead of hiding the action.
+  // The onboarding lists this machine as a first-class target. While the local
+  // link target is still registering, show a waiting state instead of hiding
+  // the switch.
   const isLocalNode = window.desktopBridge !== undefined || serverConfig !== null;
   const canLinkThisComputer = linkState.target !== null;
-  const primaryLabel =
-    serverConfig?.environment.label ??
-    primaryEnvironment?.serverConfig?.environment.label ??
-    "This computer";
+  const meshAvailability = resolveOnboardingMeshAvailability({
+    linked,
+    managedTunnelActive,
+    publishAgentActivity,
+  });
   const setAvailableToMyDevices = async (enabled: boolean) => {
     setAddingThisComputer(true);
     await reconcileCloudState({ managedTunnel: enabled, publish: enabled });
@@ -548,16 +584,12 @@ function ConnectAccountOption({
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">Available to my other devices</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {linked
-                      ? "This computer is on Circe Mesh."
-                      : canLinkThisComputer
-                        ? "Reach this computer from your phone or another computer."
-                        : "Waiting for this node…"}
+                    {canLinkThisComputer ? meshAvailability.description : "Waiting for this node…"}
                   </p>
                 </div>
                 <Switch
                   aria-label="Available to my other devices"
-                  checked={linked}
+                  checked={meshAvailability.checked}
                   disabled={addingThisComputer || !canLinkThisComputer}
                   onCheckedChange={(next) => void setAvailableToMyDevices(next)}
                 />
