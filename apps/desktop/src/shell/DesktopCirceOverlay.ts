@@ -648,8 +648,7 @@ const orbScript = `<script>
     if (!dragging) {
       dragging = true;
       orb.classList.add("dragging");
-      postDrag({ type: "drag", phase: "start", x: event.screenX, y: event.screenY });
-      return;
+      postDrag({ type: "drag", phase: "start", x: dragStartX, y: dragStartY });
     }
     postDrag({ type: "drag", phase: "move", x: event.screenX, y: event.screenY });
   });
