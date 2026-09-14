@@ -240,6 +240,21 @@ const assertCirceDatabase = Effect.fn("Migrations.assertCirceDatabase")(function
   const markerPath = baseDir === undefined ? undefined : NodePath.join(baseDir, CIRCE_OWNER_MARKER);
 
   if (trackingTable.length === 0) {
+    // A missing tracking table does not mean an empty database. Only claim a
+    // directory that holds no user objects at all; anything else belongs to
+    // another product or a pre-tracking install.
+    const userObjects = yield* sql<{ readonly name: string }>`
+      SELECT name FROM sqlite_master
+      WHERE name NOT LIKE 'sqlite_%' AND type IN ('table', 'index', 'view', 'trigger')
+    `;
+    if (userObjects.length > 0) {
+      return yield* Effect.die(
+        new ForeignDatabaseError({
+          baseDir: baseDir ?? "(configured data directory)",
+          reason: "unowned_database",
+        }),
+      );
+    }
     // Brand-new database: claim the directory so later runs can prove ownership.
     if (baseDir !== undefined && markerPath !== undefined) {
       yield* Effect.sync(() => {

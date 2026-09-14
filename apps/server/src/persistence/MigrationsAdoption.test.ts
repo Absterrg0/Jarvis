@@ -13,15 +13,18 @@ const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
 const CIRCE_OWNER_MARKER = "circe-product.json";
 
-layer("Database ownership", (it) => {
-  it.effect("claims a fresh database directory and migrates it", () =>
+layer("Database adoption", (it) => {
+  it.effect("adopts an unmarked database whose history is unambiguously Circe's", () =>
     Effect.acquireUseRelease(
-      Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "circe-owner-"))),
+      Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "circe-adopt-"))),
       (baseDir) =>
         Effect.gen(function* () {
+          // Seed a fully migrated Circe history in the shared in-memory
+          // database so this test does not depend on another test's state.
+          yield* runMigrations();
           const executed = yield* runMigrations({ baseDir });
 
-          assert.isAtLeast(executed.length, 65);
+          assert.deepEqual(executed, []);
           assert.isTrue(NodeFS.existsSync(NodePath.join(baseDir, CIRCE_OWNER_MARKER)));
         }),
       (baseDir) => Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true })),
