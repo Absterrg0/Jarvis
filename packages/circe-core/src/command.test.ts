@@ -2545,4 +2545,21 @@ describe("v1 simple-command hardening", () => {
     );
     expect(website).toMatchObject({ status: "needs-input", reason: "unsupported-command" });
   });
+
+  it("falls back to the first available provider when no default is set", () => {
+    // The app can answer "which provider" from what is installed, so a new
+    // task must not stop to ask when neither the node nor the project names
+    // a default.
+    const { nodeDefaultModelSelection: _omitDefault, ...input } = context({
+      utterance: "Fix authentication.",
+    });
+    const result = interpret(input, proposal("start", "Fix authentication."));
+    expect(result).toMatchObject({
+      status: "command",
+      command: {
+        type: "start",
+        modelSelection: { instanceId: codex.instanceId, model: "gpt-5.6-sol" },
+      },
+    });
+  });
 });

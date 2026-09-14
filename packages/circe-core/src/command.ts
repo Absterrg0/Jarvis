@@ -472,6 +472,24 @@ const providerNames = (provider: ServerProvider): ReadonlyArray<string> =>
 
 const providerLabel = (provider: ServerProvider): string => provider.displayName ?? provider.driver;
 
+/**
+ * When the user names no provider, prefer the node/project default and then
+ * the first usable provider rather than asking a question the app can answer
+ * from what is already installed.
+ */
+function firstAvailableModelSelection(
+  providers: ReadonlyArray<ServerProvider>,
+): ModelSelection | null {
+  for (const provider of providers) {
+    if (!available(provider)) continue;
+    const models = provider.models ?? [];
+    const model = models.find((candidate) => candidate.isDefault === true) ?? models[0];
+    if (model === undefined || typeof model.slug !== "string" || model.slug.length === 0) continue;
+    return { instanceId: provider.instanceId, model: model.slug };
+  }
+  return null;
+}
+
 function withModelOptionDefaults(
   selection: ModelSelection,
   providers: ReadonlyArray<ServerProvider>,
@@ -1045,7 +1063,10 @@ function selectionFromProposal(
     return validateCirceModelSelection(input.modelSelection, input.providers, objective);
   }
   if (providerKey === null) {
-    const fallback = input.nodeDefaultModelSelection ?? project.defaultModelSelection;
+    const fallback =
+      input.nodeDefaultModelSelection ??
+      project.defaultModelSelection ??
+      firstAvailableModelSelection(input.providers);
     return fallback === null || fallback === undefined
       ? {
           status: "needs-input",
