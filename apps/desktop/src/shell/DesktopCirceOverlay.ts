@@ -141,9 +141,12 @@ function desktopCirceOverlayWindowSize(
  *   are targets; a row above or below the band would force the orb to move on
  *   expansion.
  *
- * A drop that is not near a target is returned unchanged. The old behaviour
- * clamped every drop into the expanded-safe region, which moved genuine free
- * placements by hundreds of pixels.
+ * A drop that is not near a target keeps its clamped position: the drop is
+ * first clamped into the orb lane so an off-screen release lands on screen,
+ * and only then considered for a snap. Free drops outside the band the
+ * expanded panel can occupy still move when the picker opens; only accepted
+ * snaps are guaranteed to survive expansion, which is exactly what the joint
+ * check below enforces.
  *
  * The two axes are considered together: a snap is only accepted when the
  * expanded panel preserves the resulting orb centre on both axes. Snapping one
@@ -160,6 +163,15 @@ export function snapDesktopCirceOverlayAnchor(
   const minY = workArea.y + DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT;
   const maxY =
     workArea.y + workArea.height - DESKTOP_CIRCE_ORB_MARGIN - DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT;
+  // A degenerate work area narrower than the orb lane offers no snap targets:
+  // clamping would collapse every drop onto one point. Keep the drop inside
+  // the work area and skip snapping entirely.
+  if (maxX < minX || maxY < minY) {
+    return {
+      x: clamp(anchor.x, workArea.x, workArea.x + workArea.width),
+      y: clamp(anchor.y, workArea.y, workArea.y + workArea.height),
+    };
+  }
   const snapTo = (value: number, targets: ReadonlyArray<number>): number => {
     let best = value;
     let bestDistance = Number.POSITIVE_INFINITY;

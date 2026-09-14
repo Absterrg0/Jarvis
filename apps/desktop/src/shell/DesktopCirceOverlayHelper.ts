@@ -103,6 +103,10 @@ export async function runDesktopCirceOverlayHelper(): Promise<void> {
   // The helper owns the window, so it moves the window itself when the orb is
   // dragged; those drag lines are consumed here and never relayed.
   let anchor: DesktopCirceOverlayAnchor | null = null;
+  // Whether the panel is currently expanded. A drop preserves the current
+  // size, matching the window surface, so a drag while expanded stores the
+  // displayed centre instead of diverging from it.
+  let expanded = false;
   let dragStart: {
     readonly pointerX: number;
     readonly pointerY: number;
@@ -140,7 +144,9 @@ export async function runDesktopCirceOverlayHelper(): Promise<void> {
     const orbCenter = desktopCirceOverlayOrbCenter(window.getBounds());
     const area = workAreaForOrb(orbCenter);
     anchor = snapDesktopCirceOverlayAnchor(area, orbCenter);
-    window.setBounds(resolveDesktopCirceOverlayBounds(area, false, anchor), false);
+    const bounds = resolveDesktopCirceOverlayBounds(area, expanded, anchor);
+    window.setBounds(bounds, false);
+    anchor = desktopCirceOverlayOrbCenter(bounds);
   };
   // Orb picker selections leave the document as console lines. Forward them
   // on stdout so the parent relays them orb -> main -> renderer.
@@ -170,6 +176,7 @@ export async function runDesktopCirceOverlayHelper(): Promise<void> {
         );
         return;
       case "resize": {
+        expanded = command.expanded;
         const orbCenter = anchor ?? desktopCirceOverlayOrbCenter(window.getBounds());
         const bounds = resolveDesktopCirceOverlayBounds(
           workAreaForOrb(orbCenter),

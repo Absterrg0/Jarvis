@@ -306,6 +306,42 @@ describe("DesktopCirceOrb", () => {
     }
   });
 
+  it("snaps at the threshold boundary and leaves a drop one pixel beyond it", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    const maxX = 1920 - (DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT);
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: maxX - 56, y: 540 })).toEqual({
+      x: maxX,
+      y: 540,
+    });
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: maxX - 57, y: 540 })).toEqual({
+      x: maxX - 57,
+      y: 540,
+    });
+  });
+
+  it("clamps an off-screen drop into the lane before considering a snap", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    const maxX = 1920 - (DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT);
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: 2500, y: 540 })).toEqual({
+      x: maxX,
+      y: 540,
+    });
+  });
+
+  it("skips snapping on a degenerate work area instead of collapsing every drop", () => {
+    const workArea = { x: 0, y: 0, width: 80, height: 80 };
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: 500, y: -100 })).toEqual({ x: 80, y: 0 });
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: 0, y: 0 })).toEqual({ x: 0, y: 0 });
+  });
+
+  it("snaps against a negative-origin secondary display", () => {
+    const workArea = { x: -1920, y: 0, width: 1920, height: 1080 };
+    const maxX = -1920 + 1920 - (DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT);
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: maxX - 8, y: 540 })).toEqual({
+      x: maxX,
+      y: 540,
+    });
+  });
   it("keeps a dragged orb fixed while the panel expands around it", () => {
     const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
     const anchor = { x: 500, y: 300 };
