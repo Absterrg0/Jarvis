@@ -147,6 +147,10 @@ describe("DesktopCirceOrb", () => {
     expect(html).toContain("Saving…");
     // The selected row shows a check icon, not a text badge.
     expect(html).not.toContain(">Current<");
+    // An unsaved suggestion renders as its own honest state, never as current.
+    expect(html).toContain("Suggested");
+    expect(html).toContain("suggested until saved");
+    expect(html).toContain("suggestedSelection");
     expect(html).toContain("overflow:auto");
     expect(html).toContain("scrollbar-width:thin");
     // No em dashes in user-visible copy.

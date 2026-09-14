@@ -5,13 +5,19 @@ import {
   buildDesktopCirceOrbCatalog,
   buildDesktopCirceOrbAgents,
   isDesktopCirceOrbSelectionValid,
+  selectDesktopCirceOrbFallback,
 } from "./CirceDesktopOrb.bridge";
 
-function provider(nodeId: string, instanceId: string, overrides: Record<string, unknown> = {}) {
+function provider(
+  nodeId: string,
+  instanceId: string,
+  overrides: Record<string, unknown> = {},
+  available = true,
+) {
   return {
     nodeId,
     nodeLabel: nodeId,
-    available: true,
+    available,
     snapshot: {
       instanceId,
       driver: instanceId,
@@ -45,6 +51,44 @@ describe("CirceDesktopOrb bridge", () => {
     expect(catalog.selected).toBeNull();
     expect(catalog.pendingSelection).toBeNull();
     expect(catalog.error).toBeNull();
+  });
+
+  it("shows the first available provider's preferred model when none is saved", () => {
+    const fallback = selectDesktopCirceOrbFallback(
+      [
+        provider("node-b", "codex"),
+        provider("node-a", "claudeAgent", {
+          models: [
+            { slug: "alpha", name: "Alpha", isCustom: false, capabilities: null },
+            { slug: "beta", name: "Beta", isCustom: false, isDefault: true, capabilities: null },
+          ],
+        }),
+      ],
+      "node-a" as never,
+    );
+
+    // Owning node only, first available provider, and its isDefault model.
+    expect(fallback).toEqual({ instanceId: "claudeAgent", model: "beta" });
+  });
+
+  it("skips unavailable providers and providers on other nodes", () => {
+    const fallback = selectDesktopCirceOrbFallback(
+      [
+        provider("node-a", "dead", {}, false),
+        provider("node-b", "other"),
+        provider("node-a", "alive"),
+      ],
+      "node-a" as never,
+    );
+
+    expect(fallback).toEqual({ instanceId: "alive", model: "alpha" });
+  });
+
+  it("returns null when the node has no available provider", () => {
+    expect(
+      selectDesktopCirceOrbFallback([provider("node-a", "dead", {}, false)], "node-a" as never),
+    ).toBeNull();
+    expect(selectDesktopCirceOrbFallback([], "node-a" as never)).toBeNull();
   });
 
   it("prefers the isDefault model for each shortlist row", () => {
@@ -156,6 +200,60 @@ describe("CirceDesktopOrb bridge", () => {
     expect(isDesktopCirceOrbSelectionValid({ instanceId: "", model: "alpha" }, catalog)).toBe(
       false,
     );
+  });
+
+  it("skips shortlist rows whose only model slug is empty", () => {
+    const catalog = buildDesktopCirceOrbCatalog({
+      providers: [
+        provider("node-a", "blank", {
+          models: [{ slug: "", name: "Blank", isCustom: false, capabilities: null }],
+        }),
+        provider("node-a", "claudeAgent"),
+      ],
+      nodeId: "node-a" as never,
+      selected: null,
+    });
+
+    expect(catalog.providers.map((entry) => entry.instanceId)).toEqual(["claudeAgent"]);
+  });
+
+  it("appends the suggested pick when it falls outside the six rendered rows", () => {
+    const providers = [
+      ...Array.from({ length: 6 }, (_, index) => provider("node-a", `dead-${index}`, {}, false)),
+      provider("node-a", "alive"),
+    ];
+    const suggested = { instanceId: "alive", model: "alpha" };
+    expect(selectDesktopCirceOrbFallback(providers, "node-a" as never)).toEqual(suggested);
+    const catalog = buildDesktopCirceOrbCatalog({
+      providers,
+      nodeId: "node-a" as never,
+      selected: suggested,
+      suggestedSelection: suggested,
+    });
+
+    expect(catalog.providers.map((entry) => entry.instanceId)).toEqual([
+      "dead-0",
+      "dead-1",
+      "dead-2",
+      "dead-3",
+      "dead-4",
+      "dead-5",
+      "alive",
+    ]);
+    expect(catalog.suggestedSelection).toEqual(suggested);
+    expect(isDesktopCirceOrbSelectionValid(suggested, catalog)).toBe(true);
+  });
+
+  it("marks no suggestion once a default is saved", () => {
+    const catalog = buildDesktopCirceOrbCatalog({
+      providers: [provider("node-a", "claudeAgent")],
+      nodeId: "node-a" as never,
+      selected: { instanceId: "claudeAgent", model: "alpha" },
+      suggestedSelection: null,
+    });
+
+    expect(catalog.suggestedSelection).toBeNull();
+    expect(catalog.providers).toHaveLength(1);
   });
 });
 

@@ -1282,7 +1282,10 @@ export type DesktopCirceOrbSelection = typeof DesktopCirceOrbSelectionSchema.Typ
  * Renderer-owned orb catalog. The main process forwards it verbatim to the
  * overlay/helper; the overlay renders it verbatim and reports selections
  * verbatim. `pendingSelection` marks an in-flight settings save, `error`
- * carries the last honest failure. Null `selected` means project defaults.
+ * carries the last honest failure. Null `selected` means no saved default.
+ * `suggestedSelection` carries the ephemeral first-available pick the Director
+ * will use until the user saves a default; the overlay renders it as a
+ * suggestion, never as a saved current row.
  */
 export const DesktopCirceOrbCatalogSchema = Schema.Struct({
   providers: Schema.Array(DesktopCirceOrbProviderSchema),
@@ -1299,6 +1302,7 @@ export const DesktopCirceOrbCatalogSchema = Schema.Struct({
     ),
   ),
   selected: Schema.NullOr(DesktopCirceOrbSelectionSchema),
+  suggestedSelection: Schema.optionalKey(Schema.NullOr(DesktopCirceOrbSelectionSchema)),
   pendingSelection: Schema.NullOr(DesktopCirceOrbSelectionSchema),
   error: Schema.NullOr(Schema.String),
 });
@@ -1307,6 +1311,7 @@ export type DesktopCirceOrbCatalog = typeof DesktopCirceOrbCatalogSchema.Type;
 export const EMPTY_DESKTOP_CIRCE_ORB_CATALOG: DesktopCirceOrbCatalog = {
   providers: [],
   selected: null,
+  suggestedSelection: null,
   pendingSelection: null,
   error: null,
 };

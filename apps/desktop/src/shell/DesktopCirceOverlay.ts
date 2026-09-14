@@ -446,6 +446,11 @@ const orbScript = `<script>
       ? ""
       : selection.instanceId + "\\u0000" + selection.model;
 
+  const providerRowKey = (provider) => {
+    const firstModel = (provider.models ?? [])[0];
+    return firstModel === undefined ? "" : provider.instanceId + "\\u0000" + firstModel.slug;
+  };
+
   const renderStatus = () => {
     const profile = profiles[liveState.status] || profiles.idle;
     main.dataset.live = liveState.status;
@@ -488,8 +493,20 @@ const orbScript = `<script>
     runningList.textContent = "";
     const selectedKey = selectionKey(catalog.selected);
     const pendingKey = selectionKey(catalog.pendingSelection);
+    const suggestedKey = selectionKey(catalog.suggestedSelection);
     const busy = catalog.pendingSelection !== null && catalog.pendingSelection !== undefined;
-    const providers = Array.isArray(catalog.providers) ? catalog.providers.slice(0, 6) : [];
+    const listedProviders = Array.isArray(catalog.providers) ? catalog.providers.slice(0, 6) : [];
+    // The effective pick can sit outside the six rendered rows. Render its row
+    // as well so the highlight the Director will use is always visible.
+    const providers =
+      suggestedKey === "" ||
+      listedProviders.some((provider) => providerRowKey(provider) === suggestedKey)
+        ? listedProviders
+        : listedProviders.concat(
+            (Array.isArray(catalog.providers) ? catalog.providers : []).filter(
+              (provider) => providerRowKey(provider) === suggestedKey,
+            ),
+          );
     if (providers.length === 0) {
       const empty = document.createElement("p");
       empty.className = "picker-empty";
@@ -510,11 +527,20 @@ const orbScript = `<script>
         const modelName = model.name ?? model.slug;
         const isSelected = key === selectedKey;
         const isPending = key === pendingKey;
+        const isSuggested = suggestedKey !== "" && key === suggestedKey;
         const isUnavailable = provider.available === false;
         row.setAttribute(
           "aria-label",
           providerName + " with " + modelName +
-            (isPending ? ", saving" : isSelected ? ", current" : isUnavailable ? ", unavailable" : ""),
+            (isPending
+              ? ", saving"
+              : isSuggested
+                ? ", suggested until saved"
+                : isSelected
+                  ? ", current"
+                  : isUnavailable
+                    ? ", unavailable"
+                    : ""),
         );
         const text = document.createElement("span");
         text.className = "row-text";
@@ -530,6 +556,7 @@ const orbScript = `<script>
         const state = document.createElement("span");
         state.className = "row-state";
         if (isPending) state.textContent = "Saving…";
+        else if (isSuggested) state.textContent = "Suggested";
         else if (isSelected) state.appendChild(makeCheck());
         else if (isUnavailable) state.textContent = "Unavailable";
         row.appendChild(state);

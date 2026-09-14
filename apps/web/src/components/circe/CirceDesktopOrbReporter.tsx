@@ -15,6 +15,7 @@ import {
   buildDesktopCirceOrbCatalog,
   buildDesktopCirceOrbAgents,
   isDesktopCirceOrbSelectionValid,
+  selectDesktopCirceOrbFallback,
 } from "./CirceDesktopOrb.bridge";
 import type { EnvironmentId } from "@t3tools/contracts";
 
@@ -48,17 +49,37 @@ export function CirceDesktopOrbReporter({
     return { instanceId: saved.instanceId, model: saved.model };
   }, [config]);
 
+  // With no saved default, show the provider the Director will actually pick
+  // (first available on this node) so the panel never looks unpicked. The
+  // pick stays marked as a suggestion until the user saves it.
+  const fallbackSelection = useMemo<DesktopCirceOrbSelection | null>(
+    () =>
+      catalog === null ? null : selectDesktopCirceOrbFallback(catalog.providers, environmentId),
+    [catalog, environmentId],
+  );
+  const effectiveSelection = serverSelection ?? fallbackSelection;
+  const suggestedSelection = serverSelection === null ? fallbackSelection : null;
+
   const orbCatalog = useMemo(
     () =>
       buildDesktopCirceOrbCatalog({
         providers: catalog?.providers ?? [],
         nodeId: environmentId,
-        selected: serverSelection,
+        selected: effectiveSelection,
+        suggestedSelection,
         pendingSelection,
         error,
         agents,
       }),
-    [catalog, environmentId, serverSelection, pendingSelection, error, agents],
+    [
+      catalog,
+      environmentId,
+      effectiveSelection,
+      suggestedSelection,
+      pendingSelection,
+      error,
+      agents,
+    ],
   );
 
   // Push the real catalog whenever it changes. Fire-and-forget: the orb
