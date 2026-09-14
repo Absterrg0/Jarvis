@@ -9,6 +9,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as NodeOS from "node:os";
 
 function logPathHydrationWarning(message: string, error?: unknown): void {
@@ -102,12 +103,34 @@ export const expandHomePath = Effect.fn(function* (input: string) {
   return input;
 });
 
+const FOREIGN_PRODUCT_HOMES = [".t3", ".jarvis"] as const;
+
+/**
+ * The user's separate T3 Code (or pre-rebrand Jarvis) install must never be
+ * opened as a Circe data directory. Refuse instead of migrating their database.
+ */
+export class ForeignBaseDirectoryError extends Schema.TaggedError<ForeignBaseDirectoryError>()(
+  "ForeignBaseDirectoryError",
+  {
+    baseDir: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Refusing to use ${this.baseDir} as Circe's data directory: it belongs to another product. Circe stores its data in ~/.circe.`;
+  }
+}
+
 export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
   const { join, resolve } = yield* Path.Path;
+  // Circe owns `.circe`. `.t3` is the separate T3 Code product's home and
+  // `.jarvis` is the pre-rebrand install; opening either would run Circe
+  // migrations against another app's database.
   if (!raw || raw.trim().length === 0) {
-    // Circe owns `.circe`. `.t3` is the separate T3 Code product's home; opening
-    // it here would run Circe migrations against another app's database.
     return join(NodeOS.homedir(), ".circe");
   }
-  return resolve(yield* expandHomePath(raw.trim()));
+  const baseDir = resolve(yield* expandHomePath(raw.trim()));
+  if (FOREIGN_PRODUCT_HOMES.some((name) => baseDir === join(NodeOS.homedir(), name))) {
+    return yield* Effect.die(new ForeignBaseDirectoryError({ baseDir }));
+  }
+  return baseDir;
 });

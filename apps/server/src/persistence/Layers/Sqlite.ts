@@ -30,16 +30,17 @@ const makeRuntimeSqliteLayer = Effect.fn("makeRuntimeSqliteLayer")(function* (
   return clientModule.layer(config);
 }, Layer.unwrap);
 
-const setup = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    // CLI and server write from separate processes; wait rather than fail with SQLITE_BUSY.
-    yield* sql`PRAGMA busy_timeout = 5000;`;
-    yield* sql`PRAGMA foreign_keys = ON;`;
-    yield* sql`PRAGMA journal_mode = WAL;`;
-    yield* runMigrations();
-  }),
-);
+const makeSetup = (baseDir?: string) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      // CLI and server write from separate processes; wait rather than fail with SQLITE_BUSY.
+      yield* sql`PRAGMA busy_timeout = 5000;`;
+      yield* sql`PRAGMA foreign_keys = ON;`;
+      yield* sql`PRAGMA journal_mode = WAL;`;
+      yield* runMigrations({ baseDir });
+    }),
+  );
 
 export const makeSqlitePersistenceLive = Effect.fn("makeSqlitePersistenceLive")(function* (
   dbPath: string,
@@ -48,8 +49,11 @@ export const makeSqlitePersistenceLive = Effect.fn("makeSqlitePersistenceLive")(
   const path = yield* Path.Path;
   yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
 
+  // `<baseDir>/userdata/state.sqlite`: the ownership marker lives at the base.
+  const baseDir = path.dirname(path.dirname(dbPath));
+
   return Layer.provideMerge(
-    setup,
+    makeSetup(baseDir),
     makeRuntimeSqliteLayer({
       filename: dbPath,
       spanAttributes: {
@@ -61,7 +65,7 @@ export const makeSqlitePersistenceLive = Effect.fn("makeSqlitePersistenceLive")(
 }, Layer.unwrap);
 
 export const SqlitePersistenceMemory = Layer.provideMerge(
-  setup,
+  makeSetup(),
   makeRuntimeSqliteLayer({ filename: ":memory:" }),
 );
 
