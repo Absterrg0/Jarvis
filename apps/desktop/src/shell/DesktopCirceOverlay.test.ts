@@ -223,32 +223,33 @@ describe("DesktopCirceOrb", () => {
     expect(parseDesktopCirceOverlayEvent('[circe-orb] {"type":"drag","phase":"move"}')).toBeNull();
   });
 
-  it("magnets the orb to the nearest edge mesh but leaves free drops alone", () => {
+  it("leaves a free drop alone instead of pulling it into the panel-safe region", () => {
     const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
-    // The orb sits at the window's right edge, so the left/top/bottom targets
-    // sit inside the work area by the expanded window's half-footprint.
-    const left = snapDesktopCirceOverlayAnchor(workArea, { x: 40, y: 540 });
-    const right = snapDesktopCirceOverlayAnchor(workArea, { x: 1920 - 40, y: 540 });
-    const top = snapDesktopCirceOverlayAnchor(workArea, { x: 900, y: 40 });
-    const bottom = snapDesktopCirceOverlayAnchor(workArea, { x: 900, y: 1080 - 40 });
-    expect(left).toEqual({
-      x:
-        DESKTOP_CIRCE_ORB_MARGIN +
-        DESKTOP_CIRCE_ORB_WINDOW_WIDTH -
-        DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT,
-      y: 540,
-    });
-    expect(right.x).toBe(1920 - (DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT));
-    expect(top).toEqual({
-      x: 900,
-      y: DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_WINDOW_HEIGHT / 2,
-    });
-    expect(bottom.y).toBe(1080 - DESKTOP_CIRCE_ORB_MARGIN - DESKTOP_CIRCE_ORB_WINDOW_HEIGHT / 2);
-    const free = snapDesktopCirceOverlayAnchor(workArea, { x: 900, y: 450 });
-    expect(free).toEqual({ x: 900, y: 450 });
+    // Far outside every snap threshold. The previous clamp moved these
+    // hundreds of pixels toward the panel-safe region.
+    for (const drop of [
+      { x: 150, y: 150 },
+      { x: 200, y: 312 },
+    ]) {
+      expect(snapDesktopCirceOverlayAnchor(workArea, drop)).toEqual(drop);
+    }
   });
 
-  it("snaps to the closest eligible target when mesh rows overlap", () => {
+  it("magnets the orb to the right margin and the nearest mesh row", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    const edge = snapDesktopCirceOverlayAnchor(workArea, { x: 1920 - 40, y: 540 });
+    expect(edge).toEqual({
+      x: 1920 - (DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT),
+      y: 540,
+    });
+    const row = snapDesktopCirceOverlayAnchor(workArea, { x: 900, y: 850 });
+    expect(row).toEqual({
+      x: 900,
+      y: 1080 - DESKTOP_CIRCE_ORB_MARGIN - DESKTOP_CIRCE_ORB_WINDOW_HEIGHT / 2,
+    });
+  });
+
+  it("snaps to the closest eligible mesh row when rows overlap", () => {
     // A short work area compresses the five mesh rows within the threshold, so
     // a first-match scan would seat the orb on the top row instead of the
     // nearest one.
@@ -257,14 +258,13 @@ describe("DesktopCirceOrb", () => {
     expect(snapped.y).toBe(248);
   });
 
-  it("keeps the orb centre fixed as the panel opens and closes at every edge", () => {
+  it("keeps the orb centre fixed as the panel opens and closes at every snap", () => {
     const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
     const drops = [
-      { x: 40, y: 540 }, // left margin
       { x: 1920 - 40, y: 540 }, // right margin
-      { x: 900, y: 40 }, // top row
-      { x: 900, y: 1080 - 40 }, // bottom row
-      { x: 900, y: 450 }, // free drop
+      { x: 900, y: 250 }, // top mesh row
+      { x: 900, y: 545 }, // middle mesh row
+      { x: 900, y: 850 }, // bottom mesh row
     ];
     for (const drop of drops) {
       const anchor = snapDesktopCirceOverlayAnchor(workArea, drop);

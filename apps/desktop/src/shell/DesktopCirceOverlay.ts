@@ -128,35 +128,34 @@ function desktopCirceOverlayWindowSize(
 
 /**
  * Free placement with edge magnetism: the orb stays where it was dropped
- * unless its centre is near the left/right margin or a row of the vertical
- * mesh, in which case it settles onto the nearest line. No full-screen overlay
- * is needed, so dragging stays cheap.
+ * unless its centre is near the right margin or a row of the vertical mesh, in
+ * which case it settles onto the nearest line. No full-screen overlay is
+ * needed, so dragging stays cheap.
  *
- * The targets are first pulled inside the region where the expanded panel can
- * be shown around the orb. The orb sits at the window's right edge, so the
- * left and top/bottom targets are well inside the work area, not at its edge.
- * Clamping to that region is what keeps the orb from jumping when the panel
- * opens: an anchor this function returns is never moved by
- * `resolveDesktopCirceOverlayBounds`.
+ * The panel opens to the left of the orb and is centred on it, so snapping is
+ * limited to the places that layout can honestly hold:
+ *
+ * - Only the right margin is a horizontal target. A left target would sit
+ *   under the panel's own footprint and could not be preserved once expanded.
+ * - Only the mesh rows inside the vertical band the expanded panel can occupy
+ *   are targets; a row above or below the band would force the orb to move on
+ *   expansion.
+ *
+ * A drop that is not near a target is returned unchanged. The old behaviour
+ * clamped every drop into the expanded-safe region, which moved genuine free
+ * placements by hundreds of pixels.
  */
 export function snapDesktopCirceOverlayAnchor(
   workArea: DesktopCirceOverlayWorkArea,
   anchor: DesktopCirceOverlayAnchor,
   threshold = DESKTOP_CIRCE_ORB_SNAP_THRESHOLD,
 ): DesktopCirceOverlayAnchor {
-  const expanded = desktopCirceOverlayWindowSize(workArea, true);
-  const marginX = Math.min(
-    DESKTOP_CIRCE_ORB_MARGIN,
-    Math.max(0, workArea.width - expanded.width) / 2,
-  );
-  const marginY = Math.min(
-    DESKTOP_CIRCE_ORB_MARGIN,
-    Math.max(0, workArea.height - expanded.height) / 2,
-  );
-  const minX = workArea.x + marginX + (expanded.width - DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT);
-  const maxX = workArea.x + workArea.width - marginX - DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT;
-  const minY = workArea.y + marginY + expanded.height / 2;
-  const maxY = workArea.y + workArea.height - marginY - expanded.height / 2;
+  const minX = workArea.x + DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT;
+  const maxX =
+    workArea.x + workArea.width - DESKTOP_CIRCE_ORB_MARGIN - DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT;
+  const minY = workArea.y + DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT;
+  const maxY =
+    workArea.y + workArea.height - DESKTOP_CIRCE_ORB_MARGIN - DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT;
   const snapTo = (value: number, targets: ReadonlyArray<number>): number => {
     let best = value;
     let bestDistance = Number.POSITIVE_INFINITY;
@@ -172,12 +171,18 @@ export function snapDesktopCirceOverlayAnchor(
 
   const clampedX = clamp(anchor.x, minX, maxX);
   const clampedY = clamp(anchor.y, minY, maxY);
-  const verticalTargets = Array.from(
-    { length: SNAP_VERTICAL_STEPS },
-    (_, index) => minY + ((maxY - minY) * index) / (SNAP_VERTICAL_STEPS - 1),
-  );
+  const expanded = desktopCirceOverlayWindowSize(workArea, true);
+  const bandTop = workArea.y + DESKTOP_CIRCE_ORB_MARGIN + expanded.height / 2;
+  const bandBottom = workArea.y + workArea.height - DESKTOP_CIRCE_ORB_MARGIN - expanded.height / 2;
+  const verticalTargets =
+    bandBottom > bandTop
+      ? Array.from(
+          { length: SNAP_VERTICAL_STEPS },
+          (_, index) => bandTop + ((bandBottom - bandTop) * index) / (SNAP_VERTICAL_STEPS - 1),
+        )
+      : [];
   return {
-    x: snapTo(clampedX, [minX, maxX]),
+    x: snapTo(clampedX, [maxX]),
     y: snapTo(clampedY, verticalTargets),
   };
 }
