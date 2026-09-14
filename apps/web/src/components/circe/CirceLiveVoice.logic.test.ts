@@ -878,4 +878,29 @@ describe("cloud live voice release", () => {
     expect(f.failures).toContain("Cloud release failed");
     expect(f.tracks[0]?.stopped).toBe(true);
   });
+
+  it("attempts graceful close for a local session whose creation resolves late", async () => {
+    const entered = deferred<void>();
+    const answer = deferred<CirceLiveVoiceStartResult>();
+    const localSession = {
+      sessionId: "live_1",
+      sdpAnswer: "v=0\r\ns=answer\r\n",
+      model: "gpt-live-1",
+      voice: "marin",
+    };
+    const f = fixture({
+      start: () => {
+        entered.resolve();
+        return answer.promise;
+      },
+    });
+    const starting = f.controller.start();
+    await entered.promise;
+    const closing = f.controller.close();
+    answer.resolve(localSession);
+    await starting;
+    await closing;
+    expect(f.peer.channel.events()).toContainEqual({ type: "session.close" });
+    expect(f.peer.remote).toBeNull();
+  });
 });

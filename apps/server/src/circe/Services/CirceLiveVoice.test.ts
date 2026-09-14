@@ -301,6 +301,65 @@ describe("cloud live voice lifecycle", () => {
 });
 
 describe("cloud release retry", () => {
+  it.effect("releases an unknown session id through the current link", () => {
+    const { serviceLayer, calls } = cloudFixture(() => Response.json({ ok: true }));
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* service.releaseSession({ sessionId: "stale_unknown" });
+      expect(calls.map((call) => [call.method, call.url])).toEqual([
+        [
+          "DELETE",
+          "https://relay.example/v1/environments/node-one/live-voice/sessions/stale_unknown",
+        ],
+      ]);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+  it.effect("treats an unknown release on an unlinked node as a no-op", () => {
+    const answer = {
+      sessionId: "cloud_1",
+      sdpAnswer: "v=0\r\ns=answer\r\n",
+      model: "gpt-live-1",
+      voice: "marin",
+    };
+    const { serviceLayer, calls, values } = cloudFixture(() => Response.json(answer));
+    values.clear();
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* service.releaseSession({ sessionId: "stale_unknown" });
+      expect(calls).toHaveLength(0);
+      // The stale id must not wedge the retry set: the next create reaches
+      // the local-key path (which fails here only for the missing test key).
+      expect(yield* service.createSession(input).pipe(Effect.flip)).toMatchObject({
+        reason: "not-configured",
+      });
+      expect(calls).toHaveLength(0);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+  it.effect("never lets a failed cloud release block local sessions after unlink", () => {
+    let attempt = 0;
+    const answer = {
+      sessionId: "cloud_retry",
+      sdpAnswer: "answer",
+      model: "gpt-live-1",
+      voice: "marin",
+    };
+    const { serviceLayer, calls, values } = cloudFixture(() => {
+      attempt += 1;
+      return attempt === 2
+        ? Response.json({ code: "live_voice_upstream_failed" }, { status: 502 })
+        : Response.json(answer);
+    });
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* service.createSession(input);
+      yield* service.releaseSession({ sessionId: "cloud_retry" }).pipe(Effect.flip);
+      values.clear();
+      expect(yield* service.createSession(input).pipe(Effect.flip)).toMatchObject({
+        reason: "not-configured",
+      });
+      expect(calls.map((call) => call.method)).toEqual(["POST", "DELETE"]);
+    }).pipe(Effect.provide(serviceLayer));
+  });
   it.effect("retries a failed requested release before minting another session", () => {
     let attempt = 0;
     const answer = {

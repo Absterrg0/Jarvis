@@ -378,6 +378,10 @@ export const CirceWsRpcHandlerExtensionLive = Layer.effect(
                 circe.cancelRequest({ ...input, executionNodeId }),
                 { "rpc.aggregate": "circe" },
               ),
+            // Release is intentionally not gated on presetOffersVoice like start
+            // is: it is a cleanup path, and a session minted before a preset
+            // change (or by a stale client) must still be closable. Release is
+            // idempotent and mints nothing, so it cannot grant voice capability.
             [WS_METHODS.circeVoiceLiveRelease]: (input) =>
               context.observeRpcEffect(
                 WS_METHODS.circeVoiceLiveRelease,

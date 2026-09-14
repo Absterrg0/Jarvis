@@ -290,17 +290,26 @@ export const layer = Layer.effect(
         ),
       );
     const releasesToRetry = new Set<string>();
+    // Release is idempotent and safe to call for any id. An unknown id on an
+    // unlinked node is a no-op success, never an error, so a stale renderer
+    // can never wedge future sessions. Known ids always release on their
+    // original authenticated route, even after an unlink.
     const releaseSession: CirceLiveVoiceShape["releaseSession"] = ({ sessionId }) =>
       Effect.gen(function* () {
-        releasesToRetry.add(sessionId);
-        const config = sessions.get(sessionId) ?? (yield* readRelayConfig);
-        if (config === null)
-          return yield* new CirceLiveVoiceRuntimeError({
-            message: "Relink this node to release its cloud live conversation.",
-          });
+        const known = sessions.get(sessionId);
+        const config = known ?? (yield* readRelayConfig);
+        if (config === null) {
+          releasesToRetry.delete(sessionId);
+          return;
+        }
         yield* executeRelay(
           HttpClientRequest.delete(`${config.endpoint}/${encodeURIComponent(sessionId)}`).pipe(
             HttpClientRequest.setHeader("Authorization", `Bearer ${config.environmentCredential}`),
+          ),
+        ).pipe(
+          Effect.tapError(() =>
+            // The slot may still be held: retry on the next cloud create.
+            Effect.sync(() => releasesToRetry.add(sessionId)),
           ),
         );
         sessions.delete(sessionId);
@@ -310,9 +319,12 @@ export const layer = Layer.effect(
       createSession: (input) =>
         Effect.gen(function* () {
           yield* validateCirceLiveVoiceCreateInput(input);
-          for (const sessionId of releasesToRetry) yield* releaseSession({ sessionId });
           const relayConfig = yield* readRelayConfig;
           if (relayConfig !== null) {
+            // Drain pending releases before minting: one account holds one
+            // slot. Local sessions never touch the relay, so a stuck cloud
+            // release must not block them.
+            for (const sessionId of releasesToRetry) yield* releaseSession({ sessionId });
             const response = yield* executeRelay(
               HttpClientRequest.post(relayConfig.endpoint).pipe(
                 HttpClientRequest.setHeader(

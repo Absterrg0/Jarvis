@@ -620,11 +620,11 @@ export function createCirceLiveVoiceController(
     if (cloudSessionId !== null) {
       releaseCloudSession();
       await releasePending;
-    } else if (
-      sessionCreation === null &&
-      gracefulChannel !== null &&
-      gracefulChannel.readyState === "open"
-    ) {
+    } else if (gracefulChannel !== null && gracefulChannel.readyState === "open") {
+      // Local-key sessions always close over the data channel, including when
+      // creation is still in flight: a late local answer is suppressed above,
+      // and cloud sessions are already covered by the node release, so this
+      // branch can never double-close a cloud session.
       const closed = new Promise<void>((resolve) => {
         resolveClosed = resolve;
       });

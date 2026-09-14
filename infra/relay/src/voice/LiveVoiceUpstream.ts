@@ -47,10 +47,11 @@ export class LiveVoiceUpstream extends Context.Service<LiveVoiceUpstream, LiveVo
   "@circe/relay/voice/LiveVoiceUpstream",
 ) {}
 
+// Proof is the exact session_id_not_found code. Sibling fields may drift, but
+// a generic 404 is not proof: it could be a missing route or proxy response.
 const SessionNotFound = Schema.Struct({
   error: Schema.Struct({
     code: Schema.Literal("session_id_not_found"),
-    param: Schema.Literal("session_id"),
   }),
 });
 

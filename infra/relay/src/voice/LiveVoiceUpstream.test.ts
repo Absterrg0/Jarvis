@@ -101,6 +101,20 @@ describe("LiveVoiceUpstream hangup", () => {
       success: true,
     },
     {
+      name: "already ended session without sibling fields",
+      status: 404,
+      body: { error: { code: "session_id_not_found" } },
+      success: true,
+    },
+    {
+      name: "already ended session with drifted sibling fields",
+      status: 404,
+      body: {
+        error: { code: "session_id_not_found", param: "other", type: "invalid_request_error" },
+      },
+      success: true,
+    },
+    {
       name: "unrelated missing endpoint",
       status: 404,
       body: { error: { code: "not_found" } },
@@ -145,4 +159,25 @@ describe("LiveVoiceUpstream hangup", () => {
       }).pipe(Effect.provide(withClient(client)));
     });
   }
+  it.effect("keeps a non-JSON 404 uncertain so the reservation is retained", () => {
+    const client = HttpClient.make((request) =>
+      Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          new Response("<html>not found</html>", {
+            status: 404,
+            headers: { "content-type": "text/html" },
+          }),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const upstream = yield* LiveVoiceUpstream;
+      expect(
+        yield* upstream
+          .end({ apiKey: Redacted.make("sk-test"), sessionId: "live_original" })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "LiveVoiceUpstreamEndFailed" });
+    }).pipe(Effect.provide(withClient(client)));
+  });
 });

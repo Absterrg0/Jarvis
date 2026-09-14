@@ -117,6 +117,15 @@ Apply the relay migration before deploying this version. It adds a database-gene
 `reservation_id` and converts legacy empty session ids to null. Drain the older relay version
 before migration: older code assumes every session id is a string and may discard an empty id.
 
+On the node, release is idempotent: releasing an unknown session id on an
+unlinked node succeeds without contacting the relay, so a stale renderer can
+never wedge future sessions. Pending cloud releases retry on the next cloud
+session create and never block local-key sessions.
+
+Ship the node, relay, and renderer together. Older renderers ignore the
+`releaseRequired` flag, so a cloud session started by an old client is never
+released and its reservation is freed only by the recovery procedure below.
+
 For an account reporting `live_voice_session_in_use` after a failed start, inspect the relay database
 with a read-only query, binding the account id as `$1`:
 
