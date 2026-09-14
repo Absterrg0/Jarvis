@@ -62,7 +62,7 @@ export class SqliteStateSharedHomeMutationError extends Schema.TaggedError<Sqlit
   {},
 ) {
   override get message(): string {
-    return "Refusing to mutate the shared ~/.circe database. Use an isolated --base-dir.";
+    return "Refusing to mutate a protected shared database. Use an isolated --base-dir.";
   }
 }
 
