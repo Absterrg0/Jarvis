@@ -11,8 +11,9 @@ const KNOWN_WEBSITES: Readonly<Record<string, string>> = {
   spotify: "https://open.spotify.com/",
 };
 
-const normalizeText = (value: string): string =>
-  value.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/g, " ").trim();
+// Plain lowercasing and whitespace folding only: aliases and addresses are
+// ASCII, and this must parse on every JS engine the clients run.
+const normalizeText = (value: string): string => value.toLowerCase().replace(/\s+/g, " ").trim();
 
 const normalizeAddress = (value: string): string =>
   normalizeText(value)
@@ -27,15 +28,15 @@ const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\
  * not sit inside a longer word or a longer domain: "yt" does not match in
  * "python" or "yt.example", and "example.com" does not match in
  * "myexample.com" or "example.com.evil". A trailing sentence period is
- * allowed, because it is not followed by a domain label.
+ * allowed, because it is not followed by a domain label. The leading
+ * boundary is part of the match (no lookbehind) so this runs on every JS
+ * engine Hermes included.
  */
 function containsToken(haystack: string, token: string): boolean {
   const needle = normalizeText(token);
   if (needle.length === 0) return false;
   const pattern = needle.split(" ").map(escapeRegExp).join("\\s+");
-  return new RegExp(`(?<![.\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])(?!\\.\\p{L})`, "u").test(
-    haystack,
-  );
+  return new RegExp(`(?:^|[^a-z0-9.])(${pattern})(?![a-z0-9])(?!\\.[a-z])`, "u").test(haystack);
 }
 
 /**
