@@ -189,11 +189,20 @@ export const runSqliteState = Effect.fn("runSqliteState")(function* (
     return yield* new SqliteStateDatabaseMissingError({ databasePath });
   }
   if (input.operation === "exec") {
-    const [canonicalBaseDir, canonicalSharedHome] = yield* Effect.all([
+    // Protect Circe's shared home and the other products' homes. The legacy
+    // ~/.t3 and ~/.jarvis databases belong to separate installs and must never
+    // be mutated by an ad-hoc exec, even when one is passed as --base-dir.
+    const protectedHomes = [
+      sharedHome,
+      path.join(NodeOS.homedir(), ".t3"),
+      path.join(NodeOS.homedir(), ".jarvis"),
+    ];
+    const canonical = yield* Effect.all([
       fs.realPath(baseDir),
-      fs.realPath(sharedHome).pipe(Effect.orElseSucceed(() => sharedHome)),
+      ...protectedHomes.map((home) => fs.realPath(home).pipe(Effect.orElseSucceed(() => home))),
     ]);
-    if (canonicalBaseDir === canonicalSharedHome) {
+    const canonicalBaseDir = canonical[0];
+    if (canonical.slice(1).includes(canonicalBaseDir)) {
       return yield* new SqliteStateSharedHomeMutationError();
     }
   }
