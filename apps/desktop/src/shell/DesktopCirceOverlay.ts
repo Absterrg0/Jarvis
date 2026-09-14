@@ -144,6 +144,10 @@ function desktopCirceOverlayWindowSize(
  * A drop that is not near a target is returned unchanged. The old behaviour
  * clamped every drop into the expanded-safe region, which moved genuine free
  * placements by hundreds of pixels.
+ *
+ * The two axes are considered together: a snap is only accepted when the
+ * expanded panel preserves the resulting orb centre on both axes. Snapping one
+ * axis while the other cannot be held would still jump when the picker opens.
  */
 export function snapDesktopCirceOverlayAnchor(
   workArea: DesktopCirceOverlayWorkArea,
@@ -181,10 +185,21 @@ export function snapDesktopCirceOverlayAnchor(
           (_, index) => bandTop + ((bandBottom - bandTop) * index) / (SNAP_VERTICAL_STEPS - 1),
         )
       : [];
-  return {
+  const candidate = {
     x: snapTo(clampedX, [maxX]),
     y: snapTo(clampedY, verticalTargets),
   };
+  // Snapping each axis independently can land on a placement the other axis
+  // cannot hold: a mesh row at an x the panel would have to clamp, or the
+  // right margin at a y too close to the top or bottom. Only accept the snap
+  // when the expanded panel actually preserves the whole candidate; otherwise
+  // the drop would jump when the picker opens.
+  const expandedCenter = desktopCirceOverlayOrbCenter(
+    resolveDesktopCirceOverlayBounds(workArea, true, candidate),
+  );
+  const preserved =
+    Math.abs(expandedCenter.x - candidate.x) <= 1 && Math.abs(expandedCenter.y - candidate.y) <= 1;
+  return preserved ? candidate : { x: clampedX, y: clampedY };
 }
 
 /**

@@ -258,6 +258,29 @@ describe("DesktopCirceOrb", () => {
     expect(snapped.y).toBe(248);
   });
 
+  it("rejects a mesh-row snap when x cannot survive expansion", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    // y=250 is close to the first mesh row, but x=150 sits under the
+    // left-opening panel, so expanding would clamp the orb to x=348. The snap
+    // must be rejected rather than returned as a safe vertical snap.
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: 150, y: 250 })).toEqual({
+      x: 150,
+      y: 250,
+    });
+  });
+
+  it("rejects a right-margin snap when y cannot survive expansion", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    // x=1840 is inside the clamp but within the snap threshold of the right
+    // margin, while y=150 is above the band the vertically-centred panel can
+    // occupy: expanding would move the orb down to y=220. The snap must be
+    // rejected and x left free.
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: 1840, y: 150 })).toEqual({
+      x: 1840,
+      y: 150,
+    });
+  });
+
   it("keeps the orb centre fixed as the panel opens and closes at every snap", () => {
     const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
     const drops = [
