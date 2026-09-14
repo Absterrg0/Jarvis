@@ -243,9 +243,11 @@ Circe copies the place from your own words and never invents one. If the place i
 asks you to say the city with its state or country.
 
 Website commands open your device's browser, including when a remote coding task is selected.
-On desktop, Circe asks the operating system to open the browser; your window manager controls
-whether it comes to the foreground. A web browser may block a popup started by voice. Circe
-reports a failed launch instead of claiming it opened.
+Circe only opens a site you named: a shortcut such as YouTube or an address such as example.com
+must appear in your own words, and a target that did not is refused. On desktop, Circe asks the
+operating system to open the browser; your window manager controls whether it comes to the
+foreground. A web browser may block a popup started by voice. Circe reports a failed launch
+instead of claiming it opened.
 
 Requests with extra work, such as "open YouTube and find a video", or an explicit background
 or remote destination use the ordinary task flow. Other questions and research still use agents.

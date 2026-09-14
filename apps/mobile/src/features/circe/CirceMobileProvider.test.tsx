@@ -1,6 +1,12 @@
 import { isValidElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ProjectId, ThreadId, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ThreadId,
+  ProviderInstanceId,
+  circeNodeCapabilitiesForPreset,
+} from "@t3tools/contracts";
 import type { CirceMeshCatalog } from "@circe/client-runtime/circe/mesh";
 import { reactHookHarness as hooks } from "../../../../web/src/test/reactHookHarness";
 
@@ -824,6 +830,69 @@ describe("mobile assistant quick actions", () => {
     await instruction("open YouTube");
     expect(state.openWebsite).toHaveBeenCalledWith("https://www.youtube.com/");
     expect(state.execute).not.toHaveBeenCalled();
+  });
+  it("refuses a proposed website the user never named", async () => {
+    state.interpret.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        action: "open-website",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        website: "https://evil.example",
+      },
+    });
+    await instruction("open YouTube");
+    expect(state.openWebsite).not.toHaveBeenCalled();
+    expect(state.execute).not.toHaveBeenCalled();
+  });
+  it("routes a lookup to a lookup-capable node instead of a headless desk node", async () => {
+    const headlessId = EnvironmentId.make("vps-headless");
+    const fullId = EnvironmentId.make("laptop-full");
+    state.catalog = {
+      nodes: [
+        {
+          nodeId: headlessId,
+          label: "VPS",
+          reachability: "online",
+          capabilities: circeNodeCapabilitiesForPreset("headless"),
+        },
+        {
+          nodeId: fullId,
+          label: "Laptop",
+          reachability: "online",
+          capabilities: circeNodeCapabilitiesForPreset("full"),
+        },
+      ],
+      projects: [],
+      providers: [],
+    };
+    state.interpret.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        action: "lookup",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        lookup: { kind: "weather", location: "Ahmedabad", day: "now" },
+      },
+    });
+    state.quickLookup.mockResolvedValue({
+      _tag: "Success",
+      value: { status: "answer", message: "Ahmedabad: 31°C.", source: "https://open-meteo.com/" },
+    });
+    await instruction("weather in Ahmedabad");
+    expect(state.quickLookup).toHaveBeenCalledWith({
+      environmentId: fullId,
+      input: {
+        kind: "weather",
+        location: "Ahmedabad",
+        day: "now",
+        sourceUtterance: "weather in Ahmedabad",
+      },
+    });
   });
   it("runs a proposed weather lookup through the node without a project", async () => {
     state.interpret.mockResolvedValueOnce({

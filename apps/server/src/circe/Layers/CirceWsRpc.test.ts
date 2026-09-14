@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 
 import {
   circeRpcScopeExtension,
+  groundCirceWebsiteProposal,
   runCirceVoiceLiveStart,
   toCirceExecuteClientError,
   toCirceInterpretClientError,
@@ -165,6 +166,28 @@ describe("Circe WebSocket RPC extension", () => {
       message: "Circe could not interpret that request.",
     });
     expect(interpretLeaked.message).not.toContain("secret=x");
+  });
+
+  it("grounds a proposed website launch in the source utterance", () => {
+    const proposal = (website: string) => ({
+      action: "open-website" as const,
+      refs: [],
+      model: null,
+      effort: null,
+      answer: null,
+      website,
+    });
+    expect(groundCirceWebsiteProposal(proposal("YouTube"), "Open YouTube")).toMatchObject({
+      action: "open-website",
+      website: "YouTube",
+    });
+    expect(
+      groundCirceWebsiteProposal(proposal("https://example.com"), "open https://example.com"),
+    ).toMatchObject({ action: "open-website", website: "https://example.com" });
+    // Regression: an ungrounded target never reaches a client launcher.
+    expect(
+      groundCirceWebsiteProposal(proposal("https://evil.example"), "Open YouTube"),
+    ).toMatchObject({ action: "unsupported" });
   });
 
   it("recognizes typed errors that crossed a serialization boundary", () => {

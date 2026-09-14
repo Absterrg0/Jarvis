@@ -11,26 +11,73 @@ const KNOWN_WEBSITES: Readonly<Record<string, string>> = {
   spotify: "https://open.spotify.com/",
 };
 
+const normalizeText = (value: string): string =>
+  value.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/g, " ").trim();
+
+const normalizeAddress = (value: string): string =>
+  normalizeText(value)
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//u, "")
+    .replace(/^www\./u, "")
+    .replace(/\/+$/u, "");
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+
 /**
- * Only explicit web addresses or app-owned names may launch. No inferred
- * schemes, credentials, or shell commands. Shared by the node that validates
- * a proposed launch and the client that performs it.
+ * Whole-token presence of a phrase in already-normalized text. The token may
+ * not sit inside a longer word or a longer domain: "yt" does not match in
+ * "python" or "yt.example", and "example.com" does not match in
+ * "myexample.com" or "example.com.evil". A trailing sentence period is
+ * allowed, because it is not followed by a domain label.
  */
-export function circeWebsiteUrl(value: string): string | null {
+function containsToken(haystack: string, token: string): boolean {
+  const needle = normalizeText(token);
+  if (needle.length === 0) return false;
+  const pattern = needle.split(" ").map(escapeRegExp).join("\\s+");
+  return new RegExp(`(?<![.\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])(?!\\.\\p{L})`, "u").test(
+    haystack,
+  );
+}
+
+/**
+ * Resolve a proposed website launch to a concrete URL, grounded in what the
+ * user actually said. The model proposes a name or URL; this function is the
+ * deterministic authority:
+ *
+ * - An app-owned alias (YouTube, Google, ...) resolves only when some alias
+ *   for that same site appears as a token in the utterance.
+ * - An explicit http(s) URL or domain resolves only when its normalized
+ *   address (scheme, leading www, and trailing slash removed) appears as a
+ *   token in the utterance.
+ *
+ * Nothing else may launch. No inferred schemes, credentials, or shell
+ * commands, and no target the user never spoke. Shared by the node that
+ * validates a proposed launch and the client that performs it.
+ */
+export function circeWebsiteUrl(value: string, sourceUtterance?: string): string | null {
   const candidate = value.trim();
+  if (candidate.length === 0) return null;
+  const source = sourceUtterance === undefined ? "" : normalizeText(sourceUtterance);
+
   const known = KNOWN_WEBSITES[candidate.toLowerCase()];
-  if (known !== undefined) return known;
+  if (known !== undefined) {
+    const aliases = Object.entries(KNOWN_WEBSITES)
+      .filter(([, url]) => url === known)
+      .map(([alias]) => alias);
+    return aliases.some((alias) => containsToken(source, alias)) ? known : null;
+  }
+
   if (
     !/^https?:\/\/\S+$/i.test(candidate) &&
     !/^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+\/?$/i.test(candidate)
   )
     return null;
+  let url: URL;
   try {
-    const url = new URL(/^https?:/i.test(candidate) ? candidate : `https://${candidate}`);
-    return (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password
-      ? url.href
-      : null;
+    url = new URL(/^https?:/i.test(candidate) ? candidate : `https://${candidate}`);
   } catch {
     return null;
   }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  if (url.username.length > 0 || url.password.length > 0) return null;
+  return containsToken(source, normalizeAddress(url.href)) ? url.href : null;
 }

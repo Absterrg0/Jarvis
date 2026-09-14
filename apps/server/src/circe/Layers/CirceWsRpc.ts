@@ -24,6 +24,7 @@ import {
   type CirceTaskDeskState,
   type CirceTaskDeskTask,
   type CirceTaskDeskTaskView,
+  type CirceSemanticProposal,
   type CirceTaskDeskView,
   type OrchestrationShellSnapshot,
   circeNodeCapabilitiesForPreset,
@@ -38,6 +39,7 @@ import { AuthSessionRepository } from "../../persistence/AuthSessions.ts";
 import { WsRpcHandlerExtension, type WsRpcExtensionContext } from "../../ws.ts";
 import { buildProjectVocabulary } from "@circe/core/buildProjectVocabulary";
 import { getPendingCirceReplyState } from "@circe/core/confirmation";
+import { circeWebsiteUrl } from "@circe/core/website";
 import { deriveCirceTaskState } from "@circe/core/deriveTaskState";
 import { circeRequestAcceptanceKey } from "@circe/core/requestIdentity";
 import * as CirceController from "../Services/CirceController.ts";
@@ -148,6 +150,22 @@ export function toCirceInterpretClientError(error: unknown): CirceExecutionError
     code: "dispatch-failed",
     message: "Circe could not interpret that request.",
   });
+}
+
+/**
+ * The host authorizes a proposed website launch before any client sees it.
+ * A target that cannot be grounded in the user's own utterance is downgraded
+ * to `unsupported`, so a hallucinated alias or URL never reaches a launcher.
+ */
+export function groundCirceWebsiteProposal(
+  proposal: CirceSemanticProposal,
+  sourceUtterance: string,
+): CirceSemanticProposal {
+  if (proposal.action !== "open-website") return proposal;
+  return typeof proposal.website === "string" &&
+    circeWebsiteUrl(proposal.website, sourceUtterance) !== null
+    ? proposal
+    : { action: "unsupported", refs: [], model: null, effort: null, answer: null };
 }
 
 export function validateCirceFocusTaskIdentity(
@@ -353,7 +371,7 @@ export const CirceWsRpcHandlerExtensionLive = Layer.effect(
                         "This Circe node is configured as a controller and cannot run semantic interpretation.",
                     });
                   }
-                  return yield* circe.interpret({
+                  const proposal = yield* circe.interpret({
                     ...input,
                     executionNodeId,
                     ...(input.requestMetadata === undefined
@@ -365,6 +383,7 @@ export const CirceWsRpcHandlerExtensionLive = Layer.effect(
                           }),
                         }),
                   });
+                  return groundCirceWebsiteProposal(proposal, input.utterance);
                 }).pipe(
                   Effect.tapCause((cause) =>
                     Effect.logWarning("Circe interpret failed", {

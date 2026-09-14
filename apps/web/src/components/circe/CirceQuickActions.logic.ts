@@ -1,8 +1,8 @@
 import { circeWebsiteUrl } from "@circe/core/website";
 
 /** Opening for the user belongs to their client, even when their selected task is remote. */
-export async function openCirceWebsite(url: string): Promise<boolean> {
-  const safe = circeWebsiteUrl(url);
+export async function openCirceWebsite(url: string, sourceUtterance: string): Promise<boolean> {
+  const safe = circeWebsiteUrl(url, sourceUtterance);
   if (safe === null) return false;
   if (window.desktopBridge !== undefined) return window.desktopBridge.openExternal(safe);
   // Browser permission may block a voice-triggered popup. Report that instead of opening a hidden tab.

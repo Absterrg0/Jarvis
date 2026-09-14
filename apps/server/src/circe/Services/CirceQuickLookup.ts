@@ -8,7 +8,6 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 const decodeLookupInput = Schema.decodeEffect(CirceQuickLookupInput);
 const Place = Schema.Struct({
-  id: Schema.Int,
   name: Schema.String,
   latitude: Schema.Finite,
   longitude: Schema.Finite,
@@ -83,7 +82,6 @@ export const runCirceQuickLookup = (
       return {
         status: "needs-input",
         message: "Name a city, optionally followed by its state and country.",
-        choices: [],
       };
     const geocoding = new URL("https://geocoding-api.open-meteo.com/v1/search");
     geocoding.search = new URLSearchParams({
@@ -101,24 +99,25 @@ export const runCirceQuickLookup = (
         ),
       ),
     );
-    const selected =
-      input.placeId === undefined
-        ? candidates.length === 1
-          ? candidates[0]
-          : undefined
-        : candidates.find((place) => place.id === input.placeId);
+    const selected = candidates.length === 1 ? candidates[0] : undefined;
     if (selected === undefined) {
       return {
         status: "needs-input",
         message:
           candidates.length === 0
             ? `I couldn't find ${input.location}. Try the city, state, and country.`
-            : "Which place did you mean?",
-        choices: candidates.map((place) => ({ id: place.id, label: placeLabel(place) })),
+            : `I found multiple places named ${name}. Ask again with the city, state, or country.`,
       };
     }
     const label = placeLabel(selected);
     if (input.kind === "time") {
+      // This tool reports the current local time only. A future day cannot be
+      // answered, so refuse it instead of returning the wrong clock.
+      if (input.day !== "now")
+        return {
+          status: "unavailable",
+          message: "I can only tell you the current local time. Ask again with the place.",
+        };
       const now = DateTime.toEpochMillis(yield* DateTime.now);
       const time = yield* Effect.try(() =>
         new Intl.DateTimeFormat("en", {

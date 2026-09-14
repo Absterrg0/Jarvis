@@ -11,8 +11,6 @@ export const CirceQuickLookupInput = Schema.Struct({
    * place that does not appear here, so a model can never invent a location.
    */
   sourceUtterance: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(16_000))),
-  /** A choice returned by this lookup's real place catalog. Revalidated on the node. */
-  placeId: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
 });
 export type CirceQuickLookupInput = typeof CirceQuickLookupInput.Type;
 
@@ -22,13 +20,7 @@ export const CirceQuickLookupResult = Schema.Union([
     message: TrimmedNonEmptyString,
     source: TrimmedNonEmptyString,
   }),
-  Schema.Struct({
-    status: Schema.Literal("needs-input"),
-    message: TrimmedNonEmptyString,
-    choices: Schema.Array(Schema.Struct({ id: Schema.Int, label: TrimmedNonEmptyString })).check(
-      Schema.isMaxLength(10),
-    ),
-  }),
+  Schema.Struct({ status: Schema.Literal("needs-input"), message: TrimmedNonEmptyString }),
   Schema.Struct({ status: Schema.Literal("unavailable"), message: TrimmedNonEmptyString }),
 ]);
 export type CirceQuickLookupResult = typeof CirceQuickLookupResult.Type;

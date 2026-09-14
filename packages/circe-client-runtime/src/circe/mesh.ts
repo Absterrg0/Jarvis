@@ -366,6 +366,40 @@ export function selectCirceSemanticNode(
   return online[0];
 }
 
+/**
+ * Whether a node advertises a preset that can run a bounded quick lookup.
+ * Lookups need a Full or Controller surface; a Headless node refuses them
+ * before any network call. Capabilities are required, so a node with unknown
+ * capabilities is never treated as capable.
+ */
+function circeMeshNodeSupportsQuickLookup(node: CirceMeshNode): boolean {
+  return (
+    node.reachability === "online" &&
+    node.capabilities !== undefined &&
+    node.capabilities.preset !== "headless"
+  );
+}
+
+/**
+ * Pick the node that runs a bounded quick lookup. Prefer the given nodes in
+ * order when they are online and lookup-capable, then the first capable node.
+ * Returns undefined when no node advertises the capability, so a caller can
+ * fall back to its semantic node or report unavailability instead of silently
+ * routing the lookup to a Headless node.
+ */
+export function selectCirceQuickLookupNode(
+  catalog: CirceMeshCatalog,
+  preferredNodeIds: ReadonlyArray<EnvironmentId | null | undefined> = [],
+): CirceMeshNode | undefined {
+  const capable = catalog.nodes.filter(circeMeshNodeSupportsQuickLookup);
+  for (const nodeId of preferredNodeIds) {
+    if (nodeId === null || nodeId === undefined) continue;
+    const preferred = capable.find((node) => node.nodeId === nodeId);
+    if (preferred !== undefined) return preferred;
+  }
+  return capable[0];
+}
+
 export interface CirceMeshInterpretEvidenceOptions {
   readonly currentProjectTitle?: string;
   readonly focusedTask?: { readonly title: string; readonly project?: string };

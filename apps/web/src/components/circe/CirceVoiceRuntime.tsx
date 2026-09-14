@@ -6,6 +6,7 @@ import {
   buildCirceInterpretInput,
   circeMeshCatalogCoverage,
   circeMeshNodeReadiness,
+  selectCirceQuickLookupNode,
   selectCirceSemanticNode,
   type CirceMeshProject,
   type CirceMeshProjectCandidate,
@@ -1749,8 +1750,18 @@ export function CirceVoiceRuntime({
               interpretedProposal.lookup !== null
             ) {
               const lookup = interpretedProposal.lookup;
+              // A lookup needs a Full or Controller node. Prefer one that
+              // advertises the capability, then fall back to the local or
+              // semantic node for older descriptors that omit capabilities.
+              const lookupNodeId =
+                selectCirceQuickLookupNode(submissionCatalog, [
+                  primaryEnvironmentId,
+                  semanticNode.nodeId,
+                ])?.nodeId ??
+                primaryEnvironmentId ??
+                semanticNode.nodeId;
               const lookupResult = await quickLookup({
-                environmentId: primaryEnvironmentId ?? semanticNode.nodeId,
+                environmentId: lookupNodeId,
                 input: { ...lookup, sourceUtterance: meshSource.slice(0, 16_000) },
               }).catch(() => null);
               const value =
@@ -1776,7 +1787,7 @@ export function CirceVoiceRuntime({
               interpretedProposal.action === "open-website" &&
               typeof interpretedProposal.website === "string"
             ) {
-              const opened = await openCirceWebsite(interpretedProposal.website);
+              const opened = await openCirceWebsite(interpretedProposal.website, meshSource);
               emitFeedback({
                 text: opened
                   ? `Opening ${interpretedProposal.website} on this device.`

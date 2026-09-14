@@ -47,6 +47,7 @@ import {
   circeMeshCatalogCoverage,
   circeMeshNodeReadiness,
   make as makeCirceMesh,
+  selectCirceQuickLookupNode,
   selectCirceSemanticNode,
 } from "./mesh.ts";
 
@@ -872,6 +873,43 @@ describe("Circe mesh", () => {
         providers: [],
       }),
     ).toBeUndefined();
+  });
+
+  it("routes quick lookups to a capable node and never a headless one", () => {
+    const node = (
+      nodeId: EnvironmentId,
+      reachability: "online" | "offline",
+      preset: "full" | "controller" | "headless",
+    ) => ({
+      nodeId,
+      label: nodeId,
+      reachability,
+      capabilities: circeNodeCapabilitiesForPreset(preset),
+    });
+    const catalog = {
+      nodes: [node(NODE_DESKTOP, "online", "headless"), node(NODE_LAPTOP, "online", "full")],
+      projects: [],
+      providers: [],
+    };
+    // The first connected node is headless, so the first capable node wins.
+    expect(selectCirceQuickLookupNode(catalog)?.nodeId).toBe(NODE_LAPTOP);
+    // A preferred node is used only when it is itself capable.
+    expect(selectCirceQuickLookupNode(catalog, [NODE_DESKTOP, NODE_LAPTOP])?.nodeId).toBe(
+      NODE_LAPTOP,
+    );
+    expect(selectCirceQuickLookupNode(catalog, [NODE_LAPTOP])?.nodeId).toBe(NODE_LAPTOP);
+    // Offline nodes and nodes with unknown capabilities are never chosen.
+    expect(
+      selectCirceQuickLookupNode({
+        nodes: [
+          node(NODE_DESKTOP, "offline", "full"),
+          { nodeId: NODE_LAPTOP, label: "Laptop", reachability: "online" as const },
+        ],
+        projects: [],
+        providers: [],
+      }),
+    ).toBeUndefined();
+    expect(selectCirceQuickLookupNode({ nodes: [], projects: [], providers: [] })).toBeUndefined();
   });
 
   it("builds bounded untrusted interpret evidence with names only", () => {

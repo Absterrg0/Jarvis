@@ -30,6 +30,7 @@ import {
 } from "@circe/core/modelChoice";
 import {
   buildCirceInterpretInput,
+  selectCirceQuickLookupNode,
   selectCirceSemanticNode,
   type CirceMeshCatalog,
   type CirceMeshProject,
@@ -1386,41 +1387,64 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
         executionProposal.lookup !== undefined &&
         executionProposal.lookup !== null
       ) {
-        const lookupNodeId =
-          taskDeskNodeIdRef.current ??
-          connectedEnvironments[0]?.environmentId ??
-          semanticNode.nodeId;
+        // A lookup needs a Full or Controller node. Prefer the selected desk
+        // or semantic node only when it advertises that capability, otherwise
+        // pick another capable online node instead of the first connected one.
+        const lookupNode =
+          selectCirceQuickLookupNode(evidenceCatalog, [
+            taskDeskNodeIdRef.current,
+            semanticNode.nodeId,
+          ]) ?? liveSemanticNode;
+        const lookupNodeId = lookupNode.nodeId;
         const lookup = executionProposal.lookup;
-        const lookupResult = await quickLookup({
-          environmentId: lookupNodeId,
-          input: { ...lookup, sourceUtterance: sourceUtterance.slice(0, 16_000) },
-        }).catch(() => null);
-        const value =
-          lookupResult !== null && lookupResult._tag === "Success" ? lookupResult.value : null;
-        setPreparedOriginInteractionId(nextOriginInteractionId());
-        setMessage(value?.message ?? "I couldn't complete that lookup. Try again in a moment.");
-        drainQueuedInput();
+        // Hold the submission slot across the await so a concurrent capture
+        // queues behind this action instead of racing a second interpret.
+        submittingRef.current = true;
+        setSubmitting(true);
+        try {
+          const lookupResult = await quickLookup({
+            environmentId: lookupNodeId,
+            input: { ...lookup, sourceUtterance: sourceUtterance.slice(0, 16_000) },
+          }).catch(() => null);
+          const value =
+            lookupResult !== null && lookupResult._tag === "Success" ? lookupResult.value : null;
+          setPreparedOriginInteractionId(nextOriginInteractionId());
+          setMessage(value?.message ?? "I couldn't complete that lookup. Try again in a moment.");
+        } finally {
+          submittingRef.current = false;
+          setSubmitting(false);
+          drainQueuedInput();
+        }
         return;
       }
       if (
         executionProposal.action === "open-website" &&
         typeof executionProposal.website === "string"
       ) {
-        const url = circeWebsiteUrl(executionProposal.website);
-        const opened =
-          url === null
-            ? false
-            : await Linking.openURL(url).then(
-                () => true,
-                () => false,
-              );
-        setPreparedOriginInteractionId(nextOriginInteractionId());
-        setMessage(
-          opened
-            ? `Opening ${executionProposal.website} on this device.`
-            : `I couldn't open ${executionProposal.website} on this device.`,
-        );
-        drainQueuedInput();
+        const url = circeWebsiteUrl(executionProposal.website, sourceUtterance);
+        // Hold the submission slot across the launch so a concurrent capture
+        // queues behind this action instead of racing a second interpret.
+        submittingRef.current = true;
+        setSubmitting(true);
+        try {
+          const opened =
+            url === null
+              ? false
+              : await Linking.openURL(url).then(
+                  () => true,
+                  () => false,
+                );
+          setPreparedOriginInteractionId(nextOriginInteractionId());
+          setMessage(
+            opened
+              ? `Opening ${executionProposal.website} on this device.`
+              : `I couldn't open ${executionProposal.website} on this device.`,
+          );
+        } finally {
+          submittingRef.current = false;
+          setSubmitting(false);
+          drainQueuedInput();
+        }
         return;
       }
       // Converse is model-decided, never regex-shortcut before inference. Run

@@ -84,7 +84,8 @@ vi.mock("../../state/circeLiveVoice", () => ({
   circeLiveVoiceEnvironment: { lookup: "quickLookup" },
 }));
 vi.mock("./CirceQuickActions.logic", () => ({
-  openCirceWebsite: (url: string) => state.openWebsite(url),
+  openCirceWebsite: (url: string, sourceUtterance: string) =>
+    state.openWebsite(url, sourceUtterance),
 }));
 vi.mock("../../state/circeMesh", () => ({
   circeMeshCatalogAtom: "catalog",
@@ -306,7 +307,7 @@ describe("Circe voice runtime", () => {
     state.openWebsite.mockResolvedValue(true);
     transcript("Open YouTube", { captureId: "website", purpose: "command" });
     await state.drain?.();
-    expect(state.openWebsite).toHaveBeenCalledWith("YouTube");
+    expect(state.openWebsite).toHaveBeenCalledWith("YouTube", "Open YouTube");
     expect(state.execute).not.toHaveBeenCalled();
   });
 

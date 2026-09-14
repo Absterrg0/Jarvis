@@ -73,18 +73,16 @@ describe("Circe quick lookup", () => {
       ).toBe("answer");
     }),
   );
-  it.effect("asks about ambiguous places and revalidates the selected ID", () =>
+  it.effect("asks for a self-contained correction when the place is ambiguous", () =>
     Effect.gen(function* () {
-      const { http, calls } = fixture([ahmedabad, { ...ahmedabad, id: 2, admin1: "Other state" }]);
-      const run = (placeId?: number) =>
-        runCirceQuickLookup(
-          { ...input, ...(placeId === undefined ? {} : { placeId }) },
-          "full",
-        ).pipe(Effect.provideService(HttpClient.HttpClient, http));
-      expect((yield* run()).status).toBe("needs-input");
-      expect((yield* run(999)).status).toBe("needs-input");
-      expect(calls).toHaveLength(2);
-      expect((yield* run(ahmedabad.id)).status).toBe("answer");
+      const { http, calls } = fixture([ahmedabad, { ...ahmedabad, admin1: "Other state" }]);
+      const result = yield* runCirceQuickLookup(input, "full").pipe(
+        Effect.provideService(HttpClient.HttpClient, http),
+      );
+      expect(result).toMatchObject({ status: "needs-input" });
+      expect("message" in result && result.message).toContain("multiple places named Ahmedabad");
+      expect("choices" in result).toBe(false);
+      expect(calls).toHaveLength(1);
     }),
   );
   it.effect("grounds explicit state and country, and handles tomorrow", () =>
@@ -105,6 +103,17 @@ describe("Circe quick lookup", () => {
         Effect.provideService(HttpClient.HttpClient, http),
       );
       expect(result.status).toBe("answer");
+      expect(calls).toHaveLength(1);
+    }),
+  );
+  it.effect("refuses a future-day time request instead of returning the wrong clock", () =>
+    Effect.gen(function* () {
+      const { http, calls } = fixture();
+      const result = yield* runCirceQuickLookup(
+        { ...input, kind: "time", day: "tomorrow" },
+        "full",
+      ).pipe(Effect.provideService(HttpClient.HttpClient, http));
+      expect(result.status).toBe("unavailable");
       expect(calls).toHaveLength(1);
     }),
   );
