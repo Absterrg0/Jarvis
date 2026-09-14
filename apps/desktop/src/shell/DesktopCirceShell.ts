@@ -32,6 +32,7 @@ import {
   desktopCirceOverlayDataUrl,
   desktopCirceOverlayOrbCenter,
   parseDesktopCirceOverlayEvent,
+  snapDesktopCirceOverlayAnchor,
   resolveDesktopCirceOverlayBounds,
   type DesktopCirceOverlayAnchor,
   type DesktopCirceOrbDragEvent,
@@ -324,6 +325,26 @@ export function createDesktopCirceShell(input: DesktopCirceShellInput): DesktopC
   // Orb centre the user dragged to, if any. Keeps the orb in place while the
   // panel expands and collapses around it.
   let overlayAnchor: DesktopCirceOverlayAnchor | null = null;
+  // The orb can live on any display, so resolve the work area from the
+  // window's own position. The cursor display is only a fallback for a window
+  // that cannot report bounds yet; using it otherwise migrates the orb across
+  // monitors on every show and expand.
+  const overlayWorkArea = (): Pick<Electron.Rectangle, "x" | "y" | "width" | "height"> => {
+    if (input.getOverlayWorkArea !== undefined) return input.getOverlayWorkArea();
+    const target = overlay;
+    if (target !== null && !target.isDestroyed()) {
+      try {
+        const center = desktopCirceOverlayOrbCenter(target.getBounds());
+        return Electron.screen.getDisplayNearestPoint({
+          x: Math.round(center.x),
+          y: Math.round(center.y),
+        }).workArea;
+      } catch {
+        // Fall through to the cursor display below.
+      }
+    }
+    return Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).workArea;
+  };
   let overlayDragStart: {
     readonly pointerX: number;
     readonly pointerY: number;
@@ -368,12 +389,24 @@ export function createDesktopCirceShell(input: DesktopCirceShellInput): DesktopC
       return;
     }
     overlayDragStart = null;
+    if (typeof window.getBounds !== "function") return;
+    const previousAnchor = overlayAnchor;
     try {
-      if (typeof window.getBounds === "function") {
-        overlayAnchor = desktopCirceOverlayOrbCenter(window.getBounds());
+      const orbCenter = desktopCirceOverlayOrbCenter(window.getBounds());
+      const workArea = overlayWorkArea();
+      overlayAnchor = snapDesktopCirceOverlayAnchor(workArea, orbCenter);
+      const snapped = resolveDesktopCirceOverlayBounds(workArea, overlayExpanded, overlayAnchor);
+      if (typeof window.setBounds === "function") {
+        window.setBounds(snapped, false);
+        // Store the displayed centre, not the requested one: a free drop the
+        // expanded panel cannot hold would otherwise jump on collapse.
+        overlayAnchor = desktopCirceOverlayOrbCenter(snapped);
+      } else if (typeof window.setPosition === "function") {
+        window.setPosition(snapped.x, snapped.y, false);
       }
     } catch {
       // Keep the previous anchor if the window cannot report its bounds.
+      overlayAnchor = previousAnchor;
     }
   };
 
@@ -400,9 +433,7 @@ export function createDesktopCirceShell(input: DesktopCirceShellInput): DesktopC
     const window = overlay;
     if (window === null || window.isDestroyed()) return;
     try {
-      const workArea =
-        input.getOverlayWorkArea?.() ??
-        Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).workArea;
+      const workArea = overlayWorkArea();
       const bounds = resolveDesktopCirceOverlayBounds(
         workArea,
         expanded,
@@ -511,18 +542,13 @@ export function createDesktopCirceShell(input: DesktopCirceShellInput): DesktopC
     if (window === null || window.isDestroyed()) return;
     try {
       if (typeof window.setBounds === "function") {
-        const workArea =
-          input.getOverlayWorkArea?.() ??
-          Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).workArea;
+        const workArea = overlayWorkArea();
         window.setBounds(
           resolveDesktopCirceOverlayBounds(workArea, overlayExpanded, overlayAnchor ?? undefined),
           false,
         );
       } else if (typeof window.setPosition === "function") {
-        const position = resolveDesktopCirceOverlayPosition(
-          input.getOverlayWorkArea?.() ??
-            Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).workArea,
-        );
+        const position = resolveDesktopCirceOverlayPosition(overlayWorkArea());
         window.setPosition(position.x, position.y, false);
       }
     } catch {

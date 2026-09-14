@@ -17,6 +17,7 @@ import {
   parseDesktopCirceOverlayEvent,
   parseDesktopCirceOrbEvent,
   resolveDesktopCirceOverlayBounds,
+  snapDesktopCirceOverlayAnchor,
 } from "./DesktopCirceOverlay.ts";
 
 describe("DesktopCirceOrb", () => {
@@ -63,7 +64,7 @@ describe("DesktopCirceOrb", () => {
     expect(html).toContain("data-provider-list");
     expect(html).toContain("data-picker-error");
     expect(html).toContain("picker-label");
-    expect(html).toContain("Providers");
+    expect(html).toContain("Default agent");
     expect(html).toContain("Running agents");
     expect(html).toContain("data-running-list");
     expect(html).not.toContain("data-picker-close");
@@ -222,6 +223,125 @@ describe("DesktopCirceOrb", () => {
     expect(parseDesktopCirceOverlayEvent('[circe-orb] {"type":"drag","phase":"move"}')).toBeNull();
   });
 
+  it("leaves a free drop alone instead of pulling it into the panel-safe region", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    // Far outside every snap threshold. The previous clamp moved these
+    // hundreds of pixels toward the panel-safe region.
+    for (const drop of [
+      { x: 150, y: 150 },
+      { x: 200, y: 312 },
+    ]) {
+      expect(snapDesktopCirceOverlayAnchor(workArea, drop)).toEqual(drop);
+    }
+  });
+
+  it("magnets the orb to the right margin and the nearest mesh row", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    const edge = snapDesktopCirceOverlayAnchor(workArea, { x: 1920 - 40, y: 540 });
+    expect(edge).toEqual({
+      x: 1920 - (DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT),
+      y: 540,
+    });
+    const row = snapDesktopCirceOverlayAnchor(workArea, { x: 900, y: 850 });
+    expect(row).toEqual({
+      x: 900,
+      y: 1080 - DESKTOP_CIRCE_ORB_MARGIN - DESKTOP_CIRCE_ORB_WINDOW_HEIGHT / 2,
+    });
+  });
+
+  it("snaps to the closest eligible mesh row when rows overlap", () => {
+    // A short work area compresses the five mesh rows within the threshold, so
+    // a first-match scan would seat the orb on the top row instead of the
+    // nearest one.
+    const workArea = { x: 0, y: 0, width: 1920, height: 520 };
+    const snapped = snapDesktopCirceOverlayAnchor(workArea, { x: 900, y: 250 });
+    expect(snapped.y).toBe(248);
+  });
+
+  it("rejects a mesh-row snap when x cannot survive expansion", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    // y=250 is close to the first mesh row, but x=150 sits under the
+    // left-opening panel, so expanding would clamp the orb to x=348. The snap
+    // must be rejected rather than returned as a safe vertical snap.
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: 150, y: 250 })).toEqual({
+      x: 150,
+      y: 250,
+    });
+  });
+
+  it("rejects a right-margin snap when y cannot survive expansion", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    // x=1840 is inside the clamp but within the snap threshold of the right
+    // margin, while y=150 is above the band the vertically-centred panel can
+    // occupy: expanding would move the orb down to y=220. The snap must be
+    // rejected and x left free.
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: 1840, y: 150 })).toEqual({
+      x: 1840,
+      y: 150,
+    });
+  });
+
+  it("keeps the orb centre fixed as the panel opens and closes at every snap", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    const drops = [
+      { x: 1920 - 40, y: 540 }, // right margin
+      { x: 900, y: 250 }, // top mesh row
+      { x: 900, y: 545 }, // middle mesh row
+      { x: 900, y: 850 }, // bottom mesh row
+    ];
+    for (const drop of drops) {
+      const anchor = snapDesktopCirceOverlayAnchor(workArea, drop);
+      const collapsed = desktopCirceOverlayOrbCenter(
+        resolveDesktopCirceOverlayBounds(workArea, false, anchor),
+      );
+      const expanded = desktopCirceOverlayOrbCenter(
+        resolveDesktopCirceOverlayBounds(workArea, true, anchor),
+      );
+      const recollapsed = desktopCirceOverlayOrbCenter(
+        resolveDesktopCirceOverlayBounds(workArea, false, anchor),
+      );
+      expect(collapsed).toEqual(anchor);
+      expect(expanded).toEqual(anchor);
+      expect(recollapsed).toEqual(anchor);
+    }
+  });
+
+  it("snaps at the threshold boundary and leaves a drop one pixel beyond it", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    const maxX = 1920 - (DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT);
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: maxX - 56, y: 540 })).toEqual({
+      x: maxX,
+      y: 540,
+    });
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: maxX - 57, y: 540 })).toEqual({
+      x: maxX - 57,
+      y: 540,
+    });
+  });
+
+  it("clamps an off-screen drop into the lane before considering a snap", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    const maxX = 1920 - (DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT);
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: 2500, y: 540 })).toEqual({
+      x: maxX,
+      y: 540,
+    });
+  });
+
+  it("skips snapping on a degenerate work area instead of collapsing every drop", () => {
+    const workArea = { x: 0, y: 0, width: 80, height: 80 };
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: 500, y: -100 })).toEqual({ x: 80, y: 0 });
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: 0, y: 0 })).toEqual({ x: 0, y: 0 });
+  });
+
+  it("snaps against a negative-origin secondary display", () => {
+    const workArea = { x: -1920, y: 0, width: 1920, height: 1080 };
+    const maxX = -1920 + 1920 - (DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT);
+    expect(snapDesktopCirceOverlayAnchor(workArea, { x: maxX - 8, y: 540 })).toEqual({
+      x: maxX,
+      y: 540,
+    });
+  });
   it("keeps a dragged orb fixed while the panel expands around it", () => {
     const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
     const anchor = { x: 500, y: 300 };
