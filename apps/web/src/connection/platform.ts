@@ -461,7 +461,7 @@ export function secondaryRegistrationsToRetainAfterTopologyRead(
   );
 }
 
-const platformConnectionSourceLayer = Layer.effect(
+export const platformConnectionSourceLayer = Layer.effect(
   PlatformConnectionSource,
   Effect.gen(function* () {
     if (isHostedStaticApp()) {

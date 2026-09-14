@@ -5,19 +5,90 @@ import {
   type DesktopBridge,
   type DesktopSshEnvironmentTarget,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "@effect/vitest";
+import { afterEach, describe, expect, it, vi } from "@effect/vitest";
+import { PlatformConnectionSource } from "@t3tools/client-runtime/platform";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+
+import { __resetDesktopPrimaryAuthForTests } from "../environments/primary/desktopAuth";
 
 import {
   canRetainCachedPlatformRegistrationAfterRefreshFailure,
   canReuseCachedPlatformRegistration,
   primaryRegistrationToRetainAfterTopologyRead,
+  platformConnectionSourceLayer,
   provisionDesktopSshEnvironment,
   readPrimaryEnvironmentTargetResult,
   secondaryRegistrationsToRetainAfterTopologyRead,
   secondaryBearerExpiresAtEpochMs,
   secondaryBearerRefreshAtEpochMs,
 } from "./platform.ts";
+
+describe("primary platform discovery", () => {
+  afterEach(() => {
+    __resetDesktopPrimaryAuthForTests();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it.effect("publishes the desktop primary from the packaged Circe origin", () =>
+    Effect.gen(function* () {
+      vi.stubEnv("VITE_HOSTED_APP_URL", "");
+      vi.stubEnv("VITE_HOSTED_APP_CHANNEL", "");
+      vi.stubEnv("VITE_HTTP_URL", "");
+      vi.stubEnv("VITE_WS_URL", "");
+      const getLocalEnvironmentBootstraps = vi.fn(() => [
+        {
+          id: PRIMARY_LOCAL_ENVIRONMENT_ID,
+          label: "Local environment",
+          runningDistro: null,
+          httpBaseUrl: "http://127.0.0.1:3773",
+          wsBaseUrl: "ws://127.0.0.1:3773",
+          bootstrapToken: "desktop-bootstrap-token",
+        },
+      ]);
+      vi.stubGlobal("window", {
+        location: { origin: "circe://app", href: "circe://app/welcome" },
+        desktopBridge: {
+          getLocalEnvironmentBootstraps,
+          getLocalEnvironmentBearerToken: async () => "desktop-bearer-token",
+        },
+      });
+      const fetch = vi.fn(async () =>
+        Response.json({
+          environmentId: "environment-local",
+          label: "This computer",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: "0.0.0-test",
+          capabilities: { repositoryIdentity: true },
+        }),
+      );
+      vi.stubGlobal("fetch", fetch);
+
+      const registrations = yield* Effect.gen(function* () {
+        const source = yield* PlatformConnectionSource;
+        return yield* source.registrations.pipe(Stream.take(1), Stream.runCollect);
+      }).pipe(Effect.provide(platformConnectionSourceLayer));
+
+      expect(registrations).toEqual([
+        [
+          {
+            _tag: "PrimaryConnectionRegistration",
+            target: {
+              _tag: "PrimaryConnectionTarget",
+              environmentId: "environment-local",
+              label: "This computer",
+              httpBaseUrl: "http://127.0.0.1:3773/",
+              wsBaseUrl: "ws://127.0.0.1:3773/",
+            },
+          },
+        ],
+      ]);
+      expect(getLocalEnvironmentBootstraps).toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }),
+  );
+});
 
 const TARGET: DesktopSshEnvironmentTarget = {
   alias: "devbox",

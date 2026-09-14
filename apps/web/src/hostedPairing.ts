@@ -34,12 +34,11 @@ function originFromUrl(value: string): string | null {
 }
 
 export function isHostedStaticApp(url?: URL): boolean {
-  if (configuredBackendUrl()) {
+  if (
+    (typeof window !== "undefined" && window.desktopBridge !== undefined) ||
+    configuredBackendUrl()
+  ) {
     return false;
-  }
-
-  if (configuredHostedAppChannel()) {
-    return true;
   }
 
   // No window, or a window without a location (tests, static render), means
@@ -48,8 +47,18 @@ export function isHostedStaticApp(url?: URL): boolean {
     return false;
   }
 
-  const hostedOrigin = originFromUrl(configuredHostedAppUrl());
-  return hostedOrigin !== null && (url ?? new URL(window.location.href)).origin === hostedOrigin;
+  const currentUrl = url ?? new URL(window.location.href);
+  if (currentUrl.protocol !== "http:" && currentUrl.protocol !== "https:") {
+    return false;
+  }
+  if (configuredHostedAppChannel()) {
+    return true;
+  }
+
+  // The origin fallback is for building pairing links. It does not mean this
+  // install is hosted: that would suppress discovery of its own backend.
+  const hostedOrigin = originFromUrl(import.meta.env.VITE_HOSTED_APP_URL?.trim() ?? "");
+  return hostedOrigin !== null && currentUrl.origin === hostedOrigin;
 }
 
 export function readHostedPairingRequest(url: URL = new URL(window.location.href)) {

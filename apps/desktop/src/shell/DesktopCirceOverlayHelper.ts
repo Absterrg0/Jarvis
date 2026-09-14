@@ -10,7 +10,11 @@ import {
   desktopCirceOrbCatalogScript,
   desktopCirceOrbStateScript,
   desktopCirceOverlayDataUrl,
+  desktopCirceOverlayOrbCenter,
+  parseDesktopCirceOverlayEvent,
   resolveDesktopCirceOverlayBounds,
+  type DesktopCirceOrbDragEvent,
+  type DesktopCirceOverlayAnchor,
 } from "./DesktopCirceOverlay.ts";
 
 export const DESKTOP_CIRCE_OVERLAY_HELPER_FLAG = "--circe-overlay-helper";
@@ -86,6 +90,7 @@ export async function runDesktopCirceOverlayHelper(): Promise<void> {
     fullscreenable: false,
     frame: false,
     transparent: true,
+    hasShadow: false,
     alwaysOnTop: true,
     skipTaskbar: true,
     focusable: false,
@@ -94,12 +99,51 @@ export async function runDesktopCirceOverlayHelper(): Promise<void> {
   });
   window.setAlwaysOnTop(true, "floating");
   await window.loadURL(desktopCirceOverlayDataUrl());
+  // The helper owns the window, so it moves the window itself when the orb is
+  // dragged; those drag lines are consumed here and never relayed.
+  let anchor: DesktopCirceOverlayAnchor | null = null;
+  let dragStart: {
+    readonly pointerX: number;
+    readonly pointerY: number;
+    readonly windowX: number;
+    readonly windowY: number;
+  } | null = null;
+  const handleDrag = (event: DesktopCirceOrbDragEvent): void => {
+    if (window.isDestroyed()) return;
+    if (event.phase === "start") {
+      if (event.x === undefined || event.y === undefined) return;
+      const bounds = window.getBounds();
+      dragStart = {
+        pointerX: event.x,
+        pointerY: event.y,
+        windowX: bounds.x,
+        windowY: bounds.y,
+      };
+      return;
+    }
+    if (event.phase === "move") {
+      if (dragStart === null || event.x === undefined || event.y === undefined) return;
+      window.setPosition(
+        Math.round(dragStart.windowX + (event.x - dragStart.pointerX)),
+        Math.round(dragStart.windowY + (event.y - dragStart.pointerY)),
+        false,
+      );
+      return;
+    }
+    dragStart = null;
+    anchor = desktopCirceOverlayOrbCenter(window.getBounds());
+  };
   // Orb picker selections leave the document as console lines. Forward them
   // on stdout so the parent relays them orb -> main -> renderer.
   window.webContents.on("console-message", (_event, _level, message) => {
-    if (typeof message === "string" && message.startsWith(DESKTOP_CIRCE_ORB_CONSOLE_PREFIX)) {
-      process.stdout.write(`${message}\n`);
+    if (typeof message !== "string" || !message.startsWith(DESKTOP_CIRCE_ORB_CONSOLE_PREFIX))
+      return;
+    const parsed = parseDesktopCirceOverlayEvent(message);
+    if (parsed !== null && "type" in parsed && parsed.type === "drag") {
+      handleDrag(parsed);
+      return;
     }
+    process.stdout.write(`${message}\n`);
   });
 
   const lines = NodeReadline.createInterface({ input: process.stdin, terminal: false });
@@ -120,6 +164,7 @@ export async function runDesktopCirceOverlayHelper(): Promise<void> {
         const bounds = resolveDesktopCirceOverlayBounds(
           screen.getPrimaryDisplay().workArea,
           command.expanded,
+          anchor ?? undefined,
         );
         window.setFocusable(command.expanded);
         if (command.expanded) window.focus();

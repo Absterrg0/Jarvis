@@ -11,6 +11,49 @@ import {
 describe("hostedPairing", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["http://localhost:3773/", "https://node.example.test/", "circe://app/welcome"])(
+    "keeps an unconfigured install at %s attached to its primary",
+    (href) => {
+      vi.stubEnv("VITE_HOSTED_APP_URL", "");
+      vi.stubEnv("VITE_HOSTED_APP_CHANNEL", "");
+      vi.stubEnv("VITE_HTTP_URL", "");
+      vi.stubEnv("VITE_WS_URL", "");
+      const url = new URL(href);
+      vi.stubGlobal("window", {
+        location: { href, origin: url.protocol === "circe:" ? "circe://app" : url.origin },
+      });
+
+      expect(isHostedStaticApp()).toBe(false);
+      expect(isHostedStaticApp(url)).toBe(false);
+    },
+  );
+
+  it.each(["circe://app/", "circe-dev://app/", "http://localhost:5733/"])(
+    "keeps desktop at %s local even with hosted configuration",
+    (href) => {
+      vi.stubEnv("VITE_HOSTED_APP_URL", "http://localhost:5733/");
+      vi.stubEnv("VITE_HOSTED_APP_CHANNEL", "nightly");
+      vi.stubEnv("VITE_HTTP_URL", "");
+      vi.stubEnv("VITE_WS_URL", "");
+      vi.stubGlobal("window", {
+        location: new URL(href),
+        desktopBridge: { getLocalEnvironmentBootstraps: () => [] },
+      });
+
+      expect(isHostedStaticApp()).toBe(false);
+    },
+  );
+
+  it("rejects non-HTTP origins before the desktop bridge is available", () => {
+    vi.stubEnv("VITE_HOSTED_APP_CHANNEL", "latest");
+    vi.stubEnv("VITE_HTTP_URL", "");
+    vi.stubEnv("VITE_WS_URL", "");
+
+    expect(isHostedStaticApp(new URL("circe://app/"))).toBe(false);
+    expect(isHostedStaticApp(new URL("file:///app/index.html"))).toBe(false);
   });
 
   it("reads hosted pairing host and query token parameters", () => {

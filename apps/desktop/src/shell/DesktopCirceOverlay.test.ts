@@ -2,6 +2,7 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT,
   DESKTOP_CIRCE_ORB_COLLAPSED_HEIGHT,
   DESKTOP_CIRCE_ORB_COLLAPSED_WIDTH,
   DESKTOP_CIRCE_ORB_CONSOLE_PREFIX,
@@ -12,8 +13,10 @@ import {
   desktopCirceOrbPresentation,
   desktopCirceOrbStateScript,
   desktopCirceOverlayDataUrl,
+  desktopCirceOverlayOrbCenter,
   parseDesktopCirceOverlayEvent,
   parseDesktopCirceOrbEvent,
+  resolveDesktopCirceOverlayBounds,
 } from "./DesktopCirceOverlay.ts";
 
 describe("DesktopCirceOrb", () => {
@@ -55,7 +58,7 @@ describe("DesktopCirceOrb", () => {
     // No Close button; the orb toggles and Escape collapses.
     expect(html).toContain("data-orb");
     expect(html).toContain("data-orb-root");
-    expect(html).toContain("orb-halo");
+    expect(html).not.toContain("orb-halo");
     expect(html).toContain("data-picker");
     expect(html).toContain("data-provider-list");
     expect(html).toContain("data-picker-error");
@@ -100,7 +103,14 @@ describe("DesktopCirceOrb", () => {
     expect(html).toContain("getContext");
     expect(html).toContain("requestAnimationFrame");
     expect(html).toContain("visibilitychange");
-    expect(html).toContain("main.webgl .orb-halo{display:none}");
+    // The orb is draggable: pointer capture keeps moves flowing after the
+    // cursor leaves the tiny window, and a drag must not toggle the panel.
+    expect(html).toContain("pointerdown");
+    expect(html).toContain("pointermove");
+    expect(html).toContain("setPointerCapture");
+    expect(html).toContain("releasePointerCapture");
+    expect(html).toContain("cursor:grab");
+    expect(html).not.toContain("orb-halo");
     expect(html).toContain('main[data-expanded="true"] .picker{opacity:1;transform:none}');
     expect(html).toContain("connect-src 'none'");
     expect(html).not.toContain("https://");
@@ -191,6 +201,33 @@ describe("DesktopCirceOrb", () => {
     expect(
       parseDesktopCirceOverlayEvent('[circe-orb] {"type":"expanded","expanded":"yes"}'),
     ).toBeNull();
+  });
+
+  it("reports orb drags so the host can move the window", () => {
+    expect(
+      parseDesktopCirceOverlayEvent('[circe-orb] {"type":"drag","phase":"start","x":10,"y":20}'),
+    ).toEqual({ type: "drag", phase: "start", x: 10, y: 20 });
+    expect(
+      parseDesktopCirceOverlayEvent('[circe-orb] {"type":"drag","phase":"move","x":11,"y":21}'),
+    ).toEqual({ type: "drag", phase: "move", x: 11, y: 21 });
+    expect(parseDesktopCirceOverlayEvent('[circe-orb] {"type":"drag","phase":"end"}')).toEqual({
+      type: "drag",
+      phase: "end",
+    });
+    // A move without coordinates is not actionable.
+    expect(parseDesktopCirceOverlayEvent('[circe-orb] {"type":"drag","phase":"move"}')).toBeNull();
+  });
+
+  it("keeps a dragged orb fixed while the panel expands around it", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    const anchor = { x: 500, y: 300 };
+    const collapsed = resolveDesktopCirceOverlayBounds(workArea, false, anchor);
+    const expanded = resolveDesktopCirceOverlayBounds(workArea, true, anchor);
+
+    expect(collapsed.x + collapsed.width - DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT).toBe(anchor.x);
+    expect(expanded.x + expanded.width - DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT).toBe(anchor.x);
+    expect(desktopCirceOverlayOrbCenter(collapsed)).toEqual(anchor);
+    expect(desktopCirceOverlayOrbCenter(expanded)).toEqual(anchor);
   });
 
   it("parses orb picker selections and rejects everything else", () => {
