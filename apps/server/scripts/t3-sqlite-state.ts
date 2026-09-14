@@ -62,7 +62,7 @@ export class SqliteStateSharedHomeMutationError extends Schema.TaggedError<Sqlit
   {},
 ) {
   override get message(): string {
-    return "Refusing to mutate the shared ~/.t3 database. Use an isolated --base-dir.";
+    return "Refusing to mutate a protected shared database. Use an isolated --base-dir.";
   }
 }
 
@@ -181,7 +181,7 @@ export const runSqliteState = Effect.fn("runSqliteState")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const baseDir = path.resolve(input.baseDir);
-  const sharedHome = path.resolve(options.sharedHome ?? path.join(NodeOS.homedir(), ".t3"));
+  const sharedHome = path.resolve(options.sharedHome ?? path.join(NodeOS.homedir(), ".circe"));
   const databasePath = path.join(baseDir, "userdata", "state.sqlite");
   const source = yield* resolveSqlSource(input.sql, input.file);
 
@@ -189,11 +189,20 @@ export const runSqliteState = Effect.fn("runSqliteState")(function* (
     return yield* new SqliteStateDatabaseMissingError({ databasePath });
   }
   if (input.operation === "exec") {
-    const [canonicalBaseDir, canonicalSharedHome] = yield* Effect.all([
+    // Protect Circe's shared home and the other products' homes. The legacy
+    // ~/.t3 and ~/.jarvis databases belong to separate installs and must never
+    // be mutated by an ad-hoc exec, even when one is passed as --base-dir.
+    const protectedHomes = [
+      sharedHome,
+      path.join(NodeOS.homedir(), ".t3"),
+      path.join(NodeOS.homedir(), ".jarvis"),
+    ];
+    const canonical = yield* Effect.all([
       fs.realPath(baseDir),
-      fs.realPath(sharedHome).pipe(Effect.orElseSucceed(() => sharedHome)),
+      ...protectedHomes.map((home) => fs.realPath(home).pipe(Effect.orElseSucceed(() => home))),
     ]);
-    if (canonicalBaseDir === canonicalSharedHome) {
+    const canonicalBaseDir = canonical[0];
+    if (canonical.slice(1).includes(canonicalBaseDir)) {
       return yield* new SqliteStateSharedHomeMutationError();
     }
   }
