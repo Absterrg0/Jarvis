@@ -56,6 +56,7 @@ import {
   usePrimaryEnvironmentId,
 } from "../../state/environments";
 import { isOnboardingRelayEnvironment } from "../../onboarding/targetEnvironment.logic";
+import { useCloudLinkController } from "../../cloud/useCloudLinkController";
 import { useProjectScans } from "../../onboarding/useProjectScans";
 import { projectEnvironment } from "../../state/projects";
 import { serverEnvironment, primaryServerConfigAtom } from "../../state/server";
@@ -511,9 +512,18 @@ function ConnectAccountOption({
   const { environments } = useEnvironments();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const { openAuthPrompt } = useT3ConnectAuthPrompt();
+  const primaryEnvironment = usePrimaryEnvironment();
+  const { linked, reconcileCloudState } = useCloudLinkController();
   const [expanded, setExpanded] = useState(true);
+  const [addingThisComputer, setAddingThisComputer] = useState(false);
   const [discoveryReady, setDiscoveryReady] = useState(false);
   const onDiscoveryReady = useCallback(() => setDiscoveryReady(true), []);
+  const primaryLabel = primaryEnvironment?.serverConfig?.environment.label ?? "This computer";
+  const addThisComputer = async () => {
+    setAddingThisComputer(true);
+    await reconcileCloudState({ managedTunnel: true, publish: true });
+    setAddingThisComputer(false);
+  };
 
   return (
     <Collapsible
@@ -568,9 +578,32 @@ function ConnectAccountOption({
                 }
               />
             ) : null}
+            {isSignedIn && primaryEnvironment ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{primaryLabel}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {linked ? "Connected to Circe Mesh" : "This computer"}
+                  </p>
+                </div>
+                {linked ? (
+                  <span className="shrink-0 text-xs text-muted-foreground">Connected</span>
+                ) : (
+                  <Button
+                    size="sm"
+                    disabled={addingThisComputer}
+                    onClick={() => void addThisComputer()}
+                  >
+                    {addingThisComputer ? "Adding…" : "Add this computer"}
+                  </Button>
+                )}
+              </div>
+            ) : null}
           </div>
           <p className="text-sm text-muted-foreground">
-            Run this on each computer you want to connect.
+            {primaryEnvironment
+              ? "Or connect a headless computer with the CLI."
+              : "Run this on each computer you want to connect."}
           </p>
           <CommandBlock command="npx @absterrg0/circe connect" className="mt-3" />
           <p className="mt-3 text-xs text-muted-foreground">
