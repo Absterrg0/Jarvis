@@ -50,6 +50,7 @@ describe("Circe WebSocket RPC extension", () => {
     Effect.gen(function* () {
       const calls: string[] = [];
       const liveVoice = {
+        releaseSession: () => Effect.void,
         createSession: () => {
           calls.push("create");
           return Effect.succeed({

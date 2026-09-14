@@ -273,6 +273,7 @@ import {
 } from "./circe.ts";
 import {
   CirceLiveVoiceCreateInput,
+  CirceLiveVoiceReleaseInput,
   CirceLiveVoiceCreateResult,
   CirceLiveVoiceInvalidInputError,
   CirceLiveVoiceRuntimeError,
@@ -292,6 +293,7 @@ export const WS_METHODS = {
   circeRegisterPushToken: "circe.registerPushToken",
   circeUnregisterPushToken: "circe.unregisterPushToken",
   circeVoiceLiveStart: "circe.voiceLiveStart",
+  circeVoiceLiveRelease: "circe.voiceLiveRelease",
 
   // Project registry methods
   projectsList: "projects.list",
@@ -513,6 +515,17 @@ const WsCirceUnregisterPushTokenRpc = Rpc.make(WS_METHODS.circeUnregisterPushTok
   payload: CircePushRegistrationInput,
   success: CircePushRegistrationResult,
   error: Schema.Union([CircePushRegistrationError, EnvironmentAuthorizationError]),
+});
+
+const WsCirceVoiceLiveReleaseRpc = Rpc.make(WS_METHODS.circeVoiceLiveRelease, {
+  payload: CirceLiveVoiceReleaseInput,
+  success: Schema.Void,
+  error: Schema.Union([
+    CirceLiveVoiceInvalidInputError,
+    CirceLiveVoiceUnavailableError,
+    CirceLiveVoiceRuntimeError,
+    EnvironmentAuthorizationError,
+  ]),
 });
 
 const WsCirceVoiceLiveStartRpc = Rpc.make(WS_METHODS.circeVoiceLiveStart, {
@@ -1381,6 +1394,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsCirceRegisterPushTokenRpc,
   WsCirceUnregisterPushTokenRpc,
   WsCirceVoiceLiveStartRpc,
+  WsCirceVoiceLiveReleaseRpc,
   WsServerSetEnvironmentLabelRpc,
   WsCirceExecuteRpc,
   WsCirceInterpretRpc,
@@ -1393,6 +1407,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsCirceRegisterPushTokenRpc,
   WsCirceUnregisterPushTokenRpc,
   WsCirceVoiceLiveStartRpc,
+  WsCirceVoiceLiveReleaseRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerSetEnvironmentLabelRpc,
@@ -1537,6 +1552,7 @@ export const CirceWsRpcGroup = RpcGroup.make(
   WsCirceRegisterPushTokenRpc,
   WsCirceUnregisterPushTokenRpc,
   WsCirceVoiceLiveStartRpc,
+  WsCirceVoiceLiveReleaseRpc,
 );
 
 /** Generic T3 RPCs; product handlers are supplied by their composition layer. */
@@ -1552,4 +1568,5 @@ export const T3WsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.circeRegisterPushToken,
   WS_METHODS.circeUnregisterPushToken,
   WS_METHODS.circeVoiceLiveStart,
+  WS_METHODS.circeVoiceLiveRelease,
 );

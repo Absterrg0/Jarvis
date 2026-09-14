@@ -7,9 +7,10 @@ The user-facing description lives in `docs/user/circe.md`.
 
 - The browser/desktop renderer owns microphone and speaker audio over WebRTC. It creates the SDP
   offer and the `oai-events` data channel.
-- The node creates the session: `POST https://api.openai.com/v1/live/sessions` with the node's
-  OpenAI API key, `model`, `voice`, `delegation: { type: "client" }`, and the renderer's SDP offer.
-  It returns the SDP answer and the opaque session id.
+- Linked nodes create cloud sessions through the relay using their environment credential. The
+  deployment OpenAI key stays on the relay. Unlinked nodes use their own configured OpenAI key.
+- Cloud sessions close through the node and relay. The relay calls OpenAI's Live hangup endpoint
+  and frees the reservation only after success or the exact `session_id_not_found` response.
 - GPT-Live handles speech and delegation. On `session.delegation.created`, the renderer submits the
   accumulated user transcript through the ordinary Circe voice submission queue, so the Director,
   grounding, clarification, and provider adapters behave exactly as typed turns.
@@ -19,8 +20,13 @@ The user-facing description lives in `docs/user/circe.md`.
 
 ## Configure a node
 
-1. Open the Circe control center on the node and find **Live conversation** under the node's
-   settings.
+Link the node to Circe Mesh to use cloud voice. The node link controls availability; signing
+out of a renderer does not remove the node link. A linked node reports relay errors directly
+and does not silently switch to a local key.
+
+For an unlinked node:
+
+1. Open the Circe control center and find **Live conversation** under the node's settings.
 2. Paste an OpenAI project API key, confirm or change the model (default `gpt-live-1`) and voice
    (default `marin`), then **Save**.
 3. The key is written to the node secret store as `circe-live-voice-openai-api-key`
@@ -28,7 +34,7 @@ The user-facing description lives in `docs/user/circe.md`.
    redaction marker for `circeLiveVoice.apiKey`. In the parallel `Circe-realtime` build the base
    directory is `~/.circe-realtime`, so the file is
    `~/.circe-realtime/userdata/secrets/circe-live-voice-openai-api-key.bin`.
-4. **Remove key** clears the stored secret and disables live conversation on that node.
+4. **Remove key** clears the stored secret. A linked node can still use cloud voice.
 
 `Live conversation` requires the Full or Controller preset. Headless nodes
 answer `capability-unavailable`. Live voice needs no local speech models: the
@@ -45,10 +51,10 @@ Voice tests prove protocol wiring and transcript handling. They cannot prove a r
 WebRTC negotiation, audio routing, or the model's delegation behavior. Before calling a release
 candidate good, do this by hand on the target desktop:
 
-1. Set the API key on the node.
+1. Link the node to Circe Mesh without a local API key. Repeat with an unlinked node and its own key.
 2. Open the control center and press **Live conversation**. Expect the button to move through
    `Connecting…` to `End conversation`, and the browser to prompt for microphone permission once.
-3. With the key saved, tap `Ctrl+Shift+J` (`Command+Shift+J` on macOS). Expect the tray item to read **Start live conversation**
+3. Tap `Ctrl+Shift+J` (`Command+Shift+J` on macOS). Expect the tray item to read **Start live conversation**
    and the tap to start a session; tap again to end it.
 4. On Linux, the first use of the global shortcut may show a desktop-portal approval dialog for the
    app; approve it once.
@@ -69,8 +75,10 @@ Data-channel events can be observed in the browser devtools WebRTC internals or 
 
 ## Troubleshooting
 
-- **"Add an OpenAI API key on this node to use live voice."** The node settings have no key. Save one
-  through **Live conversation** and retry.
+- **"Add an OpenAI API key on this node to use live voice."** The node is unlinked and has no key.
+  Link it to Circe Mesh or save a key through **Live conversation**.
+- **"This account already has an active live conversation."** End the existing conversation. If a
+  previous client lost its session, follow the reservation recovery procedure below.
 - **"Live voice is unavailable on this Circe node."** The node preset is Headless, or the node was
   built before this feature. Check the node's preset.
 - **"The GPT-Live session could not be created."** The upstream request failed. Check key validity,
@@ -90,8 +98,9 @@ Data-channel events can be observed in the browser devtools WebRTC internals or 
   finalizes usage. A dropped connection leaves final usage unconfirmed.
 - The client ends a session after 60 seconds without user speech and after 10 minutes at most, and
   releases the microphone immediately on stop. The timers are client-side: a killed renderer or a
-  sleeping machine can leave a session billing until the provider expires it, because there is no
-  verified Live REST hangup endpoint to call from the node.
+  sleeping machine can leave a session billing until the relay or provider closes it. Cloud
+  cleanup uses `POST /v1/live/sessions/{session_id}/hangup`; local-key sessions close over their
+  data channel.
 - If the data channel closes unexpectedly, the renderer reports the failure and stops
   automatically. Pressing **Live conversation** starts a fresh session; work already accepted by the
   Director continues on the node.
@@ -101,12 +110,21 @@ Data-channel events can be observed in the browser devtools WebRTC internals or 
 The relay reserves one cloud session per account before calling upstream. A null `session_id`
 means creation is in progress or its outcome is unknown. It does not mean no session was created.
 The ten-minute `expires_at` schedules a closure attempt for a known session; it never authorizes
-replacing an unknown session. A received HTTP rejection frees the reservation. Lost responses,
+replacing an unknown session. A definitive upstream rejection frees the reservation. Lost responses,
 timeouts, interrupted requests, and unconfirmed closure retain it across restarts.
 
 Apply the relay migration before deploying this version. It adds a database-generated
 `reservation_id` and converts legacy empty session ids to null. Drain the older relay version
 before migration: older code assumes every session id is a string and may discard an empty id.
+
+On the node, release is idempotent: releasing an unknown session id on an
+unlinked node succeeds without contacting the relay, so a stale renderer can
+never wedge future sessions. Pending cloud releases retry on the next cloud
+session create and never block local-key sessions.
+
+Ship the node, relay, and renderer together. Older renderers ignore the
+`releaseRequired` flag, so a cloud session started by an old client is never
+released and its reservation is freed only by the recovery procedure below.
 
 For an account reporting `live_voice_session_in_use` after a failed start, inspect the relay database
 with a read-only query, binding the account id as `$1`:
@@ -118,7 +136,7 @@ WHERE user_id = $1;
 ```
 
 - With a known `session_id`, retry the authenticated release endpoint from its owning linked node.
-  The relay deletes the reservation only after upstream confirms `session.closed`.
+  The relay deletes the reservation only after upstream confirms hangup or reports that this exact session no longer exists.
 - If `session_id` is null, correlate the exact `reservation_id` with the relay error log
   `Cloud voice cleanup requires confirmed upstream closure`. The log includes the upstream id
   when creation returned one but persistence failed. With that verified identity, bind account,

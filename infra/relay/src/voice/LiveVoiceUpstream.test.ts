@@ -3,98 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as HttpClient from "effect/unstable/http/HttpClient";
-import { vi } from "vite-plus/test";
 
 import { LiveVoiceUpstream, layer as liveVoiceUpstreamLayer } from "./LiveVoiceUpstream.ts";
-
-interface FakeSocket {
-  readonly accepted: { value: boolean };
-  readonly sent: Array<string>;
-  readonly closed: { value: boolean };
-  readonly socket: {
-    accept: () => void;
-    addEventListener: (type: string, listener: (event: { data: string }) => void) => void;
-    send: (data: string) => void;
-    close: () => void;
-  };
-}
-
-function makeFakeSocket(): FakeSocket {
-  const listeners = new Map<string, (event: { data: string }) => void>();
-  const accepted = { value: false };
-  const closed = { value: false };
-  const sent: string[] = [];
-  const socket = {
-    accept: () => {
-      accepted.value = true;
-    },
-    addEventListener: (type: string, listener: (event: { data: string }) => void) => {
-      listeners.set(type, listener);
-    },
-    send: (data: string) => {
-      sent.push(data);
-      if ((JSON.parse(data) as { readonly type?: unknown }).type === "session.close") {
-        queueMicrotask(() =>
-          listeners.get("message")?.({ data: JSON.stringify({ type: "session.closed" }) }),
-        );
-      }
-    },
-    close: () => {
-      closed.value = true;
-    },
-  };
-  return { accepted, sent, closed, socket };
-}
-
-const clientLayer = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make(() => Effect.die("unused upstream client")),
-);
-
-const upstreamLayer = liveVoiceUpstreamLayer.pipe(Layer.provide(clientLayer));
-
-describe("LiveVoiceUpstream", () => {
-  it.effect("closes the sideband and resolves after session.closed", () => {
-    const fake = makeFakeSocket();
-    const fetchSpy = vi.fn(async () => ({ webSocket: fake.socket }));
-    vi.stubGlobal("fetch", fetchSpy);
-    return Effect.gen(function* () {
-      const upstream = yield* LiveVoiceUpstream;
-      yield* upstream.end({ apiKey: Redacted.make("sk-test"), sessionId: "sess_1" });
-      expect(fake.accepted.value).toBe(true);
-      expect(fake.closed.value).toBe(true);
-      expect(fake.sent.map((entry) => JSON.parse(entry))).toEqual([
-        { type: "session.close", event_id: "relay-close" },
-      ]);
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "https://api.openai.com/v1/live/sessions/sess_1/attach",
-        expect.objectContaining({
-          headers: expect.objectContaining({ Upgrade: "websocket" }),
-        }),
-      );
-    }).pipe(
-      Effect.provide(upstreamLayer),
-      Effect.ensuring(Effect.sync(() => vi.unstubAllGlobals())),
-    );
-  });
-
-  it.effect("fails when the sideband is unavailable", () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({})),
-    );
-    return Effect.gen(function* () {
-      const upstream = yield* LiveVoiceUpstream;
-      const error = yield* Effect.flip(
-        upstream.end({ apiKey: Redacted.make("sk-test"), sessionId: "sess_1" }),
-      );
-      expect(error._tag).toBe("LiveVoiceUpstreamEndFailed");
-    }).pipe(
-      Effect.provide(upstreamLayer),
-      Effect.ensuring(Effect.sync(() => vi.unstubAllGlobals())),
-    );
-  });
-});
 
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
@@ -177,6 +87,97 @@ describe("LiveVoiceUpstream creation outcome", () => {
         sessionId: "sess_ok",
         sdpAnswer: "answer",
       });
+    }).pipe(Effect.provide(withClient(client)));
+  });
+});
+
+describe("LiveVoiceUpstream hangup", () => {
+  for (const scenario of [
+    { name: "confirmed hangup", status: 200, body: {}, success: true },
+    {
+      name: "already ended session",
+      status: 404,
+      body: { error: { code: "session_id_not_found", param: "session_id" } },
+      success: true,
+    },
+    {
+      name: "already ended session without sibling fields",
+      status: 404,
+      body: { error: { code: "session_id_not_found" } },
+      success: true,
+    },
+    {
+      name: "already ended session with drifted sibling fields",
+      status: 404,
+      body: {
+        error: { code: "session_id_not_found", param: "other", type: "invalid_request_error" },
+      },
+      success: true,
+    },
+    {
+      name: "unrelated missing endpoint",
+      status: 404,
+      body: { error: { code: "not_found" } },
+      success: false,
+    },
+    { name: "invalid credentials", status: 401, body: {}, success: false },
+    { name: "upstream outage", status: 503, body: {}, success: false },
+  ]) {
+    it.effect(scenario.name, () => {
+      const calls: Array<{ url: string; method: string; authorization: string | undefined }> = [];
+      const client = HttpClient.make((request) =>
+        Effect.sync(() => {
+          calls.push({
+            url: request.url,
+            method: request.method,
+            authorization: request.headers.authorization,
+          });
+          return HttpClientResponse.fromWeb(
+            request,
+            Response.json(scenario.body, { status: scenario.status }),
+          );
+        }),
+      );
+      return Effect.gen(function* () {
+        const upstream = yield* LiveVoiceUpstream;
+        const ending = upstream.end({
+          apiKey: Redacted.make("sk-test"),
+          sessionId: "live_original",
+        });
+        if (scenario.success) yield* ending;
+        else
+          expect(yield* ending.pipe(Effect.flip)).toMatchObject({
+            _tag: "LiveVoiceUpstreamEndFailed",
+          });
+        expect(calls).toEqual([
+          {
+            url: "https://api.openai.com/v1/live/sessions/live_original/hangup",
+            method: "POST",
+            authorization: "Bearer sk-test",
+          },
+        ]);
+      }).pipe(Effect.provide(withClient(client)));
+    });
+  }
+  it.effect("keeps a non-JSON 404 uncertain so the reservation is retained", () => {
+    const client = HttpClient.make((request) =>
+      Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          new Response("<html>not found</html>", {
+            status: 404,
+            headers: { "content-type": "text/html" },
+          }),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const upstream = yield* LiveVoiceUpstream;
+      expect(
+        yield* upstream
+          .end({ apiKey: Redacted.make("sk-test"), sessionId: "live_original" })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "LiveVoiceUpstreamEndFailed" });
     }).pipe(Effect.provide(withClient(client)));
   });
 });

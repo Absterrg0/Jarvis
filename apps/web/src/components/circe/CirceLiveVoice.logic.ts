@@ -56,6 +56,7 @@ export const CIRCE_LIVE_VOICE_DEFAULT_MAX_SESSION_MS = 10 * 60_000;
 export const CIRCE_LIVE_VOICE_DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 
 export interface CirceLiveVoiceStartResult {
+  readonly releaseRequired?: boolean;
   readonly sessionId: string;
   readonly sdpAnswer: string;
   readonly model: string;
@@ -115,6 +116,7 @@ export interface CirceLiveVoiceBrowser {
 }
 
 export interface CirceLiveVoiceControllerOptions {
+  readonly release?: (sessionId: string) => Promise<void>;
   readonly start: (input: {
     readonly sdpOffer: string;
     readonly context?: string;
@@ -211,8 +213,8 @@ type TimeoutHandle = ReturnType<typeof setTimeout>;
  * Lifecycle notes (OpenAI documented behavior preserved):
  * - The HTTP session creation starts billing. No `session.start` is sent on
  *   the data channel. Media travels on negotiated tracks.
- * - `session.started` gates application commands: commentary and thinking
- *   appends sent earlier are dropped, never queued. `session.close` then
+ * - `session.started` gates application commands: earlier commentary and thinking
+ *   appends wait in the bounded queue. `session.close` then
  *   `session.closed` finalizes usage. A socket close alone proves nothing.
  * - Never auto-reconnects: a fresh billed session needs an explicit start.
  * - Delegation is client-mode only. Duplicate ids and empty pending text are
@@ -221,9 +223,8 @@ type TimeoutHandle = ReturnType<typeof setTimeout>;
  * Cap timers are best-effort. A backgrounded renderer can have its timeouts
  * clamped, and a suspended or killed page runs no timers at all, so the idle
  * and max-duration closes below cannot promise provider-side hangup. They
- * bound billing while this client runs. A node-side hard cap (close over a
- * sideband attach on the saved session id) is the backstop; see the return
- * notes, not implemented here.
+ * bound billing while this client runs. Cloud sessions release through the node
+ * so the relay can confirm hangup and free the account reservation.
  */
 /**
  * Peak amplitude across the local mic and the model's audio, for the orb.
@@ -305,6 +306,27 @@ export function createCirceLiveVoiceController(
   let resolveClosed: (() => void) | null = null;
   let pendingCloseReason: CirceLiveVoiceCloseReason | null = null;
   let closePromise: Promise<void> | null = null;
+  let cloudSessionId: string | null = null;
+  let releasePending: Promise<void> = Promise.resolve();
+  let sessionCreation: Promise<CirceLiveVoiceStartResult> | null = null;
+  const releaseSession = (sessionId: string) => {
+    const pending = Promise.resolve()
+      .then(() => {
+        if (!options.release)
+          throw new Error("This client cannot release cloud live voice. Update Circe and retry.");
+        return options.release(sessionId);
+      })
+      .catch((error: unknown) => {
+        options.onFailure?.(errorMessage(error));
+      });
+    releasePending = Promise.all([releasePending, pending]).then(() => undefined);
+    return pending;
+  };
+  const releaseCloudSession = () => {
+    const sessionId = cloudSessionId;
+    cloudSessionId = null;
+    if (sessionId !== null) void releaseSession(sessionId);
+  };
   // Bumps on every start/close/fail so late mic, offer, ICE, or RPC
   // continuations cannot flip a torn-down session back to live. Every waiter
   // removes its own listener on settle, so a finished startup leaves none.
@@ -417,6 +439,7 @@ export function createCirceLiveVoiceController(
   };
 
   const teardown = () => {
+    releaseCloudSession();
     clearSessionTimers();
     stopLevelMeter();
     awaitingDelegation = false;
@@ -576,6 +599,8 @@ export function createCirceLiveVoiceController(
     if (readStatus() === "idle" || readStatus() === "failed") {
       teardown();
       if (readStatus() !== "failed") setStatus("idle");
+      await sessionCreation?.catch(() => undefined);
+      await releasePending;
       return;
     }
     if (readStatus() === "closing") return closePromise ?? Promise.resolve();
@@ -592,7 +617,14 @@ export function createCirceLiveVoiceController(
     // Stop billing input locally right away instead of after the round trip.
     // Delegated Director work already accepted keeps running on the node.
     stopMicrophone();
-    if (gracefulChannel !== null && gracefulChannel.readyState === "open") {
+    if (cloudSessionId !== null) {
+      releaseCloudSession();
+      await releasePending;
+    } else if (gracefulChannel !== null && gracefulChannel.readyState === "open") {
+      // Local-key sessions always close over the data channel, including when
+      // creation is still in flight: a late local answer is suppressed above,
+      // and cloud sessions are already covered by the node release, so this
+      // branch can never double-close a cloud session.
       const closed = new Promise<void>((resolve) => {
         resolveClosed = resolve;
       });
@@ -622,6 +654,8 @@ export function createCirceLiveVoiceController(
     void gracefulChannel;
     teardown();
     if (readStatus() !== "failed") setStatus("idle");
+    await sessionCreation?.catch(() => undefined);
+    await releasePending;
     notifyClosed(finishedReason);
   };
 
@@ -910,13 +944,21 @@ export function createCirceLiveVoiceController(
       if (readStatus() !== "requesting") return;
       setStatus("connecting");
       const context = options.context?.()?.trim();
-      const started = await cancellable(
-        options.start({
+      const creating = options
+        .start({
           sdpOffer: nextPeer.localDescription?.sdp ?? offer.sdp,
           ...(context === undefined || context.length === 0 ? {} : { context }),
-        }),
-        gen,
-      );
+        })
+        .then((result) => {
+          if (result.releaseRequired) {
+            if (gen !== generation || peer !== nextPeer) void releaseSession(result.sessionId);
+            else cloudSessionId = result.sessionId;
+          }
+          return result;
+        });
+      sessionCreation = creating;
+      const started = await cancellable(creating, gen);
+      if (started !== null && sessionCreation === creating) sessionCreation = null;
       if (started === null || gen !== generation || peer !== nextPeer) {
         // Late or cancelled RPC after the user stopped: suppress the answer
         // so a billed session created upstream cannot flip this client live.

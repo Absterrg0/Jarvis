@@ -40,7 +40,7 @@ function matchesSession(condition: SQL, row: SessionRow): boolean {
   if (row.userId !== params[0]) return false;
   if (text.includes('"reservation_id"') && row.reservationId !== params[1]) return false;
   if (text.includes('"session_id"') && row.sessionId !== params[1]) return false;
-  if (text.includes('"expires_at"') && row.expiresAt >= String(params[1])) return false;
+  if (text.includes('"expires_at"') && row.expiresAt > String(params[1])) return false;
   return true;
 }
 
@@ -111,7 +111,7 @@ function makeFakeDb(
             },
     }),
     update: () => ({
-      set: (value: { readonly sessionId: string }) => ({
+      set: (value: { readonly sessionId?: string; readonly expiresAt?: string }) => ({
         where: (sql: SQL) => {
           const updated = Effect.suspend(() => {
             if (options.failSessionUpdate?.()) {
@@ -126,7 +126,7 @@ function makeFakeDb(
               const userId = String(query(sql).params[0]);
               const existing = sessions.get(userId);
               if (!existing || !matchesSession(sql, existing)) return [];
-              sessions.set(userId, { ...existing, sessionId: value.sessionId });
+              sessions.set(userId, { ...existing, ...value });
               return [{ reservationId: existing.reservationId }];
             });
           });
@@ -792,3 +792,120 @@ it.effect(
     );
   },
 );
+
+describe("explicit release reconciliation", () => {
+  it.effect("retries a failed release through the expired sweep before the next session", () => {
+    const fake = makeFakeDb();
+    const availability = { failEnd: true };
+    const upstream = makeUpstream(availability);
+    return Effect.gen(function* () {
+      const voice = yield* LiveVoiceSessions.LiveVoiceSessions;
+      const first = yield* voice.create({ environmentId: "env-1", sdpOffer: "offer" });
+      const before = fake.sessions.get("user-1")?.expiresAt;
+      const error = yield* Effect.flip(
+        voice.release({ environmentId: "env-1", sessionId: first.sessionId }),
+      );
+      expect(error._tag).toBe("LiveVoiceUpstreamFailed");
+      // The failed release left the exact reservation marked for reconciliation.
+      const marked = fake.sessions.get("user-1");
+      expect(marked?.sessionId).toBe(first.sessionId);
+      expect(marked?.expiresAt).not.toBe(before);
+      availability.failEnd = false;
+      const second = yield* voice.create({ environmentId: "env-2", sdpOffer: "offer" });
+      expect(second.sessionId).not.toBe(first.sessionId);
+      expect(upstream.active.has(first.sessionId)).toBe(false);
+      expect(upstream.active.size).toBe(1);
+      expect(fake.sessions.get("user-1")?.sessionId).toBe(second.sessionId);
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          db: fake.db,
+          links: makeLinks(["user-1"]),
+          upstream: upstream.service,
+          apiKey: "sk-test",
+        }),
+      ),
+    );
+  });
+
+  it.effect(
+    "reconciles a reservation marked by a crashed release on a new service instance",
+    () => {
+      const fake = makeFakeDb();
+      const availability = { failEnd: true };
+      const upstream = makeUpstream(availability);
+      return Effect.gen(function* () {
+        const voice = yield* LiveVoiceSessions.LiveVoiceSessions;
+        const first = yield* voice.create({ environmentId: "env-1", sdpOffer: "offer" });
+        yield* Effect.flip(voice.release({ environmentId: "env-1", sessionId: first.sessionId }));
+        // Process restart: a fresh service reads the durable marked reservation.
+        const restarted = yield* LiveVoiceSessions.make;
+        availability.failEnd = false;
+        const second = yield* restarted.create({ environmentId: "env-1", sdpOffer: "offer" });
+        expect(second.sessionId).not.toBe(first.sessionId);
+        expect(upstream.active.has(first.sessionId)).toBe(false);
+        expect(upstream.active.size).toBe(1);
+        expect(fake.sessions.get("user-1")?.sessionId).toBe(second.sessionId);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            makeLayer({
+              db: fake.db,
+              links: makeLinks(["user-1"]),
+              upstream: upstream.service,
+              apiKey: "sk-test",
+            }),
+            Layer.succeed(RelayDb.RelayDb, fake.db),
+            Layer.succeed(EnvironmentLinks.EnvironmentLinks, makeLinks(["user-1"])),
+            Layer.succeed(RelayConfiguration, makeConfiguration("sk-test")),
+            Layer.succeed(LiveVoiceUpstream, upstream.service),
+          ),
+        ),
+      );
+    },
+  );
+
+  it.effect("keeps the account blocked when reconciliation cannot confirm closure", () => {
+    const fake = makeFakeDb();
+    const upstream = makeUpstream({ failEnd: true });
+    return Effect.gen(function* () {
+      const voice = yield* LiveVoiceSessions.LiveVoiceSessions;
+      const first = yield* voice.create({ environmentId: "env-1", sdpOffer: "offer" });
+      yield* Effect.flip(voice.release({ environmentId: "env-1", sessionId: first.sessionId }));
+      const retry = yield* Effect.flip(voice.create({ environmentId: "env-2", sdpOffer: "offer" }));
+      expect(retry._tag).toBe("LiveVoiceSessionInUse");
+      expect(fake.sessions.get("user-1")?.sessionId).toBe(first.sessionId);
+      expect(upstream.active.has(first.sessionId)).toBe(true);
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          db: fake.db,
+          links: makeLinks(["user-1"]),
+          upstream: upstream.service,
+          apiKey: "sk-test",
+        }),
+      ),
+    );
+  });
+
+  it.effect("deletes the reservation immediately on a confirmed release", () => {
+    const fake = makeFakeDb();
+    const upstream = makeUpstream();
+    return Effect.gen(function* () {
+      const voice = yield* LiveVoiceSessions.LiveVoiceSessions;
+      const first = yield* voice.create({ environmentId: "env-1", sdpOffer: "offer" });
+      yield* voice.release({ environmentId: "env-1", sessionId: first.sessionId });
+      expect(fake.sessions.size).toBe(0);
+      expect(upstream.active.size).toBe(0);
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          db: fake.db,
+          links: makeLinks(["user-1"]),
+          upstream: upstream.service,
+          apiKey: "sk-test",
+        }),
+      ),
+    );
+  });
+});

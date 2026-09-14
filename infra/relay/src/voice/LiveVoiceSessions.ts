@@ -1,4 +1,4 @@
-import { and, count, eq, gte, lt } from "drizzle-orm";
+import { and, count, eq, gte, lt, lte } from "drizzle-orm";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -177,7 +177,7 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             eq(relayLiveVoiceSessions.userId, userId),
-            lt(relayLiveVoiceSessions.expiresAt, nowIso),
+            lte(relayLiveVoiceSessions.expiresAt, nowIso),
           ),
         )
         .limit(1)
@@ -334,6 +334,14 @@ export const make = Effect.gen(function* () {
         return yield* new LiveVoiceNotConfigured();
       }
       const userId = yield* resolveUserId(input.environmentId, false);
+      // Public release accepts an upstream session id, never a reservation
+      // token or an empty identity. The RPC schema already requires a
+      // non-empty id; this guards direct callers. Uncertain (null-id)
+      // reservations are reconciled only by the expired-session sweep on
+      // create, never by a public release.
+      if (input.sessionId.length === 0) {
+        return yield* new LiveVoiceSessionInUse({ userId });
+      }
       const rows = yield* db
         .select({
           reservationId: relayLiveVoiceSessions.reservationId,
@@ -349,15 +357,25 @@ export const make = Effect.gen(function* () {
         .limit(1)
         .pipe(Effect.mapError(persistence("lookup-session")));
       const row = rows[0];
-      // Idempotent: nothing to release.
+      // Idempotent: nothing to release. The lookup matches the exact upstream
+      // session id, so a missing row is proof there is nothing to close.
+      // Uncertain (null-id) reservations are reconciled only by the
+      // expired-session sweep on create, never by a public release.
       if (row === undefined) return;
-      // Public release accepts an upstream session id, never a reservation
-      // token or an empty identity. Internal callers cannot clear uncertainty.
-      if (!row.sessionId) {
-        return yield* new LiveVoiceSessionInUse({ userId });
-      }
+      // Mark the exact reservation eligible for reconciliation before the
+      // hangup. If the hangup fails, times out, or this process dies, the
+      // expired-session sweep retries it on the next create; the slot is still
+      // freed only after a confirmed close.
+      const markedAtIso = DateTime.formatIso(yield* DateTime.now);
+      yield* db
+        .update(relayLiveVoiceSessions)
+        .set({ expiresAt: markedAtIso })
+        .where(reservationIdentity(userId, row.reservationId))
+        .pipe(Effect.mapError(persistence("mark-release-pending")));
       yield* upstream
-        .end({ apiKey: publicKey, sessionId: row.sessionId })
+        // The row was selected by matching this exact id, so pass the
+        // non-empty input rather than the nullable column.
+        .end({ apiKey: publicKey, sessionId: input.sessionId })
         .pipe(
           Effect.mapError(
             (cause) => new LiveVoiceUpstreamFailed({ environmentId: input.environmentId, cause }),

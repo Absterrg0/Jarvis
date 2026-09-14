@@ -124,6 +124,7 @@ function deferred<T>() {
 
 function fixture(
   options: {
+    readonly release?: (sessionId: string) => Promise<void>;
     readonly start?: (input: {
       sdpOffer: string;
       context?: string;
@@ -172,6 +173,7 @@ function fixture(
     })(),
   };
   const controller = createCirceLiveVoiceController({
+    ...(options.release ? { release: options.release } : {}),
     start: async (input) => {
       startCalls.push(input);
       return (
@@ -792,5 +794,113 @@ describe("Circe live voice controller", () => {
         "Known projects: Rivvl (also: rivvl-repo, reveal, zivil); Alertify (also: alert effect).",
       ].join("\n"),
     );
+  });
+});
+
+describe("cloud live voice release", () => {
+  const cloudSession = {
+    sessionId: "cloud_1",
+    sdpAnswer: "v=0\r\ns=answer\r\n",
+    model: "gpt-live-1",
+    voice: "marin",
+    releaseRequired: true,
+  };
+
+  it("waits for relay release before allowing a second session", async () => {
+    const released = deferred<void>();
+    const release = vi.fn(() => released.promise);
+    const f = fixture({ start: async () => cloudSession, release });
+    await f.controller.start();
+    const closing = f.controller.close();
+    await Promise.resolve();
+    expect(release).toHaveBeenCalledExactlyOnceWith("cloud_1");
+    expect(f.tracks[0]?.stopped).toBe(true);
+    expect(f.peer.channel.events()).not.toContainEqual({ type: "session.close" });
+    expect(f.controller.getStatus()).toBe("closing");
+    await f.controller.start();
+    expect(f.startCalls).toHaveLength(1);
+    released.resolve();
+    await closing;
+    await f.controller.start();
+    expect(f.startCalls).toHaveLength(2);
+    await f.controller.close();
+  });
+
+  it("releases a late cloud answer after cancellation", async () => {
+    const entered = deferred<void>();
+    const answer = deferred<CirceLiveVoiceStartResult>();
+    const release = vi.fn(async () => {});
+    const f = fixture({
+      start: () => {
+        entered.resolve();
+        return answer.promise;
+      },
+      release,
+    });
+    const starting = f.controller.start();
+    await entered.promise;
+    const closing = f.controller.close();
+    answer.resolve(cloudSession);
+    await starting;
+    await closing;
+    expect(release).toHaveBeenCalledExactlyOnceWith("cloud_1");
+    expect(f.peer.remote).toBeNull();
+  });
+
+  it.each(["transport", "remote", "negotiation"])(
+    "releases on %s failure or closure",
+    async (kind) => {
+      const release = vi.fn(async () => {});
+      const peer = new FakePeer();
+      if (kind === "negotiation")
+        peer.setRemoteDescription = async () => {
+          throw new Error("bad answer");
+        };
+      const f = fixture({ peer, start: async () => cloudSession, release });
+      await f.controller.start();
+      if (kind === "transport") peer.channel.onclose?.();
+      if (kind === "remote") peer.channel.emit({ type: "session.closed", reason: "expired" });
+      await f.controller.close();
+      expect(release).toHaveBeenCalledExactlyOnceWith("cloud_1");
+      expect(f.tracks[0]?.stopped).toBe(true);
+    },
+  );
+
+  it("reports a failed release while still freeing local media", async () => {
+    const f = fixture({
+      start: async () => cloudSession,
+      release: async () => {
+        throw new Error("Cloud release failed");
+      },
+    });
+    await f.controller.start();
+    await f.controller.close();
+    expect(f.failures).toContain("Cloud release failed");
+    expect(f.tracks[0]?.stopped).toBe(true);
+  });
+
+  it("attempts graceful close for a local session whose creation resolves late", async () => {
+    const entered = deferred<void>();
+    const answer = deferred<CirceLiveVoiceStartResult>();
+    const localSession = {
+      sessionId: "live_1",
+      sdpAnswer: "v=0\r\ns=answer\r\n",
+      model: "gpt-live-1",
+      voice: "marin",
+    };
+    const f = fixture({
+      start: () => {
+        entered.resolve();
+        return answer.promise;
+      },
+    });
+    const starting = f.controller.start();
+    await entered.promise;
+    const closing = f.controller.close();
+    answer.resolve(localSession);
+    await starting;
+    await closing;
+    expect(f.peer.channel.events()).toContainEqual({ type: "session.close" });
+    expect(f.peer.remote).toBeNull();
   });
 });
