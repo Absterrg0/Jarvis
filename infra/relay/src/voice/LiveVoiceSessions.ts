@@ -1,4 +1,4 @@
-import { and, count, eq, gte, lt } from "drizzle-orm";
+import { and, count, eq, gte, lt, lte } from "drizzle-orm";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -177,7 +177,7 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             eq(relayLiveVoiceSessions.userId, userId),
-            lt(relayLiveVoiceSessions.expiresAt, nowIso),
+            lte(relayLiveVoiceSessions.expiresAt, nowIso),
           ),
         )
         .limit(1)
@@ -356,6 +356,16 @@ export const make = Effect.gen(function* () {
       if (!row.sessionId) {
         return yield* new LiveVoiceSessionInUse({ userId });
       }
+      // Mark the exact reservation eligible for reconciliation before the
+      // hangup. If the hangup fails, times out, or this process dies, the
+      // expired-session sweep retries it on the next create; the slot is still
+      // freed only after a confirmed close.
+      const markedAtIso = DateTime.formatIso(yield* DateTime.now);
+      yield* db
+        .update(relayLiveVoiceSessions)
+        .set({ expiresAt: markedAtIso })
+        .where(reservationIdentity(userId, row.reservationId))
+        .pipe(Effect.mapError(persistence("mark-release-pending")));
       yield* upstream
         .end({ apiKey: publicKey, sessionId: row.sessionId })
         .pipe(
