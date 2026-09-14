@@ -47,6 +47,7 @@ import { CirceTaskDesk } from "../Services/CirceTaskDesk.ts";
 import {
   buildCirceFastSemanticPrompt,
   buildCirceSemanticPrompt,
+  circeCommandIsDestructive,
   decodeCirceSemanticProposal,
   describeCirceTaskStatus,
   interpretCirceCommand,
@@ -255,6 +256,39 @@ function composePlanMessage(results: ReadonlyArray<CirceExecutionResult>): strin
   const spoken = results.map((result) => planStepEntry(result).message).filter((line) => line);
   const text = spoken.join(" ").trim();
   return (text.length === 0 ? "Done." : text).slice(0, 400);
+}
+
+/** Project one step's typed clarification into the durable plan frame shape. */
+function planNeedsInputFrame(needsInput: CirceCommandNeedsInput): {
+  readonly clarification: "project" | "task" | "model";
+  readonly prompt: string;
+  readonly projectCandidates?: CircePlanClarificationFrame["projectCandidates"];
+  readonly taskCandidates?: CircePlanClarificationFrame["taskCandidates"];
+} {
+  return {
+    clarification:
+      needsInput.projectClarification !== undefined
+        ? "project"
+        : needsInput.taskClarification !== undefined
+          ? "task"
+          : "model",
+    prompt: needsInput.prompt,
+    ...(needsInput.projectClarification === undefined
+      ? {}
+      : { projectCandidates: needsInput.projectClarification.candidates }),
+    ...(needsInput.taskClarification === undefined
+      ? {}
+      : { taskCandidates: needsInput.taskClarification.candidates }),
+  };
+}
+
+/** Name the destructive action a plan must confirm before it runs. */
+function destructivePlanPrompt(
+  commands: ReadonlyArray<import("@circe/core/command").CirceCommand>,
+): string {
+  const destructive = commands.find(circeCommandIsDestructive);
+  const action = destructive?.type === "reroute" ? "moving a task" : "stopping a task";
+  return `This turn includes ${action}. Say "confirm" to run all ${commands.length} steps, or "cancel".`;
 }
 
 const defaultInterpreterLayer = Layer.effect(
@@ -2506,7 +2540,10 @@ export const makeCirceControllerLive = <R>(
       const persistPlanFrame = Effect.fn("CirceController.persistPlanFrame")(function* (args: {
         readonly input: CirceControllerExecuteInput;
         readonly steps: ReadonlyArray<CirceSemanticStep>;
-        readonly needsInput: CirceCommandNeedsInput;
+        readonly clarification: "project" | "task" | "model" | "confirm";
+        readonly prompt: string;
+        readonly projectCandidates?: CircePlanClarificationFrame["projectCandidates"];
+        readonly taskCandidates?: CircePlanClarificationFrame["taskCandidates"];
       }) {
         const now = yield* DateTime.now;
         const frameId = yield* uuid();
@@ -2543,19 +2580,12 @@ export const makeCirceControllerLive = <R>(
                 ? {}
                 : { expectedReply: args.input.expectedReply }),
               steps: [...args.steps],
-              clarification:
-                args.needsInput.projectClarification !== undefined
-                  ? "project"
-                  : args.needsInput.taskClarification !== undefined
-                    ? "task"
-                    : "model",
-              prompt: args.needsInput.prompt,
-              ...(args.needsInput.projectClarification === undefined
+              clarification: args.clarification,
+              prompt: args.prompt,
+              ...(args.projectCandidates === undefined
                 ? {}
-                : { projectCandidates: args.needsInput.projectClarification.candidates }),
-              ...(args.needsInput.taskClarification === undefined
-                ? {}
-                : { taskCandidates: args.needsInput.taskClarification.candidates }),
+                : { projectCandidates: args.projectCandidates }),
+              ...(args.taskCandidates === undefined ? {} : { taskCandidates: args.taskCandidates }),
               createdAt: now,
               expiresAt: DateTime.add(now, { minutes: 5 }),
             },
@@ -2601,7 +2631,7 @@ export const makeCirceControllerLive = <R>(
             const frameId = yield* persistPlanFrame({
               input,
               steps: steps.slice(offset),
-              needsInput: result,
+              ...planNeedsInputFrame(result),
             });
             return { ...result, clarificationFrameId: frameId };
           }
@@ -2623,6 +2653,7 @@ export const makeCirceControllerLive = <R>(
         readonly input: CirceControllerExecuteInput;
         readonly steps: ReadonlyArray<CirceSemanticStep>;
         readonly firstIndex: number;
+        readonly confirmed?: boolean;
       }) {
         const shell = yield* projections.getShellSnapshot();
         const aliases = yield* projectLexicon.list();
@@ -2641,9 +2672,32 @@ export const makeCirceControllerLive = <R>(
           const frameId = yield* persistPlanFrame({
             input: args.input,
             steps: args.steps.slice(plan.index),
-            needsInput: plan.needsInput,
+            ...planNeedsInputFrame(plan.needsInput),
           });
           return { ...plan.needsInput, clarificationFrameId: frameId };
+        }
+        // A destructive step inside a multi-command turn is confirmed before
+        // anything runs, so it can never hide inside a longer sentence. A
+        // confirmed resume skips this gate.
+        if (
+          args.confirmed !== true &&
+          plan.commands.length >= 2 &&
+          plan.commands.some(circeCommandIsDestructive)
+        ) {
+          const prompt = destructivePlanPrompt(plan.commands);
+          const frameId = yield* persistPlanFrame({
+            input: args.input,
+            steps: args.steps,
+            clarification: "confirm",
+            prompt,
+          });
+          return {
+            status: "needs-input" as const,
+            reason: "control-target-required" as const,
+            prompt,
+            choices: ["Confirm", "Cancel"],
+            clarificationFrameId: frameId,
+          };
         }
         return yield* dispatchPlanSteps(args.input, args.steps, args.firstIndex);
       });
@@ -2731,6 +2785,27 @@ export const makeCirceControllerLive = <R>(
             steps: [...frame.steps],
           },
         };
+        if (frame.clarification === "confirm") {
+          // A destructive step in a compound turn: only an explicit yes runs
+          // it. Anything else re-asks; cancel is handled above.
+          if (!/^(?:yes|yeah|yep|confirm|do it|go ahead|proceed|okay|ok)$/u.test(answer)) {
+            return {
+              status: "needs-input" as const,
+              reason: "control-target-required" as const,
+              prompt: frame.prompt,
+              choices: ["Confirm", "Cancel"] as ReadonlyArray<string>,
+              ...(frameId === undefined ? {} : { clarificationFrameId: frameId }),
+            };
+          }
+          const confirmed = yield* consume();
+          if (confirmed === null) return staleReply;
+          return yield* executePlanSteps({
+            input: resumeInput,
+            steps: frame.steps,
+            firstIndex: 0,
+            confirmed: true,
+          });
+        }
         if (frame.clarification === "project") {
           const shell = yield* projections.getShellSnapshot();
           const aliases = yield* projectLexicon.list();

@@ -603,8 +603,11 @@ export const CircePlanClarificationFrame = Schema.Struct({
   expectedReply: Schema.optional(Schema.NullOr(CirceExpectedReply)),
   /** Remaining proposal steps, starting with the one awaiting the answer. */
   steps: Schema.Array(CirceSemanticStep).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
-  /** What the paused step needs: a project, a task, or a provider/model. */
-  clarification: Schema.Literals(["project", "task", "model"]),
+  /**
+   * What the paused plan needs: a project, a task, a provider/model, or a
+   * yes/no confirmation before a destructive step runs.
+   */
+  clarification: Schema.Literals(["project", "task", "model", "confirm"]),
   prompt: TrimmedNonEmptyString,
   projectCandidates: Schema.optional(
     Schema.Array(

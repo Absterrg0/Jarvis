@@ -174,6 +174,15 @@ export type CirceCommand =
       readonly answer: string;
     };
 
+/**
+ * Commands that interrupt or relocate work already in flight. A multi-command
+ * turn that includes one is confirmed before it runs, so a destructive step
+ * can never hide inside a longer sentence.
+ */
+export function circeCommandIsDestructive(command: CirceCommand): boolean {
+  return command.type === "stop" || command.type === "reroute";
+}
+
 export type CirceCommandNeedsInput = {
   readonly status: "needs-input";
   readonly reason: CirceNeedsInputReason;

@@ -1175,6 +1175,120 @@ describe("CirceController", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  const confirmPlanLayer = (dispatch: () => Effect.Effect<{ sequence: number }>) =>
+    TestCirceControllerLive.pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.some(sourceThread)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch,
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+  const destructivePlanProposal = () => ({
+    source: "Stop the current task, then list my projects.",
+    proposal: {
+      action: "sequence" as const,
+      refs: [],
+      model: null,
+      effort: null,
+      answer: null,
+      steps: [
+        { action: "stop" as const, refs: [], model: null, effort: null, answer: null },
+        { action: "list-projects" as const, refs: [], model: null, effort: null, answer: null },
+      ],
+    },
+  });
+
+  it.effect("confirms a compound turn that includes a destructive step", () => {
+    const layer = confirmPlanLayer(() => Effect.succeed({ sequence: 1 }));
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const { source, proposal } = destructivePlanProposal();
+      const paused = yield* manager.execute({
+        sessionId,
+        utterance: source,
+        projectId: project.id,
+        contextThreadId: sourceThread.id,
+        sourceUtterance: source,
+        semanticProposal: proposal,
+      });
+      expect(paused).toMatchObject({ status: "needs-input" });
+      if (paused.status !== "needs-input") return;
+      expect(paused.prompt).toContain("stopping a task");
+
+      const confirmed = yield* manager.execute({
+        sessionId,
+        utterance: "confirm",
+        projectId: project.id,
+        contextThreadId: sourceThread.id,
+        ...(paused.clarificationFrameId === undefined
+          ? {}
+          : { clarificationFrameId: paused.clarificationFrameId }),
+      });
+      expect(confirmed).toMatchObject({ status: "plan" });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("declining a destructive compound dispatches nothing", () => {
+    const layer = confirmPlanLayer(() => Effect.die("A declined plan must not dispatch"));
+    return Effect.gen(function* () {
+      const manager = yield* CirceController;
+      const { source, proposal } = destructivePlanProposal();
+      const paused = yield* manager.execute({
+        sessionId,
+        utterance: source,
+        projectId: project.id,
+        contextThreadId: sourceThread.id,
+        sourceUtterance: source,
+        semanticProposal: proposal,
+      });
+      if (paused.status !== "needs-input") return;
+      const declined = yield* manager.execute({
+        sessionId,
+        utterance: "no",
+        projectId: project.id,
+        ...(paused.clarificationFrameId === undefined
+          ? {}
+          : { clarificationFrameId: paused.clarificationFrameId }),
+      });
+      expect(declined).toMatchObject({
+        status: "acknowledged",
+        message: "Cancelled the remaining steps.",
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("answers a general question without creating project work", () => {
     const interpreterLayer = Layer.succeed(CirceControllerInterpreter, {
       interpret: () =>
