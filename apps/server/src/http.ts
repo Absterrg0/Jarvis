@@ -85,7 +85,7 @@ export function downloadContentDisposition(fileName?: string): string {
   }`;
 }
 
-const DEFAULT_DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"] as const;
+const DEFAULT_DESKTOP_RENDERER_ORIGINS = ["circe://app", "circe-dev://app"] as const;
 
 export function assetResponseHeaders(
   filePath: string,
