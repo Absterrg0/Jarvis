@@ -61,8 +61,12 @@ are the smallest honest integration point.
   UI authority.
 - Live conversation is the only voice path. The renderer owns microphone and speaker media over
   WebRTC; the node mints the GPT-Live session with its stored key and never sends the key to a
-  client. Delegated utterances reuse the ordinary submission queue, grounding, and provider path.
-  Headless has no voice capability.
+  client. Delegated utterances reuse the ordinary submission queue. The supervisor proposes bounded
+  `lookup` and `open-website` actions alongside the task actions: the model names the action, the host
+  validates the place against the transcript and the target against the shared website allowlist, and
+  no provider thread is created. Lookups run on the node; website launches belong to the originating
+  client, while node desktop tools still act on their own node. All other work uses ordinary grounding
+  and provider execution. Headless has no voice or quick-lookup capability.
 - `apps/server/src/circe/` owns the server-side Circe adapters and composition. The generic
   `ProviderExecutionPolicy` service lives under the T3 provider services; the Circe implementation
   is a layer that supplies policy through that generic interface. Circe commands and task-desk

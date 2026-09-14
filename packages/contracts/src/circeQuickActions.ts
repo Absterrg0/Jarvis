@@ -1,0 +1,34 @@
+import * as Schema from "effect/Schema";
+import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+
+/** A bounded lookup, independent of projects, providers, and desktop control. */
+export const CirceQuickLookupInput = Schema.Struct({
+  kind: Schema.Literals(["weather", "time"]),
+  location: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
+  day: Schema.Literals(["now", "today", "tomorrow"]),
+  /**
+   * The verbatim utterance the location was copied from. The node refuses a
+   * place that does not appear here, so a model can never invent a location.
+   */
+  sourceUtterance: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(16_000))),
+  /** A choice returned by this lookup's real place catalog. Revalidated on the node. */
+  placeId: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+});
+export type CirceQuickLookupInput = typeof CirceQuickLookupInput.Type;
+
+export const CirceQuickLookupResult = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("answer"),
+    message: TrimmedNonEmptyString,
+    source: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("needs-input"),
+    message: TrimmedNonEmptyString,
+    choices: Schema.Array(Schema.Struct({ id: Schema.Int, label: TrimmedNonEmptyString })).check(
+      Schema.isMaxLength(10),
+    ),
+  }),
+  Schema.Struct({ status: Schema.Literal("unavailable"), message: TrimmedNonEmptyString }),
+]);
+export type CirceQuickLookupResult = typeof CirceQuickLookupResult.Type;

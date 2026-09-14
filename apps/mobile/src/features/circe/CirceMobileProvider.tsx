@@ -1,6 +1,7 @@
+import { circeWebsiteUrl } from "@circe/core/website";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { AppState, type AppStateStatus } from "react-native";
+import { AppState, Linking, type AppStateStatus } from "react-native";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
   createContext,
@@ -139,6 +140,10 @@ function formatMobileInterpretingMessage(utterance: string): string {
 
 export function CirceMobileProvider(props: { readonly children: ReactNode }) {
   const { connectedEnvironments } = useRemoteConnectionStatus();
+  const quickLookup = useMobileAtomCommand(circeEnvironment.lookup, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const refreshMesh = useMobileAtomCommand(circeMeshEnvironment.refresh, {
@@ -1373,6 +1378,51 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
         return;
       }
       const executionProposal = interpreted.value;
+      // A lookup or website launch is a bounded assistant action with no
+      // project, task, provider, or thread. The model proposed it; a node runs
+      // the lookup and this phone opens the site.
+      if (
+        executionProposal.action === "lookup" &&
+        executionProposal.lookup !== undefined &&
+        executionProposal.lookup !== null
+      ) {
+        const lookupNodeId =
+          taskDeskNodeIdRef.current ??
+          connectedEnvironments[0]?.environmentId ??
+          semanticNode.nodeId;
+        const lookup = executionProposal.lookup;
+        const lookupResult = await quickLookup({
+          environmentId: lookupNodeId,
+          input: { ...lookup, sourceUtterance: sourceUtterance.slice(0, 16_000) },
+        }).catch(() => null);
+        const value =
+          lookupResult !== null && lookupResult._tag === "Success" ? lookupResult.value : null;
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        setMessage(value?.message ?? "I couldn't complete that lookup. Try again in a moment.");
+        drainQueuedInput();
+        return;
+      }
+      if (
+        executionProposal.action === "open-website" &&
+        typeof executionProposal.website === "string"
+      ) {
+        const url = circeWebsiteUrl(executionProposal.website);
+        const opened =
+          url === null
+            ? false
+            : await Linking.openURL(url).then(
+                () => true,
+                () => false,
+              );
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        setMessage(
+          opened
+            ? `Opening ${executionProposal.website} on this device.`
+            : `I couldn't open ${executionProposal.website} on this device.`,
+        );
+        drainQueuedInput();
+        return;
+      }
       // Converse is model-decided, never regex-shortcut before inference. Run
       // it project-free on the semantic node with the same request identity
       // so an explicit cancel aborts it; answers stay best-effort.
@@ -1640,6 +1690,8 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
     },
     [
       cancelServerFrame,
+      quickLookup,
+      connectedEnvironments,
       catalog,
       catalog?.nodes,
       catalog?.projects,

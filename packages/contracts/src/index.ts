@@ -42,3 +42,5 @@ export * from "./usage.ts";
 export * from "./circe.ts";
 export * from "./circeLiveVoice.ts";
 export * from "./rpc.ts";
+
+export * from "./circeQuickActions.ts";

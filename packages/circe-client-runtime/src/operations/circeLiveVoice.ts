@@ -23,3 +23,9 @@ export const releaseCirceVoiceLiveSession = Effect.fn("Circe.voiceLiveRelease")(
 ) {
   return yield* request(WS_METHODS.circeVoiceLiveRelease, input);
 });
+
+export const lookupCirceQuickAnswer = Effect.fn("Circe.quickLookup")(function* (
+  input: import("@t3tools/contracts").CirceQuickLookupInput,
+) {
+  return yield* request(WS_METHODS.circeQuickLookup, input);
+});

@@ -226,3 +226,27 @@ Live speech stays interruptible: speaking over the model yields the floor, and e
 ### Retrying or discarding an unsent answer
 
 If a browser or desktop Circe submission fails, use **Retry** to resend the same request. Its task and approval identity stay fixed even if another approval has since appeared. **Cancel** discards queued or failed submissions and sends an exact-identity pre-accept cancel for the in-flight request; it does not stop provider work after acceptance. A request already being submitted remains visible until its result arrives, with no filler speech while it waits. On mobile, repeat an answer after a transport failure to answer the same pending request, or say "cancel" to discard it locally.
+
+## Quick answers and opening websites
+
+Ask Circe a short question or give it a simple website command:
+
+- "What's the weather in Ahmedabad, Gujarat, India?"
+- "Weather in London, United Kingdom tomorrow."
+- "What time is it in Tokyo, Japan?"
+- "Open YouTube" or "Open https://example.com".
+
+Circe recognizes these through the same routing that handles your other turns, so any phrasing
+works, not just the examples above. They answer in the conversation without creating a task.
+Weather and local-time lookups use Open-Meteo and require a connected Full or Controller node.
+Circe copies the place from your own words and never invents one. If the place is ambiguous, it
+asks you to say the city with its state or country.
+
+Website commands open your device's browser, including when a remote coding task is selected.
+On desktop, Circe asks the operating system to open the browser; your window manager controls
+whether it comes to the foreground. A web browser may block a popup started by voice. Circe
+reports a failed launch instead of claiming it opened.
+
+Requests with extra work, such as "open YouTube and find a video", or an explicit background
+or remote destination use the ordinary task flow. Other questions and research still use agents.
+This supports weather, local time, and opening sites; it is not a general web-search service.

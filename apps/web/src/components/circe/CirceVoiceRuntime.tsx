@@ -1,3 +1,5 @@
+import { circeLiveVoiceEnvironment } from "../../state/circeLiveVoice";
+import { openCirceWebsite } from "./CirceQuickActions.logic";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -257,6 +259,10 @@ export function CirceVoiceRuntime({
 }: CirceVoiceRuntimeProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const originNodeId = primaryEnvironmentId;
+  const quickLookup = useAtomCommand(circeLiveVoiceEnvironment.lookup, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const executeInstruction = useAtomCommand(circeMeshEnvironment.execute, {
     reportFailure: false,
     reportDefect: false,
@@ -1488,22 +1494,7 @@ export function CirceVoiceRuntime({
       } else {
         instruction = capturedInstruction.trim();
       }
-      if (submissionBusyRef.current || !catalogReady || instruction.trim().length === 0) {
-        // A submission must never vanish silently: if the surface is not
-        // ready yet, say so and complete the turn so the FIFO keeps moving.
-        if (!catalogReady) {
-          emitFeedback({
-            text: "I'm still connecting. Try again in a moment.",
-            kind: "needs-input",
-            inputMode,
-            captureId: voiceSubmission.captureId,
-            ...(voiceSubmission.requestId === undefined
-              ? {}
-              : { requestId: voiceSubmission.requestId }),
-          });
-        }
-        return;
-      }
+      if (submissionBusyRef.current || instruction.trim().length === 0) return;
       if (
         pendingVoiceClarification?.projectCandidates !== undefined &&
         pendingProjectChoice === null
@@ -1520,6 +1511,18 @@ export function CirceVoiceRuntime({
         return "pause" as const;
       }
 
+      if (!catalogReady) {
+        emitFeedback({
+          text: "I'm still connecting. Try again in a moment.",
+          kind: "needs-input",
+          inputMode,
+          captureId: voiceSubmission.captureId,
+          ...(voiceSubmission.requestId === undefined
+            ? {}
+            : { requestId: voiceSubmission.requestId }),
+        });
+        return;
+      }
       let submissionCatalog = catalog;
       if (pendingVoiceClarification === null) {
         // An already-selected target only needs its own node revalidated; a
@@ -1736,6 +1739,56 @@ export function CirceVoiceRuntime({
           if (interpretedProposal !== undefined) {
             meshProposal = interpretedProposal;
             conversationCacheRef.current.set(conversationCacheKey, interpretedProposal);
+            // A lookup or website launch is a bounded assistant action with no
+            // project, task, provider, or thread. The model proposed it; the
+            // node revalidates and runs the lookup, and the asking device opens
+            // the site. The spoken sentence is then voiced by the live model.
+            if (
+              interpretedProposal.action === "lookup" &&
+              interpretedProposal.lookup !== undefined &&
+              interpretedProposal.lookup !== null
+            ) {
+              const lookup = interpretedProposal.lookup;
+              const lookupResult = await quickLookup({
+                environmentId: primaryEnvironmentId ?? semanticNode.nodeId,
+                input: { ...lookup, sourceUtterance: meshSource.slice(0, 16_000) },
+              }).catch(() => null);
+              const value =
+                lookupResult !== null && lookupResult._tag === "Success"
+                  ? lookupResult.value
+                  : null;
+              emitFeedback({
+                text: value?.message ?? "I couldn't complete that lookup. Try again in a moment.",
+                kind:
+                  value?.status === "answer"
+                    ? "done"
+                    : value?.status === "needs-input"
+                      ? "needs-input"
+                      : "error",
+                inputMode,
+                captureId: voiceSubmission.captureId,
+                requestId: turnRequestId,
+              });
+              syncPending();
+              return;
+            }
+            if (
+              interpretedProposal.action === "open-website" &&
+              typeof interpretedProposal.website === "string"
+            ) {
+              const opened = await openCirceWebsite(interpretedProposal.website);
+              emitFeedback({
+                text: opened
+                  ? `Opening ${interpretedProposal.website} on this device.`
+                  : `I couldn't open ${interpretedProposal.website} on this device.`,
+                kind: opened ? "done" : "error",
+                inputMode,
+                captureId: voiceSubmission.captureId,
+                requestId: turnRequestId,
+              });
+              syncPending();
+              return;
+            }
             // Converse is model-decided, never a pre-inference shortcut. Run
             // it project-free on the semantic node with the same request
             // identity so an explicit cancel aborts it. Answers stay
@@ -2567,6 +2620,7 @@ export function CirceVoiceRuntime({
       catalog,
       catalogPending,
       catalogReady,
+      quickLookup,
       converseInstruction,
       executeInstruction,
       interpretInstruction,

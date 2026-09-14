@@ -370,6 +370,39 @@ describe("Circe semantic proposal bridge", () => {
     ).toThrow();
   });
 
+  it("carries a bounded lookup or website target with no refs", () => {
+    expect(
+      decodeProposal({
+        action: "lookup",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        lookup: { kind: "weather", location: "Ahmedabad", day: "now" },
+      }),
+    ).toMatchObject({ action: "lookup", lookup: { location: "Ahmedabad" } });
+    expect(
+      decodeProposal({
+        action: "open-website",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        website: "YouTube",
+      }),
+    ).toMatchObject({ action: "open-website", website: "YouTube" });
+    expect(() =>
+      decodeProposal({
+        action: "lookup",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        lookup: { kind: "weather", location: "Ahmedabad", day: "someday" },
+      }),
+    ).toThrow();
+  });
+
   it("passes untrusted mesh evidence without pins or IDs", () => {
     expect(
       decodeInterpretInput({
