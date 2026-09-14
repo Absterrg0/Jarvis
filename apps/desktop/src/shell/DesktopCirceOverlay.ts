@@ -23,23 +23,38 @@ export interface DesktopCirceOrbPresentation {
   readonly animated: boolean;
 }
 
+// One calm accent across states. Status is read from the label and the orb's
+// motion, not from a rotating rainbow, so the overlay reads as a single orb
+// rather than a light show.
+const ORB_ACCENT = "#9db4c7";
+const ORB_ACCENT_DEEP = "#5f7186";
+const ORB_ACCENT_FAILED = "#d59a9a";
+
 const DESKTOP_CIRCE_ORB_PROFILES: Readonly<
   Record<DesktopCirceLiveVoiceStatus, { label: string; accent: string; accentSecondary: string }>
 > = {
-  idle: { label: "Circe is idle", accent: "#7fc7c0", accentSecondary: "#6f86d8" },
+  idle: { label: "Circe is idle", accent: ORB_ACCENT, accentSecondary: ORB_ACCENT_DEEP },
   requesting: {
     label: "Starting live conversation",
-    accent: "#8fd9cf",
-    accentSecondary: "#6fa0f2",
+    accent: ORB_ACCENT,
+    accentSecondary: ORB_ACCENT_DEEP,
   },
   connecting: {
     label: "Connecting live conversation",
-    accent: "#78d6cd",
-    accentSecondary: "#648ff4",
+    accent: ORB_ACCENT,
+    accentSecondary: ORB_ACCENT_DEEP,
   },
-  live: { label: "Live conversation", accent: "#7fe6d2", accentSecondary: "#7aa6f7" },
-  closing: { label: "Ending live conversation", accent: "#9fb0ff", accentSecondary: "#c894ea" },
-  failed: { label: "Live conversation failed", accent: "#ff9d9d", accentSecondary: "#ef7186" },
+  live: { label: "Live conversation", accent: ORB_ACCENT, accentSecondary: ORB_ACCENT_DEEP },
+  closing: {
+    label: "Ending live conversation",
+    accent: ORB_ACCENT,
+    accentSecondary: ORB_ACCENT_DEEP,
+  },
+  failed: {
+    label: "Live conversation failed",
+    accent: ORB_ACCENT_FAILED,
+    accentSecondary: ORB_ACCENT_FAILED,
+  },
 };
 
 /**
@@ -69,9 +84,36 @@ export interface DesktopCirceOverlayWorkArea {
 
 export interface DesktopCirceOverlayBounds extends DesktopCirceOverlayWorkArea {}
 
+/** Distance from the window's right edge to the orb centre, in both sizes. */
+export const DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT = 36;
+
+export interface DesktopCirceOverlayAnchor {
+  readonly x: number;
+  readonly y: number;
+}
+
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(Math.max(value, min), max);
+
+/** The orb's screen centre for a window bounds. Used to persist a drag. */
+export function desktopCirceOverlayOrbCenter(
+  bounds: DesktopCirceOverlayBounds,
+): DesktopCirceOverlayAnchor {
+  return {
+    x: bounds.x + bounds.width - DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT,
+    y: bounds.y + bounds.height / 2,
+  };
+}
+
+/**
+ * The overlay is anchored by the orb's screen centre so a dragged orb stays
+ * where the user dropped it while the panel grows and collapses around it.
+ * Without an anchor it keeps the historical middle-right placement.
+ */
 export function resolveDesktopCirceOverlayBounds(
   workArea: DesktopCirceOverlayWorkArea,
   expanded: boolean,
+  anchor?: DesktopCirceOverlayAnchor,
 ): DesktopCirceOverlayBounds {
   const width = Math.min(
     expanded ? DESKTOP_CIRCE_ORB_WINDOW_WIDTH : DESKTOP_CIRCE_ORB_COLLAPSED_WIDTH,
@@ -81,9 +123,23 @@ export function resolveDesktopCirceOverlayBounds(
     expanded ? DESKTOP_CIRCE_ORB_WINDOW_HEIGHT : DESKTOP_CIRCE_ORB_COLLAPSED_HEIGHT,
     Math.max(48, workArea.height - DESKTOP_CIRCE_ORB_MARGIN * 2),
   );
+  if (anchor === undefined) {
+    return {
+      x: Math.round(workArea.x + workArea.width - width - DESKTOP_CIRCE_ORB_MARGIN),
+      y: Math.round(workArea.y + (workArea.height - height) / 2),
+      width,
+      height,
+    };
+  }
   return {
-    x: Math.round(workArea.x + workArea.width - width - DESKTOP_CIRCE_ORB_MARGIN),
-    y: Math.round(workArea.y + (workArea.height - height) / 2),
+    x: Math.round(
+      clamp(
+        anchor.x - (width - DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT),
+        workArea.x,
+        workArea.x + workArea.width - width,
+      ),
+    ),
+    y: Math.round(clamp(anchor.y - height / 2, workArea.y, workArea.y + workArea.height - height)),
     width,
     height,
   };
@@ -155,27 +211,13 @@ vec3 fieldNormal(vec3 p, float t){
     field(p+e.yxy,t)-field(p-e.yxy,t),
     field(p+e.yyx,t)-field(p-e.yyx,t)));
 }
+// Neutral studio environment: a soft floor-to-sky gradient with one key light.
+// No coloured fill lights, so the glass never turns into a light show.
 vec3 env(vec3 d){
   float y = d.y;
-  vec3 col = mix(vec3(0.008,0.010,0.018), vec3(0.14,0.17,0.24), smoothstep(-0.7, 0.85, y));
-  float top = smoothstep(0.4, 1.0, y);
-  col += vec3(0.85,0.92,1.0)*top*0.7;
-  float key = smoothstep(0.86, 0.999, dot(d, normalize(vec3(-0.45,0.75,0.48))));
-  col += vec3(1.0)*key*2.6;
-  float fill = smoothstep(0.66, 0.999, dot(d, normalize(vec3(0.85,0.1,0.5))));
-  col += mix(u_a, vec3(1.0), 0.15)*fill*1.25;
-  float bounce = smoothstep(0.5, 0.99, dot(d, normalize(vec3(-0.1,-0.85,0.5))));
-  col += u_b*bounce*0.8;
+  vec3 col = mix(vec3(0.030,0.034,0.040), vec3(0.34,0.38,0.44), smoothstep(-0.8, 1.0, y));
+  col += vec3(1.0,0.99,0.97) * smoothstep(0.90, 0.999, dot(d, normalize(vec3(-0.40,0.80,0.46)))) * 1.5;
   return col;
-}
-vec3 thinFilm(float thickness, float cosTheta){
-  float eta = 1.34;
-  float sinT2 = (1.0 - cosTheta*cosTheta)/(eta*eta);
-  float cosT = sqrt(max(0.0, 1.0 - sinT2));
-  float opd = 2.0*eta*thickness*cosT;
-  vec3 lam = vec3(650.0, 545.0, 450.0);
-  vec3 phi = 6.2831853 * opd / lam;
-  return 0.5 + 0.5*cos(phi);
 }
 vec3 aces(vec3 x){
   return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14), 0.0, 1.0);
@@ -205,42 +247,27 @@ void main(){
     vec3 reflCol = env(ref);
     float fres = pow(1.0 - ndv, 4.0);
 
-    float flow = fbm(p*1.7 + vec3(u_time*0.08));
-    float thick = 150.0 + flow*300.0 + fres*260.0 + u_level*70.0;
-    vec3 film = thinFilm(thick, ndv);
+    // Neutral reflective glass with a single crisp key specular and one soft
+    // fill. The accent only tints the grazing rim and a faint inner glow.
+    vec3 colr = reflCol;
+    colr += vec3(1.0,0.99,0.96) * pow(max(dot(ref, V), 0.0), 180.0) * 1.7;
+    colr += vec3(0.78,0.84,0.90) * pow(max(dot(ref, normalize(vec3(0.80,0.22,0.42))), 0.0), 24.0) * 0.16;
 
-    // Dark reflective glass. Thin film only tints the body; it does not
-    // repaint it, so the orb stays legible and not garish.
-    vec3 colr = reflCol * mix(vec3(1.0), film, 0.22);
-    colr += u_a*ndl*0.10;
+    float rimT = pow(1.0 - ndv, 5.0);
+    colr += u_a * rimT * (0.28 + u_level * 0.75);
 
-    // Crisp studio speculars.
-    float spec = pow(max(dot(ref, V), 0.0), 220.0);
-    colr += vec3(1.0,0.99,0.96)*spec*2.4;
-    float spec2 = pow(max(dot(ref, normalize(vec3(0.85,0.25,0.4))), 0.0), 48.0);
-    colr += mix(u_a, vec3(1.0), 0.35)*spec2*0.5;
-
-    // Iridescence lives at the grazing rim.
-    colr += film*fres*1.35;
-    colr += mix(u_a,u_b,0.5)*pow(1.0-ndv, 6.0)*0.9;
-
-    // Faint liquid glow inside the glass, brightest when speaking.
-    float inner = fbm(p*3.2 + n*1.7 + vec3(u_time*0.14));
-    colr += mix(u_a,u_b,0.4)*pow(inner, 4.0)*(0.35 + u_level*1.3);
-    float core = pow(max(0.0, 1.0 - r/Rl), 2.0);
-    colr += mix(u_a,u_b,0.5)*core*(0.06 + u_level*0.85)*0.7;
+    float inner = fbm(p*3.0 + n*1.6 + vec3(u_time*0.10));
+    colr += mix(u_a, u_b, 0.5) * pow(inner, 5.0) * (0.05 + u_level * 0.45);
 
     col = aces(colr);
     alpha = inside;
   }
 
-  float d0 = max(r - Rl, 0.0);
-  float glow = smoothstep(0.0, 0.05, d0) * (1.0 - smoothstep(0.05, 0.30, d0));
-  vec3 halo = mix(u_a,u_b,0.5);
-  col += halo*pow(glow, 1.3)*(0.18 + u_level*0.42);
-  float rim = smoothstep(0.02, 0.0, abs(r - Rl));
-  col += halo*rim*0.05;
-  alpha = clamp(alpha + glow*0.55, 0.0, 1.0);
+  // A hair of neutral edge light just outside the silhouette. There is no
+  // coloured halo band, so the overlay never shows a glow bar behind the orb.
+  float edge = smoothstep(0.020, 0.0, abs(r - Rl));
+  col += mix(vec3(0.62,0.68,0.74), u_a, 0.30) * edge * 0.06;
+  alpha = clamp(alpha + edge * 0.10, 0.0, 1.0);
 
   gl_FragColor = vec4(col*alpha, alpha);
 }
@@ -593,7 +620,63 @@ const orbScript = `<script>
     }
   };
 
-  orb.addEventListener("click", () => setExpanded(!expanded));
+  // Drag to move the overlay; a press that does not move toggles the panel.
+  // Pointer capture keeps moves flowing after the cursor leaves the small
+  // native window, so the orb can be dropped anywhere on the display.
+  const DRAG_THRESHOLD_PX = 4;
+  const postDrag = (payload) => console.log(prefix + " " + JSON.stringify(payload));
+  let dragPointerId = null;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragging = false;
+  let suppressClick = false;
+  orb.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || dragPointerId !== null) return;
+    dragPointerId = event.pointerId;
+    dragStartX = event.screenX;
+    dragStartY = event.screenY;
+    dragging = false;
+    try {
+      orb.setPointerCapture(event.pointerId);
+    } catch {}
+  });
+  orb.addEventListener("pointermove", (event) => {
+    if (dragPointerId === null || event.pointerId !== dragPointerId) return;
+    const dx = event.screenX - dragStartX;
+    const dy = event.screenY - dragStartY;
+    if (!dragging && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+    if (!dragging) {
+      dragging = true;
+      orb.classList.add("dragging");
+      postDrag({ type: "drag", phase: "start", x: event.screenX, y: event.screenY });
+      return;
+    }
+    postDrag({ type: "drag", phase: "move", x: event.screenX, y: event.screenY });
+  });
+  const finishDrag = (event) => {
+    if (dragPointerId === null || (event && event.pointerId !== dragPointerId)) return;
+    const moved = dragging;
+    try {
+      orb.releasePointerCapture(dragPointerId);
+    } catch {}
+    dragPointerId = null;
+    dragging = false;
+    orb.classList.remove("dragging");
+    if (moved) {
+      postDrag({ type: "drag", phase: "end" });
+      // A drag ends with a click; swallow it so the panel does not toggle.
+      suppressClick = true;
+      setTimeout(() => {
+        suppressClick = false;
+      }, 0);
+    }
+  };
+  orb.addEventListener("pointerup", finishDrag);
+  orb.addEventListener("pointercancel", finishDrag);
+  orb.addEventListener("click", () => {
+    if (suppressClick) return;
+    setExpanded(!expanded);
+  });
   document.addEventListener("visibilitychange", () => setRunning(true));
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && expanded) setExpanded(false);
@@ -627,14 +710,13 @@ export function desktopCirceOverlayDataUrl(): string {
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none';connect-src 'none';img-src 'none';style-src 'unsafe-inline';script-src 'unsafe-inline'"><style>
 html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}
 body{color:#f3f1ed;font:400 13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
-*{box-sizing:border-box}main{position:absolute;inset:0;--accent:#7fc7c0;--accent-secondary:#6f86d8;--level:0}
+*{box-sizing:border-box}main{position:absolute;inset:0;--accent:#9db4c7;--accent-secondary:#5f7186;--level:0}
 .orb-wrap{position:absolute;right:0;top:calc(50% - 36px);width:72px;height:72px;display:grid;place-items:center;transition:transform .26s cubic-bezier(.22,.9,.28,1)}
-.orb-halo{position:absolute;inset:10px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--accent) 55%,transparent),transparent 72%);filter:blur(9px);opacity:.45;transition:opacity .25s ease}
-main.webgl .orb-halo{display:none}
 .orb-canvas{position:absolute;inset:0;width:72px;height:72px;pointer-events:none}
-.orb{position:relative;z-index:2;width:52px;height:52px;border:1px solid rgba(255,255,255,.18);border-radius:50%;cursor:pointer;padding:0;outline:none;background:radial-gradient(circle at 32% 26%,rgba(255,255,255,.85),rgba(255,255,255,0) 34%),radial-gradient(circle at 70% 74%,var(--accent-secondary),rgba(11,13,17,0) 60%),radial-gradient(circle at 50% 48%,var(--accent),#0b0d11 82%);box-shadow:0 8px 24px rgba(0,0,0,.5),0 0 18px color-mix(in srgb,var(--accent) 34%,transparent),inset 0 1px 2px rgba(255,255,255,.22),inset 0 -6px 14px rgba(0,0,0,.42);transition:box-shadow .2s ease}
+.orb{position:relative;z-index:2;width:52px;height:52px;border:1px solid rgba(255,255,255,.16);border-radius:50%;cursor:grab;padding:0;outline:none;background:radial-gradient(circle at 34% 28%,rgba(255,255,255,.55),rgba(255,255,255,0) 42%),radial-gradient(circle at 50% 46%,#3a4450,#0b0d11 78%);box-shadow:0 8px 24px rgba(0,0,0,.45),inset 0 1px 2px rgba(255,255,255,.18),inset 0 -6px 14px rgba(0,0,0,.40);transition:box-shadow .2s ease;touch-action:none;user-select:none;-webkit-user-select:none}
 main.webgl .orb{background:transparent;border-color:transparent;box-shadow:none}
-.orb:hover{box-shadow:0 10px 28px rgba(0,0,0,.52),0 0 30px color-mix(in srgb,var(--accent) 54%,transparent),inset 0 1px 2px rgba(255,255,255,.26),inset 0 -6px 14px rgba(0,0,0,.42)}
+.orb:hover{box-shadow:0 10px 28px rgba(0,0,0,.48),inset 0 1px 2px rgba(255,255,255,.22),inset 0 -6px 14px rgba(0,0,0,.40)}
+.orb.dragging{cursor:grabbing}
 .orb:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 75%,white);outline-offset:3px}
 main[data-expanded="true"] .orb-wrap{transform:scale(1.08)}
 .picker{position:absolute;left:0;top:0;bottom:0;width:calc(100% - 84px);padding:18px 12px;overflow:auto;scrollbar-width:thin;scrollbar-color:#44443d transparent;border:1px solid #3c3c35;border-radius:13px;background:#151512;color:#f3f1ed;opacity:0;transform:translateX(10px) scale(.985);transform-origin:100% 50%;transition:opacity .18s ease,transform .24s cubic-bezier(.22,.9,.28,1)}
@@ -646,7 +728,7 @@ main[data-expanded="true"] .picker{opacity:1;transform:none}
 .provider-row:hover:not(:disabled),.provider-row[data-selected="true"]{background:#292922}.provider-row:disabled{cursor:default;opacity:.5}.provider-row:focus-visible{outline:2px solid #aaa89f;outline-offset:-2px}.row-text{display:grid;gap:2px;min-width:0}.row-provider{font-size:12px;font-weight:500}.row-model{font-size:11px;color:#aaa89f}.row-state{font-size:10px;color:#c9c7bc}.row-check{width:14px;height:14px;fill:none;stroke:#c9c7bc;stroke-width:1.5}.picker-empty{margin:0;padding:8px 6px;color:#aaa89f;font-size:12px}.picker-error{padding:8px;color:#cf8b80;font-size:11px}.picker-error[hidden]{display:none}.picker-hint{margin:20px 6px 0;color:#8d8c82;font-size:10px}
 .running-section{margin-top:18px;padding-top:18px;border-top:1px solid #34342d}.agent-row{display:flex;align-items:center;gap:8px;padding:9px 6px}.agent-marker{width:5px;height:5px;flex:none;border-radius:50%;background:#91ba79}.agent-row[data-status="offline"] .agent-marker{background:#8d8c82}.agent-row[data-status="waiting"] .agent-marker{background:#c9ad73}.agent-text{min-width:0;flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.agent-text small{display:block;color:#aaa89f;font-size:10px;overflow:hidden;text-overflow:ellipsis;margin-top:3px}.agent-status{font-size:10px;color:#aaa89f;text-transform:capitalize}
 @media(prefers-reduced-motion: reduce){.orb-wrap,.picker,.orb{transition:none!important}main[data-expanded="true"] .orb-wrap{transform:none}}
-</style></head><body><main data-orb-root data-live="idle" data-expanded="false"><div class="orb-wrap"><div class="orb-halo" aria-hidden="true"></div><canvas class="orb-canvas" data-orb-canvas aria-hidden="true"></canvas><button class="orb" data-orb aria-expanded="false" aria-label="Circe. Activate to choose providers and running agents."></button></div><section class="picker" aria-label="Circe activity" data-picker hidden><div class="picker-brand">Circe<span>Activity</span></div><p class="live-label" data-live-label></p><p class="picker-label">Providers</p><div class="picker-list" data-provider-list></div><section class="running-section" data-running-section hidden><p class="running-label">Running agents</p><div class="running-list" data-running-list></div></section><p class="picker-error" data-picker-error hidden></p><p class="picker-hint">Ctrl+Shift+J toggles voice.</p></section></main><script type="x-shader/x-fragment" id="orb-frag">${ORB_FRAGMENT_SHADER}</script>${orbScript}</body></html>`;
+</style></head><body><main data-orb-root data-live="idle" data-expanded="false"><div class="orb-wrap"><canvas class="orb-canvas" data-orb-canvas aria-hidden="true"></canvas><button class="orb" data-orb aria-expanded="false" aria-label="Circe. Activate to choose providers and running agents."></button></div><section class="picker" aria-label="Circe activity" data-picker hidden><div class="picker-brand">Circe<span>Activity</span></div><p class="live-label" data-live-label></p><p class="picker-label">Providers</p><div class="picker-list" data-provider-list></div><section class="running-section" data-running-section hidden><p class="running-label">Running agents</p><div class="running-list" data-running-list></div></section><p class="picker-error" data-picker-error hidden></p><p class="picker-hint">Ctrl+Shift+J toggles voice.</p></section></main><script type="x-shader/x-fragment" id="orb-frag">${ORB_FRAGMENT_SHADER}</script>${orbScript}</body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
@@ -663,10 +745,17 @@ export interface DesktopCirceOrbExpansionEvent {
   readonly expanded: boolean;
 }
 
-/** Parse the overlay's bounded expansion event separately from provider picks. */
+export interface DesktopCirceOrbDragEvent {
+  readonly type: "drag";
+  readonly phase: "start" | "move" | "end";
+  readonly x?: number;
+  readonly y?: number;
+}
+
+/** Parse the overlay's bounded expansion and move events separately from picks. */
 export function parseDesktopCirceOverlayEvent(
   line: string,
-): DesktopCirceOrbSelection | DesktopCirceOrbExpansionEvent | null {
+): DesktopCirceOrbSelection | DesktopCirceOrbExpansionEvent | DesktopCirceOrbDragEvent | null {
   const prefix = line.startsWith(DESKTOP_CIRCE_ORB_CONSOLE_PREFIX)
     ? DESKTOP_CIRCE_ORB_CONSOLE_PREFIX
     : null;
@@ -675,9 +764,22 @@ export function parseDesktopCirceOverlayEvent(
   try {
     const value = JSON.parse(payload) as Partial<DesktopCirceOrbEventLike> & {
       readonly expanded?: unknown;
+      readonly phase?: unknown;
+      readonly x?: unknown;
+      readonly y?: unknown;
     };
     if (value.type === "expanded" && typeof value.expanded === "boolean") {
       return { type: "expanded", expanded: value.expanded };
+    }
+    if (
+      value.type === "drag" &&
+      (value.phase === "start" || value.phase === "move" || value.phase === "end")
+    ) {
+      if (value.phase === "end") return { type: "drag", phase: "end" };
+      if (typeof value.x === "number" && typeof value.y === "number") {
+        return { type: "drag", phase: value.phase, x: value.x, y: value.y };
+      }
+      return null;
     }
   } catch {
     return null;

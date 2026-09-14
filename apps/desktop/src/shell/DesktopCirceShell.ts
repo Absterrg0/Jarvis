@@ -30,8 +30,11 @@ import {
   desktopCirceOrbCatalogScript,
   desktopCirceOrbStateScript,
   desktopCirceOverlayDataUrl,
+  desktopCirceOverlayOrbCenter,
   parseDesktopCirceOverlayEvent,
   resolveDesktopCirceOverlayBounds,
+  type DesktopCirceOverlayAnchor,
+  type DesktopCirceOrbDragEvent,
 } from "./DesktopCirceOverlay.ts";
 export { resolveDesktopCirceOverlayBounds } from "./DesktopCirceOverlay.ts";
 import { DESKTOP_CIRCE_OVERLAY_HELPER_FLAG } from "./DesktopCirceOverlayHelper.ts";
@@ -318,16 +321,69 @@ export function createDesktopCirceShell(input: DesktopCirceShellInput): DesktopC
   let orbCatalog: DesktopCirceOrbCatalog | null = null;
   let lastTapShortcutActivationAt = Number.NEGATIVE_INFINITY;
   let overlayExpanded = false;
+  // Orb centre the user dragged to, if any. Keeps the orb in place while the
+  // panel expands and collapses around it.
+  let overlayAnchor: DesktopCirceOverlayAnchor | null = null;
+  let overlayDragStart: {
+    readonly pointerX: number;
+    readonly pointerY: number;
+    readonly windowX: number;
+    readonly windowY: number;
+  } | null = null;
 
   /** The orb glow follows the real live session. */
   const resolveOrbLiveState = (): DesktopCirceLiveVoiceState => liveVoiceState;
+
+  const handleOrbDrag = (event: DesktopCirceOrbDragEvent): void => {
+    // The Wayland helper owns its own window and moves itself.
+    if (overlaySurface === "helper") return;
+    const window = overlay;
+    if (window === null || window.isDestroyed()) return;
+    if (event.phase === "start") {
+      if (event.x === undefined || event.y === undefined) return;
+      try {
+        const bounds = window.getBounds();
+        overlayDragStart = {
+          pointerX: event.x,
+          pointerY: event.y,
+          windowX: bounds.x,
+          windowY: bounds.y,
+        };
+      } catch {
+        overlayDragStart = null;
+      }
+      return;
+    }
+    if (event.phase === "move") {
+      if (overlayDragStart === null || event.x === undefined || event.y === undefined) return;
+      try {
+        window.setPosition(
+          Math.round(overlayDragStart.windowX + (event.x - overlayDragStart.pointerX)),
+          Math.round(overlayDragStart.windowY + (event.y - overlayDragStart.pointerY)),
+          false,
+        );
+      } catch {
+        // Display topology can change mid-drag; keep the last good position.
+      }
+      return;
+    }
+    overlayDragStart = null;
+    try {
+      if (typeof window.getBounds === "function") {
+        overlayAnchor = desktopCirceOverlayOrbCenter(window.getBounds());
+      }
+    } catch {
+      // Keep the previous anchor if the window cannot report its bounds.
+    }
+  };
 
   const handleOrbConsoleLine = (line: string): void => {
     if (stopped) return;
     const event = parseDesktopCirceOverlayEvent(line);
     if (event === null) return;
     if ("type" in event) {
-      setOverlayExpanded(event.expanded);
+      if (event.type === "expanded") setOverlayExpanded(event.expanded);
+      else handleOrbDrag(event);
       return;
     }
     input.onOrbSelect?.(event);
@@ -347,7 +403,11 @@ export function createDesktopCirceShell(input: DesktopCirceShellInput): DesktopC
       const workArea =
         input.getOverlayWorkArea?.() ??
         Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).workArea;
-      const bounds = resolveDesktopCirceOverlayBounds(workArea, expanded);
+      const bounds = resolveDesktopCirceOverlayBounds(
+        workArea,
+        expanded,
+        overlayAnchor ?? undefined,
+      );
       window.setFocusable?.(expanded);
       if (expanded) window.focus?.();
       if (typeof window.setBounds === "function") window.setBounds(bounds, false);
@@ -398,6 +458,9 @@ export function createDesktopCirceShell(input: DesktopCirceShellInput): DesktopC
           fullscreenable: false,
           frame: false,
           transparent: true,
+          // A transparent overlay must not paint a rectangle shadow behind
+          // the orb; the shadow reads as a dark background.
+          hasShadow: false,
           alwaysOnTop: true,
           skipTaskbar: true,
           focusable: false,
@@ -451,7 +514,10 @@ export function createDesktopCirceShell(input: DesktopCirceShellInput): DesktopC
         const workArea =
           input.getOverlayWorkArea?.() ??
           Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).workArea;
-        window.setBounds(resolveDesktopCirceOverlayBounds(workArea, overlayExpanded), false);
+        window.setBounds(
+          resolveDesktopCirceOverlayBounds(workArea, overlayExpanded, overlayAnchor ?? undefined),
+          false,
+        );
       } else if (typeof window.setPosition === "function") {
         const position = resolveDesktopCirceOverlayPosition(
           input.getOverlayWorkArea?.() ??
