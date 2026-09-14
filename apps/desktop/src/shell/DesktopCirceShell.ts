@@ -32,6 +32,7 @@ import {
   desktopCirceOverlayDataUrl,
   desktopCirceOverlayOrbCenter,
   parseDesktopCirceOverlayEvent,
+  snapDesktopCirceOverlayAnchor,
   resolveDesktopCirceOverlayBounds,
   type DesktopCirceOverlayAnchor,
   type DesktopCirceOrbDragEvent,
@@ -368,10 +369,19 @@ export function createDesktopCirceShell(input: DesktopCirceShellInput): DesktopC
       return;
     }
     overlayDragStart = null;
+    if (typeof window.getBounds !== "function") return;
     try {
-      if (typeof window.getBounds === "function") {
-        overlayAnchor = desktopCirceOverlayOrbCenter(window.getBounds());
-      }
+      const workArea =
+        input.getOverlayWorkArea?.() ??
+        Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).workArea;
+      overlayAnchor = snapDesktopCirceOverlayAnchor(
+        workArea,
+        desktopCirceOverlayOrbCenter(window.getBounds()),
+      );
+      const snapped = resolveDesktopCirceOverlayBounds(workArea, overlayExpanded, overlayAnchor);
+      if (typeof window.setBounds === "function") window.setBounds(snapped, false);
+      else if (typeof window.setPosition === "function")
+        window.setPosition(snapped.x, snapped.y, false);
     } catch {
       // Keep the previous anchor if the window cannot report its bounds.
     }

@@ -17,6 +17,7 @@ import {
   parseDesktopCirceOverlayEvent,
   parseDesktopCirceOrbEvent,
   resolveDesktopCirceOverlayBounds,
+  snapDesktopCirceOverlayAnchor,
 } from "./DesktopCirceOverlay.ts";
 
 describe("DesktopCirceOrb", () => {
@@ -63,7 +64,7 @@ describe("DesktopCirceOrb", () => {
     expect(html).toContain("data-provider-list");
     expect(html).toContain("data-picker-error");
     expect(html).toContain("picker-label");
-    expect(html).toContain("Providers");
+    expect(html).toContain("Default agent");
     expect(html).toContain("Running agents");
     expect(html).toContain("data-running-list");
     expect(html).not.toContain("data-picker-close");
@@ -220,6 +221,14 @@ describe("DesktopCirceOrb", () => {
     });
     // A move without coordinates is not actionable.
     expect(parseDesktopCirceOverlayEvent('[circe-orb] {"type":"drag","phase":"move"}')).toBeNull();
+  });
+
+  it("magnets the orb to the edge mesh but leaves free drops alone", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+    const right = snapDesktopCirceOverlayAnchor(workArea, { x: 1920 - 40, y: 540 });
+    expect(right.x).toBe(1920 - (DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT));
+    const free = snapDesktopCirceOverlayAnchor(workArea, { x: 900, y: 150 });
+    expect(free).toEqual({ x: 900, y: 150 });
   });
 
   it("keeps a dragged orb fixed while the panel expands around it", () => {

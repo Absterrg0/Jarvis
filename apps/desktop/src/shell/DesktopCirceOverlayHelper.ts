@@ -13,6 +13,7 @@ import {
   desktopCirceOverlayOrbCenter,
   parseDesktopCirceOverlayEvent,
   resolveDesktopCirceOverlayBounds,
+  snapDesktopCirceOverlayAnchor,
   type DesktopCirceOrbDragEvent,
   type DesktopCirceOverlayAnchor,
 } from "./DesktopCirceOverlay.ts";
@@ -131,7 +132,9 @@ export async function runDesktopCirceOverlayHelper(): Promise<void> {
       return;
     }
     dragStart = null;
-    anchor = desktopCirceOverlayOrbCenter(window.getBounds());
+    const area = screen.getPrimaryDisplay().workArea;
+    anchor = snapDesktopCirceOverlayAnchor(area, desktopCirceOverlayOrbCenter(window.getBounds()));
+    window.setBounds(resolveDesktopCirceOverlayBounds(area, false, anchor), false);
   };
   // Orb picker selections leave the document as console lines. Forward them
   // on stdout so the parent relays them orb -> main -> renderer.

@@ -105,6 +105,47 @@ export function desktopCirceOverlayOrbCenter(
   };
 }
 
+/** How close the orb centre must be to a mesh point before it snaps. */
+export const DESKTOP_CIRCE_ORB_SNAP_THRESHOLD = 56;
+const SNAP_VERTICAL_STEPS = 5;
+
+/**
+ * Free placement with edge magnetism: the orb stays where it was dropped
+ * unless its centre is near the left/right margin or a row of the vertical
+ * mesh, in which case it settles onto that line. No full-screen overlay is
+ * needed, so dragging stays cheap.
+ */
+export function snapDesktopCirceOverlayAnchor(
+  workArea: DesktopCirceOverlayWorkArea,
+  anchor: DesktopCirceOverlayAnchor,
+  threshold = DESKTOP_CIRCE_ORB_SNAP_THRESHOLD,
+): DesktopCirceOverlayAnchor {
+  const insetX = DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT;
+  const insetY = DESKTOP_CIRCE_ORB_MARGIN + DESKTOP_CIRCE_ORB_CENTER_FROM_RIGHT;
+  const minX = workArea.x + insetX;
+  const maxX = workArea.x + workArea.width - insetX;
+  const minY = workArea.y + insetY;
+  const maxY = workArea.y + workArea.height - insetY;
+  const withinThreshold = (value: number, target: number) => Math.abs(value - target) <= threshold;
+  const snapTo = (value: number, targets: ReadonlyArray<number>) => {
+    for (const target of targets) {
+      if (withinThreshold(value, target)) return target;
+    }
+    return value;
+  };
+
+  const clampedX = clamp(anchor.x, minX, maxX);
+  const clampedY = clamp(anchor.y, minY, maxY);
+  const verticalTargets = Array.from(
+    { length: SNAP_VERTICAL_STEPS },
+    (_, index) => minY + ((maxY - minY) * index) / (SNAP_VERTICAL_STEPS - 1),
+  );
+  return {
+    x: snapTo(clampedX, [minX, maxX]),
+    y: snapTo(clampedY, verticalTargets),
+  };
+}
+
 /**
  * The overlay is anchored by the orb's screen centre so a dragged orb stays
  * where the user dropped it while the panel grows and collapses around it.
@@ -749,12 +790,12 @@ main[data-expanded="true"] .orb-wrap{transform:scale(1.08)}
 main[data-expanded="true"] .picker{opacity:1;transform:none}
 .picker[hidden]{display:none}.picker-brand{display:flex;justify-content:space-between;align-items:center;margin:0 6px 4px;font-size:15px;font-weight:600;letter-spacing:-.02em}.picker-brand span{color:#aaa89f;font-size:11px;font-weight:400;letter-spacing:0}
 .live-label{margin:0 6px 22px;color:#aaa89f;font-size:11px}.picker-label,.running-label{margin:0 6px 8px;color:#aaa89f;font-size:12px;font-weight:500}
-.picker-list,.running-list{display:flex;flex-direction:column;gap:3px}
-.provider-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:47px;width:100%;padding:8px 10px;text-align:left;color:#f3f1ed;background:transparent;border:1px solid transparent;border-radius:7px;cursor:pointer}
-.provider-row:hover:not(:disabled),.provider-row[data-selected="true"]{background:#292922}.provider-row:disabled{cursor:default;opacity:.5}.provider-row:focus-visible{outline:2px solid #aaa89f;outline-offset:-2px}.row-text{display:grid;gap:2px;min-width:0}.row-provider{font-size:12px;font-weight:500}.row-model{font-size:11px;color:#aaa89f}.row-state{font-size:10px;color:#c9c7bc}.row-check{width:14px;height:14px;fill:none;stroke:#c9c7bc;stroke-width:1.5}.picker-empty{margin:0;padding:8px 6px;color:#aaa89f;font-size:12px}.picker-error{padding:8px;color:#cf8b80;font-size:11px}.picker-error[hidden]{display:none}.picker-hint{margin:20px 6px 0;color:#8d8c82;font-size:10px}
+.picker-list,.running-list{display:flex;flex-direction:column;gap:4px}
+.provider-row{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:52px;width:100%;padding:9px 12px;text-align:left;color:#f3f1ed;background:transparent;border:1px solid transparent;border-radius:10px;cursor:pointer;transition:background .15s ease,border-color .15s ease}
+.provider-row:hover:not(:disabled){background:#23231d}.provider-row[data-selected="true"]{background:#23231d;border-color:#4a4a40}.provider-row[data-available="false"],.provider-row:disabled{cursor:default;opacity:.5}.provider-row:focus-visible{outline:2px solid #aaa89f;outline-offset:-2px}.row-text{display:grid;gap:2px;min-width:0}.row-provider{font-size:13px;font-weight:500}.row-model{font-size:11px;color:#aaa89f}.row-state{font-size:10px;color:#c9c7bc}.row-check{width:14px;height:14px;fill:none;stroke:#c9c7bc;stroke-width:1.5}.picker-empty{margin:0;padding:8px 6px;color:#aaa89f;font-size:12px}.picker-error{padding:8px;color:#cf8b80;font-size:11px}.picker-error[hidden]{display:none}.picker-hint{margin:20px 6px 0;color:#8d8c82;font-size:10px}
 .running-section{margin-top:18px;padding-top:18px;border-top:1px solid #34342d}.agent-row{display:flex;align-items:center;gap:8px;padding:9px 6px}.agent-marker{width:5px;height:5px;flex:none;border-radius:50%;background:#91ba79}.agent-row[data-status="offline"] .agent-marker{background:#8d8c82}.agent-row[data-status="waiting"] .agent-marker{background:#c9ad73}.agent-text{min-width:0;flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.agent-text small{display:block;color:#aaa89f;font-size:10px;overflow:hidden;text-overflow:ellipsis;margin-top:3px}.agent-status{font-size:10px;color:#aaa89f;text-transform:capitalize}
 @media(prefers-reduced-motion: reduce){.orb-wrap,.picker,.orb{transition:none!important}main[data-expanded="true"] .orb-wrap{transform:none}}
-</style></head><body><main data-orb-root data-live="idle" data-expanded="false"><div class="orb-wrap"><canvas class="orb-canvas" data-orb-canvas aria-hidden="true"></canvas><button class="orb" data-orb aria-expanded="false" aria-label="Circe. Activate to choose providers and running agents."></button></div><section class="picker" aria-label="Circe activity" data-picker hidden><div class="picker-brand">Circe<span>Activity</span></div><p class="live-label" data-live-label></p><p class="picker-label">Providers</p><div class="picker-list" data-provider-list></div><section class="running-section" data-running-section hidden><p class="running-label">Running agents</p><div class="running-list" data-running-list></div></section><p class="picker-error" data-picker-error hidden></p><p class="picker-hint">Ctrl+Shift+J toggles voice.</p></section></main><script type="x-shader/x-fragment" id="orb-frag">${ORB_FRAGMENT_SHADER}</script>${orbScript}</body></html>`;
+</style></head><body><main data-orb-root data-live="idle" data-expanded="false"><div class="orb-wrap"><canvas class="orb-canvas" data-orb-canvas aria-hidden="true"></canvas><button class="orb" data-orb aria-expanded="false" aria-label="Circe. Activate to choose providers and running agents."></button></div><section class="picker" aria-label="Circe activity" data-picker hidden><div class="picker-brand">Circe<span>Activity</span></div><p class="live-label" data-live-label></p><p class="picker-label">Default agent</p><div class="picker-list" data-provider-list></div><section class="running-section" data-running-section hidden><p class="running-label">Running agents</p><div class="running-list" data-running-list></div></section><p class="picker-error" data-picker-error hidden></p><p class="picker-hint">Ctrl+Shift+J toggles voice.</p></section></main><script type="x-shader/x-fragment" id="orb-frag">${ORB_FRAGMENT_SHADER}</script>${orbScript}</body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
