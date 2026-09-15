@@ -1,32 +1,25 @@
 /**
- * Orb palette and tuning, derived from the reference renders.
+ * Orb palette and tuning.
  *
- * The defining property of this object is contrast: light lives almost
- * entirely at the boundary and the centre absorbs it. If the middle of the
- * sphere ever reads as bright copper, the render has failed regardless of how
- * good the rim looks.
+ * The defining property of this object is contrast: light lives at the
+ * boundary and the centre absorbs it. The middle of the sphere must stay in
+ * the `core` family. If it reads as bright copper, the render has failed
+ * regardless of how good the shell looks.
  */
 export const ORB_PALETTE = {
-  /** Bright interior of the sphere. This is the light source of the object. */
-  hot: "#FFF0DC",
-  /** Body color away from the highlight. */
-  copper: "#E8803F",
-  /** Outer falloff, where the body turns to deep copper. */
-  deep: "#4A1D0C",
-  /** Crisp ring at the hull. */
-  rim: "#FFF3E6",
+  /** Absorbs light. The middle of the sphere stays in this family. */
+  core: "#090605",
+  coreWarm: "#120907",
+  ember: "#1D0D08",
 
-  /** Strand colors. */
+  /** Shell and fiber colors. */
+  copper: "#C97857",
   warmCopper: "#E99676",
   peach: "#F6C9B8",
-  hotRim: "#FFE1D2",
+  /** Only ever a thin lip or a subsurface accent, never a fill. */
+  hot: "#FFE1D2",
 
-  /** Retained for the surface fallback and any dark-core treatment. */
-  core: "#090605",
-  coreWarm: "#1D0D08",
-  ember: "#39170D",
-
-  /** Surface colors the orb is composited against. */
+  /** Surfaces the orb composites against. */
   midnight: "#0B0B0C",
   ivory: "#FAF7F3",
 } as const;
@@ -51,58 +44,54 @@ export function alphaColor(hex: string, alpha: number): string {
 }
 
 /**
- * Idle motion targets. The sphere is meant to feel extremely heavy: it barely
- * moves, and the field around it carries the animation.
+ * Idle motion targets. The sphere is meant to feel heavy: the object itself
+ * barely moves and the field carries the animation, slowly.
  */
 export const ORB_MOTION = {
   /** Sphere breathing period, in milliseconds. */
-  breathPeriodMs: 3800,
-  /** Second, incommensurate period so the breath never visibly loops. */
-  breathSecondaryMs: 6100,
-  /** Peak sphere scale. Ranges 0.992 → 1.006. */
-  breathAmplitude: 0.007,
+  breathPeriodMs: 5200,
+  /** A second, incommensurate period so the breath never visibly loops. */
+  breathSecondaryMs: 8300,
+  /** Peak sphere scale. Roughly 0.994 → 1.004. */
+  breathAmplitude: 0.005,
   /** Bloom swell period, in milliseconds. */
-  bloomPeriodMs: 4200,
-  /** Time for the rim highlight to travel once around the sphere. */
-  rimTraversalMs: 9000,
-  /** Maximum interior drift, as a fraction of radius. */
-  driftFraction: 0.022,
-  /** Wavelength of the primary fiber, in points. Motion wraps on this. */
+  bloomPeriodMs: 6100,
+  /** Time for the shell highlight to travel once around the sphere. */
+  shellTraversalMs: 11000,
+  /** Wavelength of the primary fiber, in points. */
   strandWavelengthPx: 322,
+  /** Blend steps the fiber field interpolates between. */
+  morphSteps: 3,
 } as const;
 
 export interface OrbAppearanceTuning {
   /** Multiplier on bloom alpha. Light mode needs restraint. */
   readonly bloomScale: number;
-  /** Multiplier on rim brightness. Dark mode leans on the rim instead. */
-  readonly rimScale: number;
-  /** Multiplier on how luminous the sphere's interior is. */
-  readonly warmthScale: number;
-  /** Multiplier on how deep the copper falls off toward the hull. */
-  readonly edgeDepthScale: number;
+  /** Multiplier on shell brightness. Dark mode leans on the shell. */
+  readonly shellScale: number;
+  /** How much warmth bleeds into the dark core. */
+  readonly coreWarmthScale: number;
   /** Multiplier on fiber alpha. */
-  readonly strandOpacity: number;
+  readonly fieldAlphaScale: number;
 }
 
 /**
  * Light and dark share geometry, not luminosity. On ivory the contrast is
- * already enormous so the bloom pulls back; on midnight the bloom would read
- * as a gamer orb, so the rim does the work instead.
+ * already enormous so the bloom pulls back; on midnight a large bloom reads as
+ * a gamer orb, so the shell does the work instead.
  */
 export const ORB_APPEARANCE: Record<OrbAppearance, OrbAppearanceTuning> = {
   light: {
-    bloomScale: 0.8,
-    rimScale: 1,
-    warmthScale: 1,
-    edgeDepthScale: 1,
-    strandOpacity: 1,
+    bloomScale: 0.85,
+    shellScale: 1,
+    coreWarmthScale: 1,
+    fieldAlphaScale: 0.9,
   },
   dark: {
-    bloomScale: 0.45,
-    rimScale: 1.15,
-    warmthScale: 0.92,
-    edgeDepthScale: 1.18,
-    strandOpacity: 1.3,
+    bloomScale: 0.5,
+    shellScale: 1.15,
+    coreWarmthScale: 1.1,
+    fieldAlphaScale: 1.15,
   },
 };
 

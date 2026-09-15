@@ -6,49 +6,47 @@ import Animated, {
   useFrameCallback,
   useSharedValue,
   withTiming,
-  type SharedValue,
 } from "react-native-reanimated";
-import { Canvas, Group, Path, Skia, useClock } from "@shopify/react-native-skia";
+import { Canvas, Group, Skia, useClock } from "@shopify/react-native-skia";
 
+import { OrbBase } from "./OrbBase";
 import { OrbGlow } from "./OrbGlow";
 import { OrbParticles } from "./OrbParticles";
-import { OrbSurface } from "./OrbSurface";
+import { OrbShell } from "./OrbShell";
 import { OrbStrandPlane } from "./WaveField";
-import {
-  ORB_APPEARANCE,
-  ORB_MOTION,
-  ORB_PALETTE,
-  alphaColor,
-  type OrbAppearance,
-} from "./orbTokens";
+import { ORB_APPEARANCE, ORB_MOTION, type OrbAppearance } from "./orbTokens";
 import { resolveOrbParams } from "./orbState";
 import type { CirceOrbProps } from "./types";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-const MORPH_STEPS = 3;
-
 /**
  * The Circe orb.
  *
- * One bounded Skia canvas owns the whole scene. Layer order is the most
- * important decision here and is not arbitrary:
+ * Not a lit solid sphere. It is a dark, semi-volumetric lens: a body that
+ * absorbs light, a hot copper shell, a broad atmosphere, and luminous fibers
+ * passing through and around it.
  *
- *   1. warm atmospheric glow
- *   2. rear fiber strands
- *   3. the dark spherical body, lit by its surface shader
- *   4. the hot rim ring at the hull
- *   5. fibers refracted inside the sphere, clipped to it
- *   6. a few fibers crossing in front
- *   7. microscopic grain
+ * Layer order carries the whole illusion and is the single most important
+ * decision in this file:
  *
- * Rendering the same fiber field three times is what produces depth. None of
- * this is a real 3D render; three planes are enough for the eye to infer it.
+ *   1. atmospheric bloom
+ *   2. rear fibers                     (behind the object)
+ *   3. sphere group
+ *        a. dark absorptive base
+ *        b. refracted interior fibers  (inside the glass)
+ *        c. transparent shell + lip    (over the glass)
+ *   4. front fibers                    (one or two, crossing over)
+ *   5. grain                           (off in idle)
  *
- * Motion is deliberately split: the sphere is nearly stationary and the field
- * around it carries the animation, so the object feels heavy. React never
- * re-renders per frame. Audio level arrives as a shared value and is consumed
- * entirely on the UI thread.
+ * The interior fibers must sit between (a) and (c). Painting them after an
+ * opaque sphere is what makes them look printed onto its surface instead of
+ * suspended inside it.
+ *
+ * The object barely moves and the field carries the animation. Motion is
+ * time-based, never per-frame increments, so a 120 Hz device drifts at the same
+ * speed as a 60 Hz one. Audio energy reaches the renderer as a shared value and
+ * React never re-renders per frame.
  */
 export function CirceOrb({
   state,
@@ -69,15 +67,18 @@ export function CirceOrb({
   readonly width?: number;
 }) {
   const params = resolveOrbParams(state, { reducedMotion });
-  const tuning = ORB_APPEARANCE[appearance];
   const clock = useClock();
   const window = useWindowDimensions();
 
   const radius = size / 2;
   const fieldWidth = width ?? window.width;
-  const fieldHeight = showField ? size * 0.95 : 0;
+
+  // Compact scene bounds. The fiber field overscans horizontally through
+  // `fieldWidth`; it must not also inflate the canvas vertically, which would
+  // push the surrounding layout apart and leave dead space around the orb.
+  const verticalPadding = Math.max(34, size * 0.26);
   const canvasWidth = showField ? fieldWidth : size * 2;
-  const canvasHeight = size + fieldHeight * 2;
+  const canvasHeight = size + verticalPadding * 2;
   const centerX = canvasWidth / 2;
   const centerY = canvasHeight / 2;
 
@@ -85,7 +86,8 @@ export function CirceOrb({
   useEffect(() => {
     if (typeof level === "number") levelMirror.value = level;
   }, [level, levelMirror]);
-  const levelSV: SharedValue<number> = typeof level === "object" ? level : levelMirror;
+  // `energy` is the single value every responsive part reads from.
+  const energySV = typeof level === "object" ? level : levelMirror;
 
   const breathSV = useSharedValue(1);
   const pulseSV = useSharedValue(0);
@@ -94,46 +96,51 @@ export function CirceOrb({
 
   useEffect(() => {
     if (state !== "success") return;
-    pulseSV.value = withTiming(1, { duration: 320 }, () => {
-      pulseSV.value = withTiming(0, { duration: 700 });
+    pulseSV.value = withTiming(1, { duration: 360 }, () => {
+      pulseSV.value = withTiming(0, { duration: 760 });
     });
   }, [pulseSV, state]);
 
-  // One frame callback drives the whole scene: the sphere's breathing and the
-  // fiber field phase. Individual strands derive their own phase from this,
-  // so there is no per-strand frame work.
-  useFrameCallback(() => {
+  useFrameCallback((frame) => {
     const t = clock.value / 1000;
-    const speed = reducedMotion ? 0 : params.motionSpeed;
+    const dt = (frame.timeSincePreviousFrame ?? 16) / 1000;
+    const motion = reducedMotion ? 0 : params.motionScale;
 
+    // The sphere is heavy: it only breathes.
     const breath =
       Math.sin((2 * Math.PI * t) / (ORB_MOTION.breathPeriodMs / 1000)) * 0.6 +
       Math.sin((2 * Math.PI * t) / (ORB_MOTION.breathSecondaryMs / 1000) + 1.7) * 0.4;
-    breathSV.value = 1 + breath * ORB_MOTION.breathAmplitude * params.breatheScale;
+    breathSV.value = 1 + breath * ORB_MOTION.breathAmplitude;
 
-    fieldPhase.value = (fieldPhase.value + 0.09 * params.strandSpeedScale * speed) % MORPH_STEPS;
+    // Time-based drift. `fieldCycleSeconds` is the wall-clock duration of one
+    // full migration, so the speed is identical on every refresh rate.
+    if (Number.isFinite(params.fieldCycleSeconds)) {
+      const perSecond = (ORB_MOTION.morphSteps / params.fieldCycleSeconds) * motion;
+      fieldPhase.value = (fieldPhase.value + dt * perSecond) % ORB_MOTION.morphSteps;
+    }
   });
 
   const sphereClip = useMemo(
     () => Skia.Path.Circle(centerX, centerY, radius),
     [centerX, centerY, radius],
   );
-  const rimRingPath = useMemo(
-    () => Skia.Path.Circle(centerX, centerY, radius * 0.994),
-    [centerX, centerY, radius],
-  );
 
-  // Success adds one restrained outward pulse. No checkmark, no burst.
   const sphereTransform = useDerivedValue(
-    () => [{ scale: breathSV.value + pulseSV.value * 0.02 + levelSV.value * 0.004 }],
-    [breathSV, levelSV, pulseSV],
+    () => [
+      {
+        scale:
+          breathSV.value + pulseSV.value * 0.018 + energySV.value * 0.004 * params.energyResponse,
+      },
+    ],
+    [breathSV, energySV, params.energyResponse, pulseSV],
   );
 
   const pressStyle = useAnimatedStyle(() => ({
     transform: [{ scale: pressedScale.value }],
   }));
 
-  const rimBoost = params.rimBoost * tuning.rimScale;
+  const shellIntensity = params.rimIntensity * ORB_APPEARANCE[appearance].shellScale;
+  const coreWarmth = params.coreWarmth * ORB_APPEARANCE[appearance].coreWarmthScale;
 
   const body = (
     <View
@@ -146,16 +153,17 @@ export function CirceOrb({
       accessibilityRole={interactive ? "button" : undefined}
     >
       <Canvas style={{ width: canvasWidth, height: canvasHeight }}>
+        {/* 1. Atmosphere. */}
         <OrbGlow
           centerX={centerX}
           centerY={centerY}
           radius={radius}
-          bloomOpacity={params.bloomOpacity}
-          bloomRadiusScale={params.bloomRadiusScale}
+          bloomIntensity={params.bloomIntensity}
           appearance={appearance}
           reducedMotion={reducedMotion}
         />
 
+        {/* 2. Rear fibers. */}
         {showField ? (
           <OrbStrandPlane
             plane="rear"
@@ -164,38 +172,20 @@ export function CirceOrb({
             centerY={centerY}
             radius={radius}
             fieldPhase={fieldPhase}
-            levelSV={levelSV}
+            energySV={energySV}
             params={params}
             appearance={appearance}
           />
         ) : null}
 
+        {/* 3. The sphere: dark base, refracted fibers, then the shell. */}
         <Group origin={{ x: centerX, y: centerY }} transform={sphereTransform}>
-          <OrbSurface
+          <OrbBase
             centerX={centerX}
             centerY={centerY}
             radius={radius}
-            levelSV={levelSV}
-            rimBoost={rimBoost}
-            warmth={params.warmth * tuning.warmthScale}
-            edgeDepth={params.edgeDepth * tuning.edgeDepthScale}
-            rimPhaseSpeed={params.rimPhaseSpeed}
-            reducedMotion={reducedMotion}
-          />
-
-          {/* The one crisp edge that survives at every size. The shader's
-              fresnel ring is soft; this is the hard line on top of it. */}
-          <Path
-            path={rimRingPath}
-            style="stroke"
-            strokeWidth={4.5}
-            color={alphaColor(ORB_PALETTE.rim, 0.22 * rimBoost)}
-          />
-          <Path
-            path={rimRingPath}
-            style="stroke"
-            strokeWidth={1.6}
-            color={alphaColor(ORB_PALETTE.rim, 0.72)}
+            energySV={energySV}
+            coreWarmth={coreWarmth}
           />
 
           {showField ? (
@@ -207,13 +197,23 @@ export function CirceOrb({
               radius={radius}
               clip={sphereClip}
               fieldPhase={fieldPhase}
-              levelSV={levelSV}
+              energySV={energySV}
               params={params}
               appearance={appearance}
             />
           ) : null}
+
+          <OrbShell
+            centerX={centerX}
+            centerY={centerY}
+            radius={radius}
+            energySV={energySV}
+            shellIntensity={shellIntensity}
+            reducedMotion={reducedMotion}
+          />
         </Group>
 
+        {/* 4. One or two fibers crossing in front. */}
         {showField ? (
           <OrbStrandPlane
             plane="front"
@@ -222,19 +222,22 @@ export function CirceOrb({
             centerY={centerY}
             radius={radius}
             fieldPhase={fieldPhase}
-            levelSV={levelSV}
+            energySV={energySV}
             params={params}
             appearance={appearance}
           />
         ) : null}
 
-        <OrbParticles
-          centerX={centerX}
-          centerY={centerY}
-          radius={radius}
-          amount={params.particleAmount}
-          reducedMotion={reducedMotion}
-        />
+        {/* 5. Grain. Zero in idle so the hero frame stays clean. */}
+        {params.particleAmount > 0 ? (
+          <OrbParticles
+            centerX={centerX}
+            centerY={centerY}
+            radius={radius}
+            amount={params.particleAmount}
+            reducedMotion={reducedMotion}
+          />
+        ) : null}
       </Canvas>
       {glyph === undefined ? null : (
         <View

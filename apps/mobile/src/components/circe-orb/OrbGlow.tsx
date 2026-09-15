@@ -11,54 +11,48 @@ import {
 } from "./orbTokens";
 
 /**
- * Ambient bloom, drawn before everything else.
+ * Atmospheric bloom, drawn before everything else.
  *
- * Two passes: a very faint, very large atmospheric wash, and a tighter medium
- * glow hugging the sphere. Both are radial gradients whose alpha is baked into
- * their color stops. Neither uses `opacity` or `BlurMask`: on some Android GPUs
- * those make Skia allocate a layer, and layers render as soft-edged squares
- * around a glow. Breathing is expressed by animating radius instead, which
- * allocates nothing.
+ * Two passes and neither is a ring: a broad diffuse peach atmosphere that
+ * spills roughly a quarter of the sphere's radius past its hull, and a narrow
+ * warm glow hugging the shell. Ring-shaped peaks read as concentric outlines,
+ * which is wrong here.
  *
- * The point of these passes is that the surface around the sphere picks up a
- * little warmth. If a visible orange disc appears behind the orb, they are far
- * too strong.
+ * Both passes bake their alpha into the gradient's color stops. Neither uses
+ * `opacity` or `BlurMask`: on some Android GPUs those make Skia allocate a
+ * layer, and layers render as soft-edged squares around a glow. Breathing is
+ * expressed by animating radius, which allocates nothing.
  */
 export function OrbGlow({
   centerX,
   centerY,
   radius,
-  bloomOpacity,
-  bloomRadiusScale,
+  bloomIntensity,
   appearance,
   reducedMotion,
 }: {
   readonly centerX: number;
   readonly centerY: number;
   readonly radius: number;
-  readonly bloomOpacity: number;
-  readonly bloomRadiusScale: number;
+  readonly bloomIntensity: number;
   readonly appearance: OrbAppearance;
   readonly reducedMotion: boolean;
 }) {
   const clock = useClock();
-  const tuning = ORB_APPEARANCE[appearance];
-  const peak = bloomOpacity * tuning.bloomScale;
+  const peak = bloomIntensity * ORB_APPEARANCE[appearance].bloomScale;
 
-  // Computed per mode and appearance rather than per frame, so no string
-  // building ever runs inside a worklet.
-  const outerColors = useMemo(
+  const atmosphereColors = useMemo(
     () => [
-      alphaColor(ORB_PALETTE.copper, 0),
-      alphaColor(ORB_PALETTE.copper, peak * 0.15),
-      alphaColor(ORB_PALETTE.copper, 0),
+      alphaColor(ORB_PALETTE.peach, peak * 0.08),
+      alphaColor(ORB_PALETTE.peach, peak * 0.13),
+      alphaColor(ORB_PALETTE.peach, 0),
     ],
     [peak],
   );
-  const mediumColors = useMemo(
+  const shellGlowColors = useMemo(
     () => [
       alphaColor(ORB_PALETTE.warmCopper, 0),
-      alphaColor(ORB_PALETTE.warmCopper, peak * 0.3),
+      alphaColor(ORB_PALETTE.warmCopper, peak * 0.24),
       alphaColor(ORB_PALETTE.peach, 0),
     ],
     [peak],
@@ -70,31 +64,25 @@ export function OrbGlow({
     return 0.5 + 0.5 * Math.sin((2 * Math.PI * t) / (ORB_MOTION.bloomPeriodMs / 1000));
   }, [clock, reducedMotion]);
 
-  const outerR = useDerivedValue(
-    () => radius * (1.58 + swell.value * 0.07) * bloomRadiusScale,
-    [radius, bloomRadiusScale, swell],
-  );
-  const mediumR = useDerivedValue(
-    () => radius * (1.14 + swell.value * 0.03) * bloomRadiusScale,
-    [radius, bloomRadiusScale, swell],
-  );
+  const atmosphereR = useDerivedValue(() => radius * (1.28 + swell.value * 0.04), [radius, swell]);
+  const shellGlowR = useDerivedValue(() => radius * (1.1 + swell.value * 0.02), [radius, swell]);
 
   return (
     <Group>
-      <Circle cx={centerX} cy={centerY} r={outerR}>
+      <Circle cx={centerX} cy={centerY} r={atmosphereR}>
         <RadialGradient
           c={vec(centerX, centerY)}
-          r={outerR}
-          colors={outerColors}
-          positions={[0.55, 0.83, 1]}
+          r={atmosphereR}
+          colors={atmosphereColors}
+          positions={[0, 0.72, 1]}
         />
       </Circle>
-      <Circle cx={centerX} cy={centerY} r={mediumR}>
+      <Circle cx={centerX} cy={centerY} r={shellGlowR}>
         <RadialGradient
           c={vec(centerX, centerY)}
-          r={mediumR}
-          colors={mediumColors}
-          positions={[0.7, 0.93, 1]}
+          r={shellGlowR}
+          colors={shellGlowColors}
+          positions={[0.74, 0.94, 1]}
         />
       </Circle>
     </Group>

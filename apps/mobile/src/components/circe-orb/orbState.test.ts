@@ -6,48 +6,45 @@ describe("orb state params", () => {
   it("keeps listening more expressive than idle", () => {
     const idle = resolveOrbParams("idle");
     const listening = resolveOrbParams("listening");
-    expect(listening.bloomOpacity).toBeGreaterThan(idle.bloomOpacity);
-    expect(listening.massIntensity).toBeGreaterThan(idle.massIntensity);
-    expect(listening.waveAmp).toBeGreaterThan(idle.waveAmp);
-    expect(listening.rimBoost).toBeGreaterThan(idle.rimBoost);
+    expect(listening.fieldAlpha).toBeGreaterThan(idle.fieldAlpha);
+    expect(listening.fieldAmplitude).toBeGreaterThan(idle.fieldAmplitude);
+    expect(listening.rimIntensity).toBeGreaterThan(idle.rimIntensity);
+    expect(listening.bloomIntensity).toBeGreaterThan(idle.bloomIntensity);
+    expect(listening.energyResponse).toBeGreaterThan(idle.energyResponse);
   });
 
-  it("keeps a faint fiber field in every mode", () => {
-    // The reference keeps strands visible at rest. No mode may drop to zero,
-    // or the orb reverts to a bare ball on a flat background.
-    for (const state of [
-      "idle",
-      "listening",
-      "thinking",
-      "speaking",
-      "success",
-      "error",
-    ] as const) {
-      expect(resolveOrbParams(state).waveAmp).toBeGreaterThan(0);
-      expect(resolveOrbParams(state).strandOpacity).toBeGreaterThan(0);
-    }
-  });
-
-  it("drives thinking through the interior and the rim, not through audio", () => {
-    const thinking = resolveOrbParams("thinking");
+  it("drifts slowly at rest and faster while listening", () => {
     const idle = resolveOrbParams("idle");
-    // Concentration is interior work plus a fast rim traversal, so thinking
-    // must not respond to level the way listening does.
-    expect(thinking.internalActivity).toBeGreaterThan(idle.internalActivity);
-    expect(thinking.rimPhaseSpeed).toBeGreaterThan(idle.rimPhaseSpeed);
-    expect(thinking.strandSpeedScale).toBeLessThan(idle.strandSpeedScale);
-    expect(thinking.glowResponse).toBeLessThan(idle.glowResponse);
+    const listening = resolveOrbParams("listening");
+    // One full migration should take many seconds. A cycle measured in tenths
+    // of a second reads as a loop rather than as drift.
+    expect(idle.fieldCycleSeconds).toBeGreaterThanOrEqual(9);
+    expect(listening.fieldCycleSeconds).toBeLessThan(idle.fieldCycleSeconds);
+    expect(listening.fieldCycleSeconds).toBeGreaterThan(3);
   });
 
-  it("reduces motion to stillness while keeping state glow", () => {
+  it("drives thinking through the shell, not through loud fibers", () => {
+    const thinking = resolveOrbParams("thinking");
+    const listening = resolveOrbParams("listening");
+    expect(thinking.energyResponse).toBeLessThan(listening.energyResponse);
+    expect(thinking.fieldAmplitude).toBeLessThan(listening.fieldAmplitude);
+    // The shell still moves faster than at rest.
+    expect(thinking.rimIntensity).toBeGreaterThan(resolveOrbParams("idle").rimIntensity);
+  });
+
+  it("keeps the hero frame free of grain", () => {
+    // Idle and the welcome screen are the static frame the design is judged on.
+    expect(resolveOrbParams("idle").particleAmount).toBe(0);
+  });
+
+  it("reduces motion to stillness while keeping the light on", () => {
     const listening = resolveOrbParams("listening", { reducedMotion: true });
-    expect(listening.motionSpeed).toBe(0);
-    expect(listening.breatheScale).toBe(1);
-    expect(listening.strandSpeedScale).toBe(0);
-    expect(listening.rimPhaseSpeed).toBe(0);
-    expect(listening.bloomOpacity).toBeGreaterThan(0);
+    expect(listening.motionScale).toBe(0);
+    expect(listening.fieldCycleSeconds).toBe(Number.POSITIVE_INFINITY);
+    expect(listening.rimIntensity).toBeGreaterThan(0);
+    expect(listening.bloomIntensity).toBeGreaterThan(0);
 
     const idle = resolveOrbParams("idle", { reducedMotion: true });
-    expect(idle.bloomOpacity).toBeLessThan(listening.bloomOpacity);
+    expect(idle.bloomIntensity).toBeLessThan(listening.bloomIntensity);
   });
 });
