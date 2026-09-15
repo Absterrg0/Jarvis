@@ -1,0 +1,16 @@
+:root {
+  --brand-50: #fff8f3;
+  --brand-100: #fcebdf;
+  --brand-200: #f7cfb8;
+  --brand-300: #f0ae8b;
+  --brand-400: #e6946d;
+  --brand-500: #d9825d;
+  --brand-600: #c46d4a;
+  --brand-700: #a95134;
+  --brand-800: #7e3c29;
+  --brand-900: #51281e;
+
+  --accent: #e08a63;
+  --accent-bright: #f0a078;
+  --accent-deep: #a5482c;
+}

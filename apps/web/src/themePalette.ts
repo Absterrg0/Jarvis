@@ -325,143 +325,143 @@ function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
 }
 
 /**
- * The palette T3 Code wears with no theme installed, captured from the app's
+ * The palette Circe wears with no theme installed, captured from the app's
  * stock tokens (index.css) so a draft seeded from the default look paints the
  * pixels the user is already seeing. Alpha-bearing tokens are flattened over
  * their real backdrops (canvas, or the sidebar for its rows) because theme
  * colors are stored as opaque OKLCH tokens.
  */
-const T3_CODE_LIGHT_THEME_COLORS: ThemeColors = {
-  canvas: "#fcfcfc",
-  chrome: "#fcfcfc",
-  toolbar: "#fcfcfc",
-  toolbarForeground: "#27272a",
-  toolbarBorder: "#e4e4e7",
-  toolbarControl: "#ffffff",
-  toolbarControlForeground: "#27272a",
-  toolbarControlHover: "#f4f4f5",
-  surface: "#ffffff",
-  surfaceRaised: "#fcfcfc",
+export const CIRCE_LIGHT_THEME_COLORS: ThemeColors = {
+  canvas: "#fcf9f4",
+  chrome: "#fcf9f4",
+  toolbar: "#fcf9f4",
+  toolbarForeground: "#151311",
+  toolbarBorder: "#e2ded9",
+  toolbarControl: "#fffdfa",
+  toolbarControlForeground: "#151311",
+  toolbarControlHover: "#f2ebe4",
+  surface: "#fffdfa",
+  surfaceRaised: "#fffdfa",
   surfaceOverlay: "#ffffff",
-  text: "#27272a",
-  textMuted: "#71717b",
-  border: "#e4e4e7",
-  input: "#d4d4d8",
-  focus: "#1b4ed8",
-  accent: "#1b4ed8",
-  accentForeground: "#ffffff",
-  secondary: "#fafafa",
-  secondaryForeground: "#27272a",
-  muted: "#fafafa",
-  mutedForeground: "#71717b",
-  placeholder: "#71717b",
-  secondaryLabel: "#71717b",
-  iconMuted: "#71717b",
-  error: "#fb2c36",
-  errorForeground: "#c10007",
-  errorSurface: "#fcebec",
-  warning: "#fe9a00",
-  warningForeground: "#bb4d00",
-  warningSurface: "#fcf4e8",
-  update: "#1b4ed8",
-  updateForeground: "#1b4ed8",
-  updateSurface: "#e0e6f7",
-  accentSurface: "#f4f4f5",
-  accentSurfaceForeground: "#18181b",
-  messageSurface: "#f4f4f5",
-  messageForeground: "#27272a",
-  messageAction: "#1b4ed8",
-  messageActionForeground: "#ffffff",
-  messageActionHover: "#3160db",
-  codeBackground: "#ffffff",
-  codeForeground: "#27272a",
-  sidebar: "#fafafa",
-  sidebarForeground: "#27272a",
-  sidebarMutedForeground: "#71717b",
-  sidebarControlSurface: "#f4f4f5",
-  sidebarRowHover: "#fcfcfc",
-  sidebarRowActive: "#ffffff",
-  sidebarRowSelected: "#ffffff",
-  sidebarBorder: "#e4e4e7",
-  terminalBackground: "#fcfcfc",
-  terminalForeground: "#27272a",
-  terminalCursor: "#26384e",
-  terminalSelection: "#d0d6dd",
-  terminalScrollbar: "#d6d6d6",
-  terminalScrollbarHover: "#bdbdbd",
+  text: "#151311",
+  textMuted: "#696b70",
+  border: "#e2ded9",
+  input: "#cfc8c1",
+  focus: "#e39470",
+  accent: "#e39470",
+  accentForeground: "#20120d",
+  secondary: "#f6f0e9",
+  secondaryForeground: "#151311",
+  muted: "#f6f0e9",
+  mutedForeground: "#696b70",
+  placeholder: "#78736d",
+  secondaryLabel: "#696b70",
+  iconMuted: "#77736f",
+  error: "#bf3a44",
+  errorForeground: "#a52a35",
+  errorSurface: "#f7e4e6",
+  warning: "#9a5f1c",
+  warningForeground: "#8a5216",
+  warningSurface: "#f6ead9",
+  update: "#e39470",
+  updateForeground: "#a5482c",
+  updateSurface: "#fcebdf",
+  accentSurface: "#fcebdf",
+  accentSurfaceForeground: "#151311",
+  messageSurface: "#f6f0e9",
+  messageForeground: "#151311",
+  messageAction: "#e39470",
+  messageActionForeground: "#20120d",
+  messageActionHover: "#f0a078",
+  codeBackground: "#f6f0e9",
+  codeForeground: "#151311",
+  sidebar: "#f8f4ee",
+  sidebarForeground: "#151311",
+  sidebarMutedForeground: "#696b70",
+  sidebarControlSurface: "#f6f0e9",
+  sidebarRowHover: "#f2ebe4",
+  sidebarRowActive: "#ece2d9",
+  sidebarRowSelected: "#ece2d9",
+  sidebarBorder: "#eae2da",
+  terminalBackground: "#fcf9f4",
+  terminalForeground: "#151311",
+  terminalCursor: "#a5482c",
+  terminalSelection: "#f7cfb8",
+  terminalScrollbar: "#cfc8c1",
+  terminalScrollbarHover: "#b8b0a8",
 };
 
-const T3_CODE_DARK_THEME_COLORS: ThemeColors = {
-  canvas: "#0a0a0a",
-  chrome: "#0a0a0a",
-  toolbar: "#0a0a0a",
-  toolbarForeground: "#f5f5f5",
-  toolbarBorder: "#191919",
-  toolbarControl: "#111111",
-  toolbarControlForeground: "#f5f5f5",
-  toolbarControlHover: "#141414",
-  surface: "#111111",
-  surfaceRaised: "#111111",
-  surfaceOverlay: "#111111",
-  text: "#f5f5f5",
-  textMuted: "#818181",
-  border: "#191919",
-  input: "#1e1e1e",
-  focus: "#346bf1",
-  accent: "#346bf1",
-  accentForeground: "#ffffff",
-  secondary: "#111111",
-  secondaryForeground: "#f5f5f5",
-  muted: "#111111",
-  mutedForeground: "#818181",
-  placeholder: "#818181",
-  secondaryLabel: "#818181",
-  iconMuted: "#818181",
-  error: "#fb414a",
-  errorForeground: "#ff6467",
-  errorSurface: "#301214",
-  warning: "#fe9a00",
-  warningForeground: "#ffb900",
-  warningSurface: "#312108",
-  update: "#346bf1",
-  updateForeground: "#51a2ff",
-  updateSurface: "#121b34",
-  accentSurface: "#141414",
-  accentSurfaceForeground: "#f5f5f5",
-  messageSurface: "#141414",
-  messageForeground: "#f5f5f5",
-  messageAction: "#346bf1",
-  messageActionForeground: "#ffffff",
-  messageActionHover: "#3061d9",
-  codeBackground: "#111111",
-  codeForeground: "#f5f5f5",
-  sidebar: "#000000",
-  sidebarForeground: "#f1f3f7",
-  sidebarMutedForeground: "#a3a3a3",
-  sidebarControlSurface: "#0a0a0a",
-  sidebarRowHover: "#131313",
-  sidebarRowActive: "#1a1b1b",
-  sidebarRowSelected: "#111111",
-  sidebarBorder: "#141414",
-  terminalBackground: "#0a0a0a",
-  terminalForeground: "#f5f5f5",
-  terminalCursor: "#b4cbff",
-  terminalSelection: "#343a47",
-  terminalScrollbar: "#222222",
-  terminalScrollbarHover: "#363636",
+export const CIRCE_DARK_THEME_COLORS: ThemeColors = {
+  canvas: "#0c0d0e",
+  chrome: "#0c0d0e",
+  toolbar: "#0c0d0e",
+  toolbarForeground: "#f4f1ed",
+  toolbarBorder: "#242627",
+  toolbarControl: "#121415",
+  toolbarControlForeground: "#f4f1ed",
+  toolbarControlHover: "#1e2022",
+  surface: "#121415",
+  surfaceRaised: "#121415",
+  surfaceOverlay: "#191b1d",
+  text: "#f4f1ed",
+  textMuted: "#b1afad",
+  border: "#242627",
+  input: "#333536",
+  focus: "#e08a63",
+  accent: "#e08a63",
+  accentForeground: "#20120d",
+  secondary: "#151719",
+  secondaryForeground: "#f4f1ed",
+  muted: "#151719",
+  mutedForeground: "#b1afad",
+  placeholder: "#808080",
+  secondaryLabel: "#b1afad",
+  iconMuted: "#949597",
+  error: "#f0646e",
+  errorForeground: "#f6a3a9",
+  errorSurface: "#2a1417",
+  warning: "#e6a066",
+  warningForeground: "#e9b389",
+  warningSurface: "#2a2018",
+  update: "#e08a63",
+  updateForeground: "#e08a63",
+  updateSurface: "#241a16",
+  accentSurface: "#241a16",
+  accentSurfaceForeground: "#f4f1ed",
+  messageSurface: "#151719",
+  messageForeground: "#f4f1ed",
+  messageAction: "#e08a63",
+  messageActionForeground: "#20120d",
+  messageActionHover: "#f09a70",
+  codeBackground: "#121415",
+  codeForeground: "#f4f1ed",
+  sidebar: "#0e0f10",
+  sidebarForeground: "#f4f1ed",
+  sidebarMutedForeground: "#b1afad",
+  sidebarControlSurface: "#151719",
+  sidebarRowHover: "#1e2022",
+  sidebarRowActive: "#242322",
+  sidebarRowSelected: "#242322",
+  sidebarBorder: "#1c1e1f",
+  terminalBackground: "#0c0d0e",
+  terminalForeground: "#f4f1ed",
+  terminalCursor: "#e08a63",
+  terminalSelection: "#33231f",
+  terminalScrollbar: "#242627",
+  terminalScrollbarHover: "#333536",
 };
 
 /**
- * The standard T3 Code look as a theme palette, for seeding a new theme when
- * no theme is installed. Distinct from {@link getDefaultThemeColors}, which
- * carries the flagship T3 Chat palette used to fill roles omitted by theme
+ * The standard Circe look as a theme palette, for seeding a new theme when no
+ * theme is installed. Distinct from {@link getDefaultThemeColors}, which
+ * carries the flagship Circe palette used to fill roles omitted by theme
  * files.
  */
 export function getStandardThemeColors(appearance: ThemeAppearance): ThemeColors {
   if (appearance === "dark") {
-    return (standardDarkThemeColors ??= decodeThemeColors(T3_CODE_DARK_THEME_COLORS));
+    return (standardDarkThemeColors ??= decodeThemeColors(CIRCE_DARK_THEME_COLORS));
   }
-  return (standardLightThemeColors ??= decodeThemeColors(T3_CODE_LIGHT_THEME_COLORS));
+  return (standardLightThemeColors ??= decodeThemeColors(CIRCE_LIGHT_THEME_COLORS));
 }
 
 type ThemeRgbColor = {
@@ -482,6 +482,21 @@ const THEME_WHITE_FOREGROUND: ThemeRgbColor = { r: 255, g: 255, b: 255 };
 const THEME_BLACK_FOREGROUND: ThemeRgbColor = { r: 0, g: 0, b: 0 };
 
 const convertToOklch = converter("oklch");
+
+/**
+ * The flagship Circe palette. It replaces the inherited T3 Chat definition at
+ * the web layer so the built-in theme, the default role fallback, and the
+ * theme editor all seed from the same copper/ivory identity without touching
+ * the shared palette module other clients still read. It decodes eagerly, so
+ * it must be declared after the color converter it depends on.
+ */
+export const CIRCE_THEME: ThemeDefinition = {
+  id: T3_CHAT_THEME_ID,
+  label: "Circe",
+  appearance: "light",
+  colors: decodeThemeColors(CIRCE_LIGHT_THEME_COLORS),
+  variants: { dark: decodeThemeColors(CIRCE_DARK_THEME_COLORS) },
+};
 
 function parseThemeColor(value: unknown): ParsedThemeColor | null {
   if (typeof value !== "string") return null;
@@ -717,7 +732,7 @@ function solveOklchLightness(
 }
 
 /**
- * The status colors T3 Code shows without a theme, read from the app's own
+ * The status colors Circe shows without a theme, read from the app's own
  * tokens (red-500 / amber-500 families). Generated palettes fall back to
  * these instead of the flagship theme's, so an imported or created theme
  * never inherits a brand tint on destructive buttons and warnings.
@@ -995,7 +1010,7 @@ function standardMutedThemeText(
 
 /** Theme-file defaults follow the flagship palette for the requested mode. */
 export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors {
-  return appearance === "dark" ? T3_CHAT_THEME.variants!.dark! : T3_CHAT_THEME.colors;
+  return appearance === "dark" ? CIRCE_THEME.variants!.dark! : CIRCE_THEME.colors;
 }
 
 /**
@@ -1190,7 +1205,9 @@ export function updateThemeColorFamily(
   }
 }
 
-const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = BUILT_IN_THEMES;
+const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = BUILT_IN_THEMES.map(
+  (definition) => (definition.id === T3_CHAT_THEME_ID ? CIRCE_THEME : definition),
+);
 
 export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | null {
   const themeId = themeIdFromPreference(theme);

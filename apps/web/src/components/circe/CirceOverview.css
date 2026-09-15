@@ -1,0 +1,389 @@
+/*
+ * Control-center composition.
+ *
+ * The global Circe tokens define the palette; this file owns the spatial and
+ * material treatment of the dashboard itself. Keeping these rules route-scoped
+ * prevents the denser control-center layout from leaking into chat/settings.
+ */
+.circe-control-center-route {
+  --workspace-topbar-height: 68px;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--background);
+}
+
+/* The reference has a little atmosphere, not a flat sheet of #0c0d0e. */
+.circe-control-center-route > div {
+  background:
+    radial-gradient(
+      900px 380px at 58% -210px,
+      color-mix(in srgb, var(--primary) 7%, transparent),
+      transparent 68%
+    ),
+    radial-gradient(
+      520px 380px at 8% 100%,
+      color-mix(in srgb, var(--primary) 3%, transparent),
+      transparent 72%
+    ),
+    var(--background);
+}
+
+/* ── Rail ─────────────────────────────────────────────────────────────── */
+.circe-control-center-route nav[aria-label="Control center"] {
+  width: 218px !important;
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--sidebar) 98%, white 2%),
+    var(--sidebar)
+  );
+  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--foreground) 2.5%, transparent);
+}
+
+.circe-control-center-route nav[aria-label="Control center"] > div:first-child {
+  padding-inline: 28px;
+}
+
+.circe-control-center-route nav[aria-label="Control center"] > div:first-child > span {
+  height: 36px !important;
+}
+
+.circe-control-center-route nav[aria-label="Control center"] > div:nth-child(2) {
+  padding: 17px 24px 8px;
+}
+
+.circe-control-center-route nav[aria-label="Control center"] ul {
+  gap: 3px;
+  padding-inline: 10px;
+}
+
+.circe-control-center-route nav[aria-label="Control center"] li > button {
+  position: relative;
+  height: 42px;
+  border-radius: 6px;
+  padding-inline: 14px 12px;
+  font-size: 14px;
+  transition:
+    background-color var(--motion-fast) var(--ease-circe),
+    color var(--motion-fast) var(--ease-circe),
+    border-color var(--motion-fast) var(--ease-circe);
+}
+
+.circe-control-center-route nav[aria-label="Control center"] li > button[aria-current="page"] {
+  border-left-color: var(--accent-ink) !important;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--primary) 13%, transparent), transparent 96%),
+    color-mix(in srgb, var(--card) 88%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 3.5%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--foreground) 2%, transparent);
+}
+
+.circe-control-center-route
+  nav[aria-label="Control center"]
+  li
+  > button[aria-current="page"]
+  > span:first-child {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  margin-left: -4px;
+  border: 1px solid color-mix(in srgb, var(--accent-ink) 66%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  color: var(--accent-ink) !important;
+}
+
+.circe-control-center-route nav[aria-label="Control center"] > div:last-child {
+  position: relative;
+  margin: 12px 10px 16px;
+  min-height: 58px;
+  border-radius: 8px;
+  border-color: color-mix(in srgb, var(--border) 86%, transparent);
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 3%, transparent);
+  padding-right: 38px;
+}
+
+.circe-control-center-route nav[aria-label="Control center"] > div:last-child::after {
+  content: "›";
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  translate: 0 -50%;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--muted) 86%, transparent);
+  color: var(--muted-foreground);
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* ── Top bar ──────────────────────────────────────────────────────────── */
+.circe-control-center-route nav[aria-label="Control center"] + div > header {
+  padding-inline: 24px;
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+  background: color-mix(in srgb, var(--background) 94%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--foreground) 1.5%, transparent);
+}
+
+.circe-control-center-route nav[aria-label="Control center"] + div > header > button {
+  max-width: 470px;
+  height: 38px;
+  border-radius: 8px;
+  border-color: color-mix(in srgb, var(--border-strong) 82%, transparent);
+  background: color-mix(in srgb, var(--card) 78%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 3%, transparent),
+    0 7px 24px color-mix(in srgb, black 9%, transparent);
+}
+
+.circe-control-center-route nav[aria-label="Control center"] + div > header > div:last-child {
+  gap: 10px;
+}
+
+.circe-control-center-route
+  nav[aria-label="Control center"]
+  + div
+  > header
+  > div:last-child
+  > span:first-child {
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  border-radius: 0;
+  background: transparent;
+  padding: 5px 20px 5px 4px;
+}
+
+.circe-control-center-route
+  nav[aria-label="Control center"]
+  + div
+  > header
+  button[aria-label="Toggle appearance"] {
+  color: var(--accent-ink);
+}
+
+/* ── Main composition ─────────────────────────────────────────────────── */
+.circe-control-center-route [class~="max-w-[1600px]"] {
+  max-width: none !important;
+  margin-inline: 0 !important;
+  gap: 16px !important;
+  padding: 20px 24px 24px !important;
+}
+
+.circe-control-center-route [class~="xl:grid-cols-4"] {
+  gap: 14px !important;
+}
+
+.circe-control-center-route [class~="xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]"] {
+  gap: 16px !important;
+  grid-template-columns: minmax(0, 1.7fr) minmax(380px, 1fr);
+}
+
+.circe-control-center-route [class~="lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]"] {
+  gap: 16px !important;
+  grid-template-columns: minmax(0, 1.34fr) minmax(0, 1fr);
+}
+
+/* Top scope navigation should read as navigation, not a segmented form field. */
+.circe-control-center-route [class~="max-w-[1600px]"] [class~="gap-0.5"] {
+  gap: 8px !important;
+  border: 0 !important;
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+.circe-control-center-route [class~="max-w-[1600px]"] [class~="gap-0.5"] > button {
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: 7px !important;
+  background: transparent !important;
+  padding-inline: 13px !important;
+  color: var(--muted-foreground);
+}
+
+.circe-control-center-route
+  [class~="max-w-[1600px]"]
+  [class~="gap-0.5"]
+  > button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent-ink) 68%, transparent);
+  background: color-mix(in srgb, var(--primary) 8%, transparent) !important;
+  color: var(--foreground);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 4%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--primary) 4%, transparent);
+}
+
+/* ── Cards and panels ─────────────────────────────────────────────────── */
+.circe-control-center-route section {
+  border-radius: 8px !important;
+  border-color: color-mix(in srgb, var(--border) 86%, transparent) !important;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--card) 97%, var(--foreground) 3%),
+    var(--card) 34px,
+    var(--card)
+  ) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 3.5%, transparent),
+    0 10px 34px color-mix(in srgb, black 7%, transparent);
+}
+
+.circe-control-center-route section > header {
+  min-height: 51px;
+  padding: 12px 16px !important;
+  border-color: color-mix(in srgb, var(--border) 78%, transparent) !important;
+}
+
+.circe-control-center-route section > header h2 {
+  font-size: 15.5px !important;
+  font-weight: 620 !important;
+  letter-spacing: -0.018em !important;
+}
+
+.circe-control-center-route [class~="xl:grid-cols-4"] > button {
+  min-height: 88px;
+  gap: 14px !important;
+  border-radius: 8px !important;
+  border-color: color-mix(in srgb, var(--border) 86%, transparent) !important;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--card) 98%, var(--foreground) 2%),
+    var(--card)
+  ) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 3.5%, transparent),
+    0 9px 26px color-mix(in srgb, black 6%, transparent);
+  padding: 14px 17px !important;
+}
+
+.circe-control-center-route [class~="xl:grid-cols-4"] > button:hover {
+  border-color: color-mix(in srgb, var(--accent-ink) 32%, var(--border)) !important;
+  background: color-mix(in srgb, var(--card) 94%, var(--primary) 6%) !important;
+}
+
+.circe-control-center-route [class~="xl:grid-cols-4"] > button > span:first-child,
+.circe-control-center-route [class~="xl:grid-cols-4"] > button svg {
+  width: 58px !important;
+  height: 58px !important;
+}
+
+.circe-control-center-route [class~="xl:grid-cols-4"] > button svg {
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--primary) 13%, transparent));
+}
+
+.circe-control-center-route [class~="xl:grid-cols-4"] > button svg circle:first-child {
+  stroke: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+
+.circe-control-center-route [class~="xl:grid-cols-4"] > button:nth-child(1) svg circle:last-child {
+  stroke: var(--success);
+}
+
+.circe-control-center-route [class~="xl:grid-cols-4"] > button:nth-child(2) svg circle:last-child,
+.circe-control-center-route [class~="xl:grid-cols-4"] > button:nth-child(3) svg circle:last-child {
+  stroke: color-mix(in srgb, var(--success) 66%, var(--accent-ink));
+}
+
+.circe-control-center-route [class~="xl:grid-cols-4"] > button:nth-child(4) svg circle:last-child {
+  stroke: var(--accent-ink);
+}
+
+/* Runs tabs: underline selected state, no pill background. */
+.circe-control-center-route [aria-label="Filter runs by status"] {
+  min-height: 42px;
+  gap: 19px !important;
+  padding: 0 16px !important;
+}
+
+.circe-control-center-route [aria-label="Filter runs by status"] > button {
+  position: relative;
+  min-height: 42px;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 0 2px !important;
+}
+
+.circe-control-center-route
+  [aria-label="Filter runs by status"]
+  > button[aria-pressed="true"]::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--foreground);
+}
+
+.circe-control-center-route [aria-label="Filter runs by status"] > button > span {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--muted) 82%, transparent);
+  padding-inline: 5px;
+  font-size: 10px;
+}
+
+/* Empty content should still hold the panel composition together. */
+.circe-control-center-route section [class~="min-h-32"] {
+  min-height: 154px !important;
+  color: color-mix(in srgb, var(--muted-foreground) 78%, transparent);
+}
+
+/* Device panel gets the same breathing room as the reference. */
+.circe-control-center-route [aria-label^="Device "][role="group"] {
+  min-height: 42px;
+  gap: 22px !important;
+}
+
+.circe-control-center-route [aria-label^="Device "][role="group"] > button {
+  min-height: 42px;
+  padding: 0 1px 10px !important;
+}
+
+.circe-control-center-route [aria-label^="Device "][role="group"] > button[aria-pressed="true"] {
+  border-color: var(--foreground) !important;
+}
+
+/* ── Footer ───────────────────────────────────────────────────────────── */
+.circe-control-center-route footer {
+  min-height: 40px;
+  padding-inline: 24px !important;
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+  background: color-mix(in srgb, var(--background) 94%, transparent);
+}
+
+.circe-control-center-route footer > span:first-child {
+  width: 56px;
+  background: var(--accent-ink);
+}
+
+.circe-control-center-route footer .circe-section-label {
+  letter-spacing: 0.2em;
+  font-size: 9.5px;
+}
+
+@media (max-width: 1279px) {
+  .circe-control-center-route [class~="xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]"] {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1023px) {
+  .circe-control-center-route {
+    --workspace-topbar-height: 60px;
+  }
+
+  .circe-control-center-route [class~="max-w-[1600px]"] {
+    padding: 16px !important;
+  }
+}

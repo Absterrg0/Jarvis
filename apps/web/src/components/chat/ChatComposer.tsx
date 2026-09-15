@@ -5734,7 +5734,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               ? "Enable a provider in Settings to send a message"
                               : phase === "disconnected"
                                 ? DISCONNECTED_COMPOSER_PLACEHOLDER
-                                : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                                : "Ask Circe anything… @tag files/folders, $use skills, or / for commands"
                   }
                   disabled={
                     isConnecting ||
@@ -5804,18 +5804,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   )}
                 >
                   {composerControlsInStrip ? null : composerControls}
-                </div>
-
-                {/* Right side: send / stop button */}
-                <div
-                  data-chat-composer-actions="right"
-                  data-chat-composer-transition-actions="true"
-                  data-chat-composer-primary-actions-compact={
-                    isComposerPrimaryActionsCompact ? "true" : "false"
-                  }
-                  className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
-                >
-                  {showComposerAttachAction ? (
+                  {composerControlsInStrip || !showComposerAttachAction ? null : (
                     <>
                       <input
                         ref={attachmentInputRef}
@@ -5832,22 +5821,34 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       <Tooltip>
                         <TooltipTrigger
                           render={
-                            <Button
+                            <ComposerControl
                               type="button"
-                              variant="ghost"
-                              size="icon-sm"
+                              size="sm"
                               onPointerDown={(event) => event.preventDefault()}
                               onClick={() => attachmentInputRef.current?.click()}
                               aria-label="Attach files"
+                              className="shrink-0 whitespace-nowrap"
                             />
                           }
                         >
-                          <PaperclipIcon />
+                          <ComposerControlIcon icon={PaperclipIcon} size="sm" />
+                          <span>Attach</span>
                         </TooltipTrigger>
-                        <TooltipPopup>Attach files</TooltipPopup>
+                        <TooltipPopup side="top">Attach files</TooltipPopup>
                       </Tooltip>
                     </>
-                  ) : null}
+                  )}
+                </div>
+
+                {/* Right side: send / stop button */}
+                <div
+                  data-chat-composer-actions="right"
+                  data-chat-composer-transition-actions="true"
+                  data-chat-composer-primary-actions-compact={
+                    isComposerPrimaryActionsCompact ? "true" : "false"
+                  }
+                  className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
+                >
                   <ComposerFooterPrimaryActions
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
                     activeContextWindow={

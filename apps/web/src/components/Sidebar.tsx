@@ -44,6 +44,9 @@ import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
+  ArchiveIcon,
+  BlocksIcon,
+  BotIcon,
   CheckIcon,
   ChevronDownIcon,
   CircleAlertIcon,
@@ -53,7 +56,10 @@ import {
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
+  HouseIcon,
   MessageCircleIcon,
+  MessagesSquareIcon,
+  MonitorSmartphoneIcon,
   PinIcon,
   PinOffIcon,
   PlusIcon,
@@ -63,6 +69,7 @@ import {
   TerminalIcon,
   Undo2Icon,
   XIcon,
+  type LucideIcon,
 } from "lucide-react";
 import {
   memo,
@@ -77,7 +84,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { useParams, useRouter } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams, useRouter } from "@tanstack/react-router";
 
 import { useRightPanelStore } from "../rightPanelStore";
 import {
@@ -272,6 +279,144 @@ function settledTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = resolveSettledThreadTimestamp(thread);
   return timestamp === null ? "" : compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp));
 }
+
+type SidebarThreadFilterTab = "all" | "projects" | "starred" | "archived";
+
+const SIDEBAR_THREAD_FILTER_TABS: readonly SidebarThreadFilterTab[] = [
+  "all",
+  "projects",
+  "starred",
+  "archived",
+];
+
+const SIDEBAR_THREAD_FILTER_TAB_LABELS: Record<SidebarThreadFilterTab, string> = {
+  all: "All",
+  projects: "Projects",
+  starred: "Starred",
+  archived: "Archived",
+};
+
+type SidebarThreadDateGroup = "Today" | "Yesterday" | "Last 7 days" | "Older";
+
+const SIDEBAR_THREAD_DATE_GROUPS: readonly SidebarThreadDateGroup[] = [
+  "Today",
+  "Yesterday",
+  "Last 7 days",
+  "Older",
+];
+
+// Date bucket for the filtered thread views. Groups by local calendar day off
+// latestUserMessageAt ?? updatedAt — the same stamp threadTimeLabel reads — so
+// the header a row sits under can never disagree with its relative label.
+function sidebarThreadDateGroup(
+  thread: SidebarThreadSummary,
+  nowMs: number,
+): SidebarThreadDateGroup {
+  const date = parseTimestampDate(thread.latestUserMessageAt ?? thread.updatedAt);
+  if (!date) return "Older";
+  const now = new Date(nowMs);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  // Round so DST-shifted 23/25 hour days still count as whole days.
+  const dayDiff = Math.round((startOfToday - startOfDay) / 86_400_000);
+  if (dayDiff <= 0) return "Today";
+  if (dayDiff === 1) return "Yesterday";
+  if (dayDiff <= 7) return "Last 7 days";
+  return "Older";
+}
+
+function groupSidebarThreadsByDate(
+  list: readonly SidebarThreadSummary[],
+  nowMs: number,
+): { label: SidebarThreadDateGroup; threads: SidebarThreadSummary[] }[] {
+  const buckets = new Map<SidebarThreadDateGroup, SidebarThreadSummary[]>();
+  for (const thread of list) {
+    const label = sidebarThreadDateGroup(thread, nowMs);
+    const bucket = buckets.get(label);
+    if (bucket) bucket.push(thread);
+    else buckets.set(label, [thread]);
+  }
+  return SIDEBAR_THREAD_DATE_GROUPS.filter((label) => buckets.has(label)).map((label) => ({
+    label,
+    threads: buckets.get(label)!,
+  }));
+}
+
+function isSidebarConversationThread(
+  thread: SidebarThreadSummary,
+  projectDisplayNameByKey: ReadonlyMap<string, string>,
+): boolean {
+  const display = projectDisplayNameByKey.get(`${thread.environmentId}:${thread.projectId}`);
+  return display !== undefined && display.trim() === CIRCE_CONVERSATIONS_PROJECT_TITLE;
+}
+
+function resolveSidebarFilteredSubtitle(
+  projectDisplayName: string | null,
+  branch: string | null,
+): string {
+  if (projectDisplayName && branch) return `${projectDisplayName} · ${branch}`;
+  return projectDisplayName ?? branch ?? "";
+}
+
+// Compact two-line row for the filtered thread views (Projects / Starred /
+// Archived). The existing card and slim rows are three-line cards and
+// single-line rows without a subtitle, so neither fits the filtered views'
+// title-plus-subtitle shape; this row reuses threadTimeLabel and the same
+// navigation callback instead of duplicating row internals. Non-draggable by
+// design: drag-and-drop stays on the All view.
+const SidebarFilteredThreadRow = memo(function SidebarFilteredThreadRow(props: {
+  thread: SidebarThreadSummary;
+  subtitle: string;
+  isActive: boolean;
+  onOpen: (threadRef: ScopedThreadRef) => void;
+}) {
+  const { onOpen, thread } = props;
+  const threadRef = useMemo(
+    () => scopeThreadRef(thread.environmentId, thread.id),
+    [thread.environmentId, thread.id],
+  );
+  const handleClick = useCallback(() => {
+    onOpen(threadRef);
+  }, [onOpen, threadRef]);
+  const handleKeyDown = useCallback(
+    (event: ReactKeyboardEvent) => {
+      if (event.target !== event.currentTarget) return;
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      onOpen(threadRef);
+    },
+    [onOpen, threadRef],
+  );
+  return (
+    <li className="list-none">
+      <div
+        role="button"
+        tabIndex={0}
+        aria-current={props.isActive ? "page" : undefined}
+        onClick={handleClick}
+        onKeyDown={handleKeyDown}
+        className={cn(
+          "flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none",
+          props.isActive
+            ? "bg-sidebar-row-selected text-sidebar-foreground"
+            : "text-sidebar-foreground hover:bg-sidebar-row-hover",
+        )}
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium">{thread.title}</span>
+          {props.subtitle ? (
+            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+              {props.subtitle}
+            </span>
+          ) : null}
+        </span>
+        <span className="ml-2 shrink-0 text-xs tabular-nums text-muted-foreground">
+          {threadTimeLabel(thread)}
+        </span>
+      </div>
+    </li>
+  );
+});
 
 // Floats at the row's right edge, vertically centered, while the jump
 // modifier is held. An overlay pill instead of an inline slot: the hint
@@ -2739,6 +2884,216 @@ export default function Sidebar() {
     () => setConversationsExpanded((value) => !value),
     [setConversationsExpanded],
   );
+  const navigate = useNavigate();
+  const sidebarPathname = useLocation({ select: (location) => location.pathname });
+  const [threadFilterTab, setThreadFilterTab] = useState<SidebarThreadFilterTab>("all");
+  const closeMobileSidebar = useCallback(() => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+  }, [isMobile, setOpenMobile]);
+  const goHome = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/" });
+  }, [closeMobileSidebar, navigate]);
+  const goProjectsSettings = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({
+      to: "/settings/projects",
+      search: { project: undefined, machine: undefined },
+    });
+  }, [closeMobileSidebar, navigate]);
+  const goAgentsSettings = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/settings/providers" });
+  }, [closeMobileSidebar, navigate]);
+  const goToolsSettings = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/settings/integrations" });
+  }, [closeMobileSidebar, navigate]);
+  const goDevices = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/devices" });
+  }, [closeMobileSidebar, navigate]);
+  const goLibrary = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/settings/archived" });
+  }, [closeMobileSidebar, navigate]);
+  const goGeneralSettings = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/settings/general" });
+  }, [closeMobileSidebar, navigate]);
+  // Conversations is a shelf, not a page: reveal it in place without
+  // navigating away. Switching back to All keeps the action honest when the
+  // shelf is hidden behind another filter tab.
+  const goConversations = useCallback(() => {
+    setThreadFilterTab("all");
+    setConversationsExpanded(true);
+  }, [setConversationsExpanded]);
+  const isHomeActive = sidebarPathname === "/";
+  const isProjectsActive = sidebarPathname.startsWith("/settings/projects");
+  const isAgentsActive = sidebarPathname.startsWith("/settings/providers");
+  const isToolsActive = sidebarPathname.startsWith("/settings/integrations");
+  const isDevicesActive = sidebarPathname === "/devices";
+  const isLibraryActive = sidebarPathname.startsWith("/settings/archived");
+  const isSettingsActive =
+    sidebarPathname.startsWith("/settings") &&
+    !isProjectsActive &&
+    !isAgentsActive &&
+    !isToolsActive &&
+    !isLibraryActive;
+  const isConversationsActive = conversationsExpanded && threadFilterTab === "all";
+  const primaryNavItems: {
+    id: string;
+    label: string;
+    Icon: LucideIcon;
+    active: boolean;
+    isPage: boolean;
+    onSelect: () => void;
+  }[] = [
+    {
+      id: "home",
+      label: "Home",
+      Icon: HouseIcon,
+      active: isHomeActive,
+      isPage: true,
+      onSelect: goHome,
+    },
+    {
+      id: "conversations",
+      label: "Conversations",
+      Icon: MessagesSquareIcon,
+      active: isConversationsActive,
+      isPage: false,
+      onSelect: goConversations,
+    },
+    {
+      id: "projects",
+      label: "Projects",
+      Icon: FolderIcon,
+      active: isProjectsActive,
+      isPage: true,
+      onSelect: goProjectsSettings,
+    },
+    {
+      id: "agents",
+      label: "Agents",
+      Icon: BotIcon,
+      active: isAgentsActive,
+      isPage: true,
+      onSelect: goAgentsSettings,
+    },
+    {
+      id: "tools",
+      label: "Tools",
+      Icon: BlocksIcon,
+      active: isToolsActive,
+      isPage: true,
+      onSelect: goToolsSettings,
+    },
+    {
+      id: "devices",
+      label: "Devices",
+      Icon: MonitorSmartphoneIcon,
+      active: isDevicesActive,
+      isPage: true,
+      onSelect: goDevices,
+    },
+    {
+      id: "library",
+      label: "Library",
+      Icon: ArchiveIcon,
+      active: isLibraryActive,
+      isPage: true,
+      onSelect: goLibrary,
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      Icon: SettingsIcon,
+      active: isSettingsActive,
+      isPage: true,
+      onSelect: goGeneralSettings,
+    },
+  ];
+  const inSidebarProjectScope = useCallback(
+    (thread: SidebarThreadSummary) =>
+      scopedProjectKeys === null ||
+      scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`),
+    [scopedProjectKeys],
+  );
+  // Starred is every pinned non-archived thread in scope, in pin order.
+  // Snoozed pins count: starring is the pin, not the shelf.
+  const starredFilterThreads = useMemo(
+    () =>
+      sortPinnedThreadsForSidebar(
+        threads.filter(
+          (thread) =>
+            thread.archivedAt === null && thread.pinnedAt != null && inSidebarProjectScope(thread),
+        ),
+      ),
+    [inSidebarProjectScope, threads],
+  );
+  // Archived reads the raw shells: the classification memo above filters
+  // archived threads out before partitioning, so they are only visible here.
+  const archivedFilterThreads = useMemo(
+    () =>
+      sortThreadsForSidebar(
+        threads.filter((thread) => thread.archivedAt !== null && inSidebarProjectScope(thread)),
+      ),
+    [inSidebarProjectScope, threads],
+  );
+  // Projects groups the same non-archived coding threads the All view shows
+  // (no conversation threads) under their sidebar project, in sidebar order.
+  const projectFilterGroups = useMemo(() => {
+    const visible = threads.filter(
+      (thread) =>
+        thread.archivedAt === null &&
+        inSidebarProjectScope(thread) &&
+        !isSidebarConversationThread(thread, projectDisplayNameByKey),
+    );
+    const assigned = new Set<string>();
+    const keyOf = (thread: SidebarThreadSummary) => `${thread.environmentId}:${thread.id}`;
+    const groups: { key: string; displayName: string; threads: SidebarThreadSummary[] }[] = [];
+    for (const group of projectGroups) {
+      const memberKeys = new Set(
+        group.memberProjects.map((member) => `${member.environmentId}:${member.id}`),
+      );
+      const rows = visible.filter((thread) => {
+        if (!memberKeys.has(`${thread.environmentId}:${thread.projectId}`)) return false;
+        assigned.add(keyOf(thread));
+        return true;
+      });
+      if (rows.length > 0) {
+        groups.push({
+          key: group.projectKey,
+          displayName: group.displayName,
+          threads: sortThreadsForSidebar(rows),
+        });
+      }
+    }
+    const leftovers = visible.filter((thread) => !assigned.has(keyOf(thread)));
+    if (leftovers.length > 0) {
+      groups.push({
+        key: "other",
+        displayName: "Other",
+        threads: sortThreadsForSidebar(leftovers),
+      });
+    }
+    return groups;
+  }, [inSidebarProjectScope, projectDisplayNameByKey, projectGroups, threads]);
+  // nowMinute is a UTC minute stamp: reparse it as UTC so the date buckets
+  // refresh every minute without depending on the wall clock directly.
+  const starredDateGroups = useMemo(
+    () => groupSidebarThreadsByDate(starredFilterThreads, Date.parse(`${nowMinute}:00.000Z`)),
+    [nowMinute, starredFilterThreads],
+  );
+  const archivedDateGroups = useMemo(
+    () => groupSidebarThreadsByDate(archivedFilterThreads, Date.parse(`${nowMinute}:00.000Z`)),
+    [nowMinute, archivedFilterThreads],
+  );
+  const activeFilteredDateGroups =
+    threadFilterTab === "archived" ? archivedDateGroups : starredDateGroups;
   const renderedSettledThreads = useMemo(() => {
     if (settledShelfExpanded) return visibleSettledThreads;
     if (routeThreadKey === null) return EMPTY_THREADS;
@@ -2864,6 +3219,21 @@ export default function Sidebar() {
       });
     },
     [clearSelection, isMobile, router, setOpenMobile, setSelectionAnchor],
+  );
+  const renderFilteredThreadRow = useCallback(
+    (thread: SidebarThreadSummary, subtitle: string) => {
+      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      return (
+        <SidebarFilteredThreadRow
+          key={threadKey}
+          thread={thread}
+          subtitle={subtitle}
+          isActive={routeThreadKey === threadKey}
+          onOpen={navigateToThread}
+        />
+      );
+    },
+    [navigateToThread, routeThreadKey],
   );
 
   // Dropping files on a row opens that thread and attaches the files there.
@@ -4379,6 +4749,20 @@ export default function Sidebar() {
           // Lifted above the stage backdrop, whose fade bleeds below the
           // header and would otherwise paint across the search row's outline.
           <SidebarGroup className="relative z-[1] gap-1 p-[var(--sidebar-content-inset)]">
+            <button
+              type="button"
+              onClick={handleNewThreadClick}
+              disabled={projects.length === 0}
+              className="flex h-9 w-full items-center gap-2 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground outline-hidden transition-colors hover:bg-message-action-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar disabled:pointer-events-none disabled:opacity-50"
+            >
+              <PlusIcon className="size-4 shrink-0" />
+              <span>New</span>
+              {newThreadShortcutLabel ? (
+                <kbd className="ms-auto rounded border border-primary-foreground/25 px-1.5 py-0.5 font-mono text-[10px] text-primary-foreground/80">
+                  {newThreadShortcutLabel}
+                </kbd>
+              ) : null}
+            </button>
             <div className="flex items-center gap-1">
               <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
                 <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
@@ -4613,10 +4997,56 @@ export default function Sidebar() {
                 </Tooltip>
               </div>
             ) : null}
+            <nav aria-label="Primary" className="pt-1">
+              <ul className="flex flex-col gap-px">
+                {primaryNavItems.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      aria-current={item.active && item.isPage ? "page" : undefined}
+                      onClick={item.onSelect}
+                      className={cn(
+                        "flex h-10 w-full items-center gap-2.5 rounded-md px-3 text-sm transition-colors",
+                        item.active
+                          ? "circe-nav-selected font-medium text-sidebar-foreground"
+                          : "border-l-2 border-transparent text-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+                      )}
+                    >
+                      <item.Icon
+                        className={cn("size-4.5 shrink-0", item.active && "text-accent-ink")}
+                      />
+                      <span className="truncate">{item.label}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </nav>
           </SidebarGroup>
         }
       >
         <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0">
+          <div
+            role="group"
+            aria-label="Filter threads"
+            className="flex items-center gap-px rounded-lg border border-sidebar-border p-0.5"
+          >
+            {SIDEBAR_THREAD_FILTER_TABS.map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                aria-pressed={threadFilterTab === tab}
+                onClick={() => setThreadFilterTab(tab)}
+                className={cn(
+                  "flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                  threadFilterTab === tab
+                    ? "bg-sidebar-row-selected text-sidebar-foreground"
+                    : "text-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+                )}
+              >
+                {SIDEBAR_THREAD_FILTER_TAB_LABELS[tab]}
+              </button>
+            ))}
+          </div>
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider
@@ -4675,7 +5105,7 @@ export default function Sidebar() {
               </p>
             )
           ) : null}
-          {!isSearchingThreads ? (
+          {!isSearchingThreads && threadFilterTab === "all" ? (
             <TooltipProvider
               key="sidebar-thread-tooltips-150"
               delay={150}
@@ -4998,7 +5428,65 @@ export default function Sidebar() {
               </DndContext>
             </TooltipProvider>
           ) : null}
+          {!isSearchingThreads && threadFilterTab !== "all" ? (
+            threadFilterTab === "projects" ? (
+              projectFilterGroups.length > 0 ? (
+                <div className="flex flex-col">
+                  {projectFilterGroups.map((group) => (
+                    <section key={group.key} aria-label={group.displayName}>
+                      <p className="truncate px-2.5 pb-1 pt-3 text-xs font-medium text-sidebar-muted-foreground">
+                        {group.displayName}
+                      </p>
+                      <ul role="list" className="flex flex-col gap-px">
+                        {group.threads.map((thread) =>
+                          renderFilteredThreadRow(thread, thread.branch ?? ""),
+                        )}
+                      </ul>
+                    </section>
+                  ))}
+                </div>
+              ) : (
+                <p
+                  role="status"
+                  className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
+                >
+                  {scopedProjectGroup
+                    ? `No threads in ${scopedProjectGroup.displayName} yet`
+                    : "No threads yet"}
+                </p>
+              )
+            ) : activeFilteredDateGroups.length > 0 ? (
+              <div className="flex flex-col">
+                {activeFilteredDateGroups.map((group) => (
+                  <section key={group.label} aria-label={group.label}>
+                    <p className="circe-section-label px-2.5 pb-1 pt-3">{group.label}</p>
+                    <ul role="list" className="flex flex-col gap-px">
+                      {group.threads.map((thread) =>
+                        renderFilteredThreadRow(
+                          thread,
+                          resolveSidebarFilteredSubtitle(
+                            projectDisplayNameByKey.get(
+                              `${thread.environmentId}:${thread.projectId}`,
+                            ) ?? null,
+                            thread.branch,
+                          ),
+                        ),
+                      )}
+                    </ul>
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <p
+                role="status"
+                className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
+              >
+                {threadFilterTab === "starred" ? "No starred threads" : "No archived threads"}
+              </p>
+            )
+          ) : null}
           {!isSearchingThreads &&
+          threadFilterTab === "all" &&
           visibleDraftSessionCount === 0 &&
           pinnedThreads.length +
             activeThreads.length +

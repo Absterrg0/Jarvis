@@ -79,7 +79,7 @@ import {
 } from "../../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown, { ChatMarkdownAssetImage } from "../ChatMarkdown";
-import { T3Wordmark } from "../T3Wordmark";
+import { CirceMark } from "../circe/CirceLogo";
 import {
   BotIcon,
   BrainIcon,
@@ -125,6 +125,8 @@ import {
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { PierreEntryIcon } from "./PierreEntryIcon";
+import { AssistantMessageHeader, UserMessageHeader } from "./TimelineMessageHeader";
+import { WorkChecklistCard } from "./WorkChecklistCard";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import {
@@ -1380,6 +1382,23 @@ function UserVideoAttachment({ file }: { readonly file: ChatFileAttachment }) {
   );
 }
 
+function formatAttachmentSizeBytes(sizeBytes: number): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) {
+    return "";
+  }
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+  const units = ["KB", "MB", "GB"] as const;
+  let value = sizeBytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const resources = useMemo(
@@ -1427,6 +1446,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 
   return (
     <div className="group flex flex-col items-end gap-1">
+      <UserMessageHeader createdAt={row.message.createdAt} timestampFormat={ctx.timestampFormat} />
       <div className="relative max-w-[80%] rounded-[var(--radius)] border border-border bg-message p-3 text-message-foreground">
         {(regularImages.length > 0 || userVideos.length > 0) && (
           <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
@@ -1487,6 +1507,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 <>
                   <PierreEntryIcon pathValue={file.name} kind="file" theme={ctx.resolvedTheme} />
                   <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                  {typeof file.sizeBytes === "number" ? (
+                    <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
+                      {formatAttachmentSizeBytes(file.sizeBytes)}
+                    </span>
+                  ) : null}
                 </>
               );
               if (opensInPreview && file.downloadable !== false) {
@@ -1658,6 +1683,10 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
+        <AssistantMessageHeader
+          createdAt={row.message.createdAt}
+          timestampFormat={ctx.timestampFormat}
+        />
         <AssistantCitationSource
           messageId={row.message.id}
           {...(ctx.threadRef ? { threadRef: ctx.threadRef } : {})}
@@ -1900,7 +1929,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
   isExpandedToolGroup: boolean;
   displayLabel?: string | undefined;
 }) {
-  const { workspaceRoot, routeThreadKey, onToggleWorkEntry } = use(TimelineRowCtx);
+  const { workspaceRoot, routeThreadKey, onToggleWorkEntry, timestampFormat } = use(TimelineRowCtx);
   const onToggleStandaloneEntry = useCallback(
     (collapsed: boolean) => onToggleWorkEntry(anchorKey, collapsed),
     [anchorKey, onToggleWorkEntry],
@@ -1913,12 +1942,20 @@ const WorkGroupSection = memo(function WorkGroupSection({
   if (nonEmptyEntries.length === 0) return null;
   if (isExpandedToolGroup) {
     return (
-      <ExpandedWorkGroupEntries
-        key={`${routeThreadKey}:${anchorKey}`}
-        anchorKey={anchorKey}
-        entries={nonEmptyEntries}
-        workspaceRoot={workspaceRoot}
-      />
+      <div className="space-y-1 py-0.5">
+        <WorkChecklistCard
+          key={`checklist:${routeThreadKey}:${anchorKey}`}
+          entries={nonEmptyEntries}
+          workspaceRoot={workspaceRoot}
+          timestampFormat={timestampFormat}
+        />
+        <ExpandedWorkGroupEntries
+          key={`${routeThreadKey}:${anchorKey}`}
+          anchorKey={anchorKey}
+          entries={nonEmptyEntries}
+          workspaceRoot={workspaceRoot}
+        />
+      </div>
     );
   }
 
@@ -3023,7 +3060,7 @@ function WorkEntryIcon({ name, className }: { name: WorkEntryIconName; className
     case "computer":
       return <ComputerUseAppIcon className={className} />;
     case "t3-code":
-      return <T3Wordmark className={className} aria-hidden />;
+      return <CirceMark className={className} alt="" />;
     case "check":
       return <CheckIcon className={className} aria-hidden />;
     case "circle-alert":

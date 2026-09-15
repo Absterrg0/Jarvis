@@ -1,5 +1,55 @@
 @import "tailwindcss";
 
+/* Inter is the Circe product face. The variable file is self-hosted so the
+   desktop build renders the same weights with no network and no layout shift. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/inter/inter-latin-var.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/inter/inter-latin-ext-var.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+
+/* Instrument Serif is the editorial voice: hero statements and expressive
+   brand moments only, never dense product UI. Self-hosted for the desktop
+   build so there is no network dependency and no layout shift. */
+@font-face {
+  font-family: "Instrument Serif";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/instrument-serif/instrument-serif-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Instrument Serif";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/instrument-serif/instrument-serif-italic-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 @custom-variant dark (&:is(.dark, .dark *));
 @custom-variant light (&:not(.dark, .dark *));
 /* Window Controls Overlay: active when Electron exposes native titlebar control geometry. */
@@ -89,7 +139,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
    * Keep these values semantic so sidebar, palette, tooltip, and toolbar
    * controls cannot quietly drift apart.
    */
-  --control-radius: 0.1875rem;
+  --control-radius: 0.625rem;
   --sidebar-content-inset: 0.5rem;
   --sidebar-control-gap: 0.5rem;
   --sidebar-icon-color: color-mix(
@@ -139,7 +189,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
    the variables and Settings -> Appearance can override them at runtime. The
    default stacks are mirrored in `appearanceFonts.ts`. */
 @theme {
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-display: "Instrument Serif", "Iowan Old Style", Georgia, serif;
   --font-mono:
     ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
 }
@@ -179,6 +230,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-icon-muted: var(--contrast-icon-muted);
   --color-secondary-foreground: var(--contrast-secondary-foreground);
   --color-secondary: var(--secondary);
+  --color-accent-ink: var(--accent-ink);
+  --color-border-strong: var(--border-strong);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
   --color-popover-foreground: var(--contrast-popover-foreground);
@@ -201,12 +254,15 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-sidebar-row-active: var(--sidebar-row-active);
   --color-sidebar-row-selected: var(--sidebar-row-selected);
   --color-sidebar-border: var(--contrast-sidebar-border);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 8px);
-  --radius-3xl: calc(var(--radius) + 12px);
+  /* Circe radius ladder. Cards sit at md/lg, large panels at xl/2xl; avoid
+     putting a 20px+ radius on every dashboard card. */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 18px;
+  --radius-3xl: 24px;
   @keyframes skeleton {
     /* The single loading-bar breath used by every skeleton: one opacity pulse
        per container, stepped so however many bars sit under it, the compositor
@@ -627,22 +683,22 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      These colors stay deliberately deep at the top edge so the white stage
      wordmark and controls retain contrast in both appearance modes. */
   html[data-theme-id="t3-chat"] {
-    --stage-art-top: oklch(0.760675 0.141361 348.019);
-    --stage-art-mid: oklch(0.588093 0.188832 353.138);
-    --stage-art-bottom: oklch(0.383959 0.135096 348.656);
-    --stage-art-highlight: oklch(0.949689 0.034241 339.171);
-    --stage-art-secondary: oklch(0.763402 0.163836 352.525);
-    --stage-art-tertiary: oklch(0.70819 0.180285 311.949);
-    --stage-art-line: oklch(0.952158 0.034194 336.179);
+    --stage-art-top: #c97857;
+    --stage-art-mid: #9b6658;
+    --stage-art-bottom: #4a2d2a;
+    --stage-art-highlight: #e8ae93;
+    --stage-art-secondary: #c9a79b;
+    --stage-art-tertiary: #8a5a4a;
+    --stage-art-line: #f6ece6;
 
     @variant dark {
-      --stage-art-top: oklch(0.540689 0.143665 347.587);
-      --stage-art-mid: oklch(0.396586 0.126592 347.6);
-      --stage-art-bottom: oklch(0.249959 0.079694 340.523);
-      --stage-art-highlight: oklch(0.921297 0.051708 343.229);
-      --stage-art-secondary: oklch(0.667398 0.165674 352.549);
-      --stage-art-tertiary: oklch(0.609315 0.163722 306.315);
-      --stage-art-line: oklch(0.945349 0.036045 341.433);
+      --stage-art-top: #b96849;
+      --stage-art-mid: #7a4b41;
+      --stage-art-bottom: #2c1b19;
+      --stage-art-highlight: #e8ae93;
+      --stage-art-secondary: #c9a79b;
+      --stage-art-tertiary: #8a5a4a;
+      --stage-art-line: #f0ddd3;
     }
   }
 
@@ -954,16 +1010,50 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   background-size: var(--surface-grain-size);
 }
 
-/* Circe type hierarchy. Mono uppercase labels for sections, tight tracking
-   for titles, tabular numbers for counts. Use these instead of ad-hoc
-   text sizes so control center, settings, and chat share one voice. */
+/* Circe type hierarchy. Three voices: a quiet sans for product UI, a tracked
+   caps micro-label for structure and brand, and an editorial serif reserved
+   for hero/brand moments. Use these instead of ad-hoc text sizes so control
+   center, settings, and chat share one voice. */
 @utility circe-section-label {
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  font-weight: 600;
-  letter-spacing: 0.13em;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--contrast-muted-foreground);
+}
+
+@utility circe-brand-label {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+}
+
+/* Editorial voice. Never use for dense product UI. */
+@utility circe-display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 0.98;
+}
+
+/* Selected navigation is a copper-tinted gradient with a thin accent rule,
+   not a filled orange pill. */
+@utility circe-nav-selected {
+  background: linear-gradient(90deg, rgb(224 138 99 / 12%), rgb(224 138 99 / 3%));
+  border-left: 2px solid var(--accent);
+}
+
+@utility circe-glow-sm {
+  box-shadow: var(--glow-copper-sm);
+}
+
+@utility circe-glow-md {
+  box-shadow: var(--glow-copper-md);
+}
+
+@utility circe-glow-lg {
+  box-shadow: var(--glow-copper-lg);
 }
 
 @utility circe-title {
@@ -984,114 +1074,182 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   animation-duration: 0s !important;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   Circe Design System v1 — tokens.
+   80-85% neutral, 10-15% typography/borders/elevation, 3-5% copper.
+   Copper is a brand accent, never a default surface fill.
+   ───────────────────────────────────────────────────────────── */
 :root {
   color-scheme: light;
-  --radius: 0.25rem;
-  --background: #faf7f1;
+
+  /* Brand copper scale */
+  --brand-50: #fff8f3;
+  --brand-100: #fcebdf;
+  --brand-200: #f7cfb8;
+  --brand-300: #f0ae8b;
+  --brand-400: #e6946d;
+  --brand-500: #d9825d;
+  --brand-600: #c46d4a;
+  --brand-700: #a95134;
+  --brand-800: #7e3c29;
+  --brand-900: #51281e;
+
+  --accent-bright: #f0a078;
+  /* Light surfaces need deep copper for copper-coloured text and icons; the
+     luminous accent is reserved for fills. */
+  --accent-ink: #a5482c;
+
+  --gradient-copper: linear-gradient(
+    135deg,
+    #6d3425 0%,
+    #b6603f 28%,
+    #f1ac86 58%,
+    #fff0df 78%,
+    #d77650 100%
+  );
+  --gradient-copper-soft: linear-gradient(135deg, #b85f40 0%, #e9936a 50%, #f7c4a5 100%);
+  --gradient-copper-dark: linear-gradient(135deg, #2a1712 0%, #7b3f2a 45%, #d37d58 100%);
+
+  /* Glow belongs to the orb and small active indicators, never to cards. */
+  --glow-copper-sm: 0 0 10px rgb(235 145 100 / 25%);
+  --glow-copper-md: 0 0 18px rgb(235 145 100 / 32%), 0 0 42px rgb(205 104 67 / 16%);
+  --glow-copper-lg: 0 0 24px rgb(255 185 145 / 42%), 0 0 72px rgb(217 112 72 / 25%);
+
+  --shadow-card: 0 1px 1px rgb(0 0 0 / 16%), 0 8px 24px rgb(0 0 0 / 8%);
+  --shadow-floating: 0 20px 60px rgb(0 0 0 / 42%), 0 2px 10px rgb(0 0 0 / 24%);
+
+  --ease-circe: cubic-bezier(0.22, 0.8, 0.3, 1);
+  --motion-fast: 140ms;
+  --motion-base: 200ms;
+  --motion-slow: 240ms;
+
+  /* Geometry: inputs 8-10, dashboard cards 10-12, large panels 16-18. */
+  --radius: 0.75rem;
+  --control-radius: 0.625rem;
+
+  /* Warm ivory canvas, never sterile white. */
+  --background: #fcf9f4;
   --app-chrome-background: var(--background);
   --toolbar-background: var(--app-chrome-background);
   --toolbar-foreground: var(--foreground);
   --toolbar-border: var(--border);
-  --toolbar-control: var(--popover);
+  --toolbar-control: #fffdfa;
   --toolbar-control-foreground: var(--foreground);
-  --toolbar-control-hover: var(--accent);
-  --surface-raised: #fffdf8;
-  --foreground: #1d1a15;
-  --card: #fffdf8;
-  --card-foreground: #1d1a15;
-  --popover: #fffdf8;
-  --popover-foreground: #1d1a15;
-  --primary: #96600a;
-  --primary-foreground: #fffdf6;
-  --secondary: #f1ebe0;
-  --secondary-foreground: #1d1a15;
-  --muted: #f1ebe0;
-  --muted-foreground: #6f665a;
-  --placeholder: var(--muted-foreground);
-  --secondary-label: var(--muted-foreground);
-  --icon-muted: var(--muted-foreground);
-  --message-surface: var(--accent);
+  --toolbar-control-hover: #f2ebe4;
+  --surface-raised: #fffdfa;
+  --foreground: #151311;
+  --card: #fffdfa;
+  --card-foreground: var(--foreground);
+  --popover: #fff;
+  --popover-foreground: var(--foreground);
+  /* Copper fills take dark ink labels, so the accent stays luminous and the
+     label clears the 4.5:1 floor. */
+  --primary: #e39470;
+  --primary-foreground: #20120d;
+  --secondary: #f6f0e9;
+  --secondary-foreground: #151311;
+  --muted: #f6f0e9;
+  --muted-foreground: #696b70;
+  --placeholder: #78736d;
+  --secondary-label: #696b70;
+  --icon-muted: #77736f;
+  --message-surface: #f6f0e9;
   --message-foreground: var(--foreground);
   --message-action: var(--primary);
-  --message-action-foreground: var(--primary-foreground);
-  --message-action-hover: color-mix(in srgb, var(--primary) 88%, var(--background));
-  --accent: #eae2d1;
-  --accent-foreground: #1d1a15;
-  --error: var(--color-red-600);
-  --error-foreground: var(--color-red-700);
+  --message-action-foreground: #20120d;
+  --message-action-hover: #f0a078;
+  --accent: rgb(224 138 99 / 12%);
+  --accent-foreground: #151311;
+  --error: #bf3a44;
+  --error-foreground: #a52a35;
   --tool-error-icon: var(--error);
-  --error-surface: color-mix(in srgb, var(--error) 8%, transparent);
+  --error-surface: rgb(191 58 68 / 10%);
   --destructive: var(--error);
-  --border: #e0d7c3;
-  --input: #cfc4ab;
-  --ring: var(--primary);
   --destructive-foreground: var(--error-foreground);
-  --info: var(--color-blue-600);
-  --info-foreground: var(--color-blue-700);
-  --success: var(--color-emerald-600);
-  --success-foreground: var(--color-emerald-700);
-  --warning: var(--color-amber-600);
-  --warning-foreground: #8a5b06;
-  --warning-surface: color-mix(in srgb, var(--warning) 10%, transparent);
+  --border: rgb(56 43 35 / 13%);
+  --border-strong: rgb(56 43 35 / 20%);
+  --input: rgb(56 43 35 / 16%);
+  --ring: var(--primary);
+  --info: #6b7280;
+  --info-foreground: #4b5563;
+  --success: #26794d;
+  --success-foreground: #1f6640;
+  --warning: #9a5f1c;
+  --warning-foreground: #8a5216;
+  --warning-surface: rgb(154 95 28 / 12%);
   --update: var(--primary);
-  --update-foreground: var(--primary);
-  --update-surface: color-mix(in srgb, var(--update) 12%, transparent);
-  /* Keep every sidebar primitive on the same warm surface hierarchy, including
-     portaled mobile sheets and settings navigation outside the app sidebar. */
-  --sidebar: #f2ecdf;
+  --update-foreground: #a5482c;
+  --update-surface: rgb(224 138 99 / 12%);
+  /* Sidebar sits one warm step below the canvas in both modes. */
+  --sidebar: #f8f4ee;
   --sidebar-foreground: var(--foreground);
   --sidebar-muted-foreground: var(--muted-foreground);
-  --sidebar-control-surface: #e8dfcc;
-  --sidebar-row-hover: #e9e1cf;
-  --sidebar-row-active: #fffdf8;
-  --sidebar-row-selected: #fffdf8;
-  --sidebar-border: var(--border);
+  --sidebar-control-surface: #f6f0e9;
+  --sidebar-row-hover: #f2ebe4;
+  --sidebar-row-active: #ece2d9;
+  --sidebar-row-selected: #ece2d9;
+  --sidebar-border: rgb(56 43 35 / 8%);
   --sidebar-stage-fade: var(--sidebar);
-  --code-background: #f4eee1;
+  --code-background: #f6f0e9;
   --code-foreground: var(--foreground);
   --terminal-background: var(--background);
   --terminal-foreground: var(--foreground);
-  --terminal-cursor: #7a5b0a;
-  --terminal-selection-background: rgb(150 96 10 / 22%);
+  --terminal-cursor: #a5482c;
+  --terminal-selection-background: rgb(224 138 99 / 22%);
 
   @variant dark {
     color-scheme: dark;
-    /* Keep controls and floating surfaces close to the neutral-black canvas.
-       Borders and hover states provide separation without milky gray fills. */
-    --background: var(--color-neutral-950);
-    --surface-raised: color-mix(in srgb, var(--background) 97%, var(--color-white));
-    --foreground: var(--color-neutral-100);
-    --card: color-mix(in srgb, var(--background) 97%, var(--color-white));
-    --card-foreground: var(--color-neutral-100);
-    --popover: color-mix(in srgb, var(--background) 97%, var(--color-white));
-    --popover-foreground: var(--color-neutral-100);
-    --primary: oklch(0.571 0.21 264);
-    --secondary: --alpha(var(--color-white) / 3%);
-    --secondary-foreground: var(--color-neutral-100);
-    --muted: --alpha(var(--color-white) / 3%);
-    --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-white));
-    --accent: --alpha(var(--color-white) / 4%);
-    --accent-foreground: var(--color-neutral-100);
-    --error: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
-    --error-foreground: var(--color-red-400);
-    --tool-error-icon: #fca5a5;
-    --error-surface: color-mix(in srgb, var(--error) 16%, transparent);
-    --border: --alpha(var(--color-white) / 10%);
-    --input: --alpha(var(--color-white) / 14%);
-    --info-foreground: var(--color-blue-300);
-    --success-foreground: var(--color-emerald-300);
-    --warning-foreground: #d9a93f;
-    --warning-surface: color-mix(in srgb, var(--warning) 16%, transparent);
-    --update-foreground: var(--primary);
-    --update-surface: color-mix(in srgb, var(--update) 18%, transparent);
-    --sidebar: #101214;
-    --sidebar-control-surface: #1d2024;
-    --sidebar-row-hover: #1e2126;
-    --sidebar-row-active: #262b31;
-    --sidebar-row-selected: #23272c;
+    /* Warm near-black, layered by tone. Never pure black, never blue-charcoal. */
+    --accent-ink: #e08a63;
+
+    --background: #0c0d0e;
+    --surface-raised: #121415;
+    --foreground: #f4f1ed;
+    --card: #121415;
+    --card-foreground: #f4f1ed;
+    --popover: #191b1d;
+    --popover-foreground: #f4f1ed;
+    --primary: #e08a63;
+    --primary-foreground: #20120d;
+    --secondary: #151719;
+    --secondary-foreground: #f4f1ed;
+    --muted: #151719;
+    --muted-foreground: #b1afad;
+    --placeholder: #808080;
+    --secondary-label: #b1afad;
+    --icon-muted: #949597;
+    --message-surface: #151719;
+    --message-foreground: #f4f1ed;
+    --message-action: #e08a63;
+    --message-action-foreground: #20120d;
+    --message-action-hover: #f09a70;
+    --accent: rgb(224 138 99 / 12%);
+    --accent-foreground: #f4f1ed;
+    --error: #f0646e;
+    --error-foreground: #f6a3a9;
+    --tool-error-icon: #f6a3a9;
+    --error-surface: rgb(240 100 110 / 10%);
+    --border: rgb(255 255 255 / 10%);
+    --border-strong: rgb(255 255 255 / 16%);
+    --input: rgb(255 255 255 / 14%);
+    --info: #a1a7af;
+    --info-foreground: #a1a7af;
+    --success: #83d7a3;
+    --success-foreground: #83d7a3;
+    --warning: #e6a066;
+    --warning-foreground: #e9b389;
+    --warning-surface: rgb(230 160 102 / 10%);
+    --update: var(--primary);
+    --update-foreground: #e08a63;
+    --update-surface: rgb(224 138 99 / 12%);
+    --sidebar: #0e0f10;
+    --sidebar-control-surface: #151719;
+    --sidebar-row-hover: #1e2022;
+    --sidebar-row-active: #242322;
+    --sidebar-row-selected: #242322;
     --sidebar-stage-fade: var(--card);
-    --terminal-cursor: #d9a93f;
-    --terminal-selection-background: rgb(201 154 46 / 28%);
+    --terminal-cursor: #e08a63;
+    --terminal-selection-background: rgb(224 138 99 / 26%);
   }
 }
 
@@ -1099,45 +1257,45 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
    graphite hierarchy: warm paper navigation in light, graphite in dark, with
    white/graphite selected surfaces. */
 [data-app-sidebar] {
-  --background: #faf7f1;
-  --foreground: #1d1a15;
-  --card: #fffdf8;
-  --card-foreground: #1d1a15;
-  --accent: #eae2d1;
-  --accent-foreground: #1d1a15;
-  --muted: #f1ebe0;
-  --muted-foreground: #6f665a;
-  --border: #e0d7c3;
-  --input: #cfc4ab;
-  --sidebar: #f2ecdf;
-  --sidebar-foreground: #1d1a15;
-  --sidebar-muted-foreground: #6f665a;
-  --sidebar-control-surface: #e8dfcc;
-  --sidebar-row-hover: #e9e1cf;
-  --sidebar-row-active: #fffdf8;
-  --sidebar-row-selected: #fffdf8;
-  --sidebar-border: #e0d7c3;
+  --background: #fcf9f4;
+  --foreground: #151311;
+  --card: #fffdfa;
+  --card-foreground: #151311;
+  --accent: rgb(224 138 99 / 10%);
+  --accent-foreground: #151311;
+  --muted: #f6f0e9;
+  --muted-foreground: #696b70;
+  --border: rgb(56 43 35 / 8%);
+  --input: rgb(56 43 35 / 16%);
+  --sidebar: #f8f4ee;
+  --sidebar-foreground: #151311;
+  --sidebar-muted-foreground: #696b70;
+  --sidebar-control-surface: #f6f0e9;
+  --sidebar-row-hover: #f2ebe4;
+  --sidebar-row-active: #ece2d9;
+  --sidebar-row-selected: #ece2d9;
+  --sidebar-border: rgb(56 43 35 / 8%);
   --sidebar-stage-fade: var(--sidebar);
 
   @variant dark {
-    --background: #101214;
-    --foreground: #e9e6df;
-    --card: #101214;
+    --background: #0c0d0e;
+    --foreground: #f4f1ed;
+    --card: #121415;
     --card-foreground: var(--foreground);
-    --accent: #1e2126;
-    --accent-foreground: #e9e6df;
-    --muted: #1d2024;
-    --muted-foreground: #a39b8d;
-    --border: rgb(255 255 255 / 10%);
-    --input: rgb(255 255 255 / 16%);
-    --sidebar: var(--card);
+    --accent: rgb(224 138 99 / 10%);
+    --accent-foreground: #f4f1ed;
+    --muted: #151719;
+    --muted-foreground: #b1afad;
+    --border: rgb(255 255 255 / 6.5%);
+    --input: rgb(255 255 255 / 14%);
+    --sidebar: #0e0f10;
     --sidebar-foreground: var(--foreground);
     --sidebar-muted-foreground: var(--muted-foreground);
     --sidebar-control-surface: var(--muted);
-    --sidebar-row-hover: color-mix(in srgb, var(--contrast-foreground) 8%, transparent);
-    --sidebar-row-active: color-mix(in srgb, var(--contrast-foreground) 11%, transparent);
-    --sidebar-row-selected: color-mix(in srgb, var(--contrast-foreground) 7%, transparent);
-    --sidebar-border: var(--border);
+    --sidebar-row-hover: #1e2022;
+    --sidebar-row-active: #242322;
+    --sidebar-row-selected: #1e2022;
+    --sidebar-border: rgb(255 255 255 / 6.5%);
     --sidebar-stage-fade: var(--card);
   }
 }

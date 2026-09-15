@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import indexHtml from "../index.html?raw";
 import {
+  CIRCE_THEME,
   CUSTOM_THEMES_STORAGE_KEY,
   getDefaultThemeColors,
   getThemeColorsForMode,
+  getThemeDefinition,
   invalidateCustomThemes,
   isKnownThemePreference,
   resolveThemeAppearance,
@@ -343,25 +345,31 @@ describe("index.html boot script", () => {
   // palette change breaks this test until the copy in index.html is updated.
   it("keeps every built-in boot splash in sync with the real palettes", () => {
     for (const theme of [T3_CHAT_THEME, GROVE_THEME, OCEAN_THEME, EMBER_THEME, IRIS_THEME]) {
-      // The boot script resolves every built-in from a light base appearance.
-      expect(theme.appearance).toBe("light");
+      // The web layer overrides the flagship id with the Circe palette, so the
+      // boot copy must track the resolved built-in rather than the shared
+      // source object. The boot script resolves every built-in from light.
+      const definition = getThemeDefinition(theme.id)!;
+      expect(definition).not.toBeNull();
+      expect(definition.appearance).toBe("light");
       for (const mode of ["light", "dark"] as const) {
-        const colors = getThemeColorsForMode(theme, mode);
+        const colors = getThemeColorsForMode(definition, mode);
         expect(colors).not.toBeNull();
         const boot = runBootScript({
           storage: {
-            [THEME_STORAGE_KEY]: theme.id,
+            [THEME_STORAGE_KEY]: definition.id,
             [THEME_APPEARANCE_MODE_STORAGE_KEY]: mode,
           },
           prefersDark: mode === "dark",
         });
-        expect(boot.themeId).toBe(theme.id);
+        expect(boot.themeId).toBe(definition.id);
         expect(boot.isDark).toBe(mode === "dark");
-        expect(boot.bootVariables["--boot-background"]).toBe(colors!.canvas);
-        expect(boot.bootVariables["--boot-foreground"]).toBe(colors!.text);
-        expect(boot.bootVariables["--boot-accent"]).toBe(colors!.accent);
-        expect(boot.backgroundColor).toBe(colors!.chrome);
-        expect(boot.metaContent).toBe(colors!.chrome);
+        // The boot copy keeps literal CSS while the runtime canonicalizes to
+        // oklch, so compare canonical forms on both sides.
+        expect(toCanonicalThemeColor(boot.bootVariables["--boot-background"])).toBe(colors!.canvas);
+        expect(toCanonicalThemeColor(boot.bootVariables["--boot-foreground"])).toBe(colors!.text);
+        expect(toCanonicalThemeColor(boot.bootVariables["--boot-accent"])).toBe(colors!.accent);
+        expect(toCanonicalThemeColor(boot.backgroundColor)).toBe(colors!.chrome);
+        expect(toCanonicalThemeColor(boot.metaContent)).toBe(colors!.chrome);
       }
     }
   });
@@ -383,8 +391,8 @@ describe("index.html boot script", () => {
     const light = runBootScript({ storage, prefersDark: false });
     expect(light.isDark).toBe(false);
     expect(light.themeId).toBe("t3-chat");
-    expect(light.bootVariables["--boot-background"]).toBe(
-      getThemeColorsForMode(T3_CHAT_THEME, "light")!.canvas,
+    expect(toCanonicalThemeColor(light.bootVariables["--boot-background"])).toBe(
+      getThemeColorsForMode(CIRCE_THEME, "light")!.canvas,
     );
   });
 
@@ -493,8 +501,8 @@ describe("index.html boot script", () => {
 
     expect(boot.themeId).toBeUndefined();
     expect(boot.themeSelected).toBeUndefined();
-    expect(boot.backgroundColor).toBe("#ffffff");
-    expect(boot.metaContent).toBe("#ffffff");
+    expect(boot.backgroundColor).toBe("#fcf9f4");
+    expect(boot.metaContent).toBe("#fcf9f4");
   });
 
   it("leaves unknown preferences unthemed so the runtime default applies", () => {

@@ -176,6 +176,10 @@ function RootRouteView() {
     </CommandPalette>
   );
 
+  // The control center and device console own the whole window: their rail is
+  // the navigation, so the thread sidebar would be a second, competing rail.
+  const fullWindowWorkspace = pathname === "/circe" || pathname === "/devices";
+
   // FirstRunGate holds back everything below it — including EventRouter,
   // whose welcome payload navigates into a thread — until the first-run
   // decision is known, so a fresh install renders nothing (not the shell,
@@ -207,7 +211,13 @@ function RootRouteView() {
           ) : null}
           {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
           {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
-          {appShell}
+          {fullWindowWorkspace ? (
+            <CommandPalette>
+              <Outlet />
+            </CommandPalette>
+          ) : (
+            appShell
+          )}
           {/* Above the router: a theme draft is judged by walking the app, so the
               editor has to survive navigation away from settings. */}
           <ThemeEditorHost />
