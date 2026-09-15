@@ -275,6 +275,7 @@ import {
 import {
   CirceLiveVoiceCreateInput,
   CirceLiveVoiceReleaseInput,
+  CirceLiveVoiceRenewInput,
   CirceLiveVoiceCreateResult,
   CirceLiveVoiceInvalidInputError,
   CirceLiveVoiceRuntimeError,
@@ -296,6 +297,7 @@ export const WS_METHODS = {
   circeQuickLookup: "circe.quickLookup",
   circeVoiceLiveStart: "circe.voiceLiveStart",
   circeVoiceLiveRelease: "circe.voiceLiveRelease",
+  circeVoiceLiveRenew: "circe.voiceLiveRenew",
 
   // Project registry methods
   projectsList: "projects.list",
@@ -527,6 +529,17 @@ const WsCirceQuickLookupRpc = Rpc.make(WS_METHODS.circeQuickLookup, {
 
 const WsCirceVoiceLiveReleaseRpc = Rpc.make(WS_METHODS.circeVoiceLiveRelease, {
   payload: CirceLiveVoiceReleaseInput,
+  success: Schema.Void,
+  error: Schema.Union([
+    CirceLiveVoiceInvalidInputError,
+    CirceLiveVoiceUnavailableError,
+    CirceLiveVoiceRuntimeError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+const WsCirceVoiceLiveRenewRpc = Rpc.make(WS_METHODS.circeVoiceLiveRenew, {
+  payload: CirceLiveVoiceRenewInput,
   success: Schema.Void,
   error: Schema.Union([
     CirceLiveVoiceInvalidInputError,
@@ -1404,6 +1417,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsCirceQuickLookupRpc,
   WsCirceVoiceLiveStartRpc,
   WsCirceVoiceLiveReleaseRpc,
+  WsCirceVoiceLiveRenewRpc,
   WsServerSetEnvironmentLabelRpc,
   WsCirceExecuteRpc,
   WsCirceInterpretRpc,
@@ -1418,6 +1432,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsCirceQuickLookupRpc,
   WsCirceVoiceLiveStartRpc,
   WsCirceVoiceLiveReleaseRpc,
+  WsCirceVoiceLiveRenewRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerSetEnvironmentLabelRpc,
@@ -1564,6 +1579,7 @@ export const CirceWsRpcGroup = RpcGroup.make(
   WsCirceQuickLookupRpc,
   WsCirceVoiceLiveStartRpc,
   WsCirceVoiceLiveReleaseRpc,
+  WsCirceVoiceLiveRenewRpc,
 );
 
 /** Generic T3 RPCs; product handlers are supplied by their composition layer. */
@@ -1581,4 +1597,5 @@ export const T3WsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.circeQuickLookup,
   WS_METHODS.circeVoiceLiveStart,
   WS_METHODS.circeVoiceLiveRelease,
+  WS_METHODS.circeVoiceLiveRenew,
 );

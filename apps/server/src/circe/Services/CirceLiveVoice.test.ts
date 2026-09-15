@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import { TestClock } from "effect/testing";
 import { EnvironmentId } from "@t3tools/contracts";
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
@@ -252,6 +253,33 @@ describe("cloud live voice lifecycle", () => {
           "Bearer environment-secret",
         ],
       ]);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+  it.effect("closes a session whose renderer stopped renewing", () => {
+    const { serviceLayer, calls } = cloudFixture(() => Response.json(answer));
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* service.createSession(input);
+      // No renewals arrive: the lease lapses and the server closes the session
+      // on its own timer, independent of any client-side close.
+      yield* TestClock.adjust("2 minutes");
+      yield* service.sweepExpired();
+      expect(calls.filter((call) => call.method === "DELETE").map((call) => call.url)).toEqual([
+        "https://relay.example/v1/environments/node-one/live-voice/sessions/cloud_1",
+      ]);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+  it.effect("keeps a session open while its renderer renews the lease", () => {
+    const { serviceLayer, calls } = cloudFixture(() => Response.json(answer));
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* service.createSession(input);
+      for (let beat = 0; beat < 3; beat += 1) {
+        yield* TestClock.adjust("40 seconds");
+        yield* service.renewSession({ sessionId: answer.sessionId });
+      }
+      yield* service.sweepExpired();
+      expect(calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
     }).pipe(Effect.provide(serviceLayer));
   });
   it.effect("reads links at request time and validates before contacting the relay", () => {

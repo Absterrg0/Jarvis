@@ -37,10 +37,14 @@ const query = (sql: SQL) => dialect.sqlToQuery(sql);
 
 function matchesSession(condition: SQL, row: SessionRow): boolean {
   const { sql: text, params } = query(condition);
-  if (row.userId !== params[0]) return false;
-  if (text.includes('"reservation_id"') && row.reservationId !== params[1]) return false;
-  if (text.includes('"session_id"') && row.sessionId !== params[1]) return false;
-  if (text.includes('"expires_at"') && row.expiresAt > String(params[1])) return false;
+  let index = 0;
+  if (text.includes('"user_id"')) {
+    if (row.userId !== params[index]) return false;
+    index += 1;
+  }
+  if (text.includes('"reservation_id"') && row.reservationId !== params[index]) return false;
+  if (text.includes('"expires_at"') && row.expiresAt > String(params[index])) return false;
+  if (text.includes('"session_id"') && row.sessionId !== params[index]) return false;
   return true;
 }
 
@@ -153,7 +157,11 @@ function makeFakeDb(
               Effect.sync(() =>
                 [...sessions.values()]
                   .filter((row) => matchesSession(sql, row))
-                  .map((row) => ({ sessionId: row.sessionId, reservationId: row.reservationId })),
+                  .map((row) => ({
+                    userId: row.userId,
+                    sessionId: row.sessionId,
+                    reservationId: row.reservationId,
+                  })),
               ),
           };
         },
@@ -423,6 +431,69 @@ describe("LiveVoiceSessions", () => {
     }).pipe(
       Effect.provide(
         makeLayer({ db, links: makeLinks(["user-1"]), upstream: service, apiKey: "sk-test" }),
+      ),
+    );
+  });
+
+  it.effect("sweeps expired sessions for every account on the server timer", () => {
+    const { db, sessions } = makeFakeDb([
+      {
+        userId: "user-1",
+        reservationId: "r-1",
+        sessionId: "sess_expired_1",
+        environmentId: "env-1",
+        expiresAt: "1969-01-01T00:00:00.000Z",
+        createdAt: "1999-01-01T00:00:00.000Z",
+      },
+      {
+        userId: "user-2",
+        reservationId: "r-2",
+        sessionId: "sess_expired_2",
+        environmentId: "env-2",
+        expiresAt: "1969-01-01T00:00:00.000Z",
+        createdAt: "1999-01-01T00:00:00.000Z",
+      },
+      {
+        userId: "user-3",
+        reservationId: "r-3",
+        sessionId: "sess_live",
+        environmentId: "env-3",
+        expiresAt: "2999-01-01T00:00:00.000Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        userId: "user-4",
+        reservationId: "r-4",
+        sessionId: null,
+        environmentId: "env-4",
+        expiresAt: "1969-01-01T00:00:00.000Z",
+        createdAt: "1999-01-01T00:00:00.000Z",
+      },
+    ]);
+    const { service, active } = makeUpstream();
+    active.add("sess_expired_1");
+    active.add("sess_expired_2");
+    active.add("sess_live");
+    return Effect.gen(function* () {
+      const voice = yield* LiveVoiceSessions.LiveVoiceSessions;
+      yield* voice.sweepExpired();
+      // Every expired known session closed across accounts; the live one stays.
+      expect(active.has("sess_expired_1")).toBe(false);
+      expect(active.has("sess_expired_2")).toBe(false);
+      expect(active.has("sess_live")).toBe(true);
+      expect(sessions.has("user-1")).toBe(false);
+      expect(sessions.has("user-2")).toBe(false);
+      expect(sessions.has("user-3")).toBe(true);
+      // An unknown upstream identity is never freed by a guess.
+      expect(sessions.has("user-4")).toBe(true);
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          db,
+          links: makeLinks(["user-1", "user-2", "user-3", "user-4"]),
+          upstream: service,
+          apiKey: "sk-test",
+        }),
       ),
     );
   });

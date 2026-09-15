@@ -30,6 +30,15 @@ export const CirceLiveVoiceReleaseInput = Schema.Struct({
 });
 export type CirceLiveVoiceReleaseInput = typeof CirceLiveVoiceReleaseInput.Type;
 
+/**
+ * Renderer liveness for one active session. The node closes a session whose
+ * lease lapses, so a killed or sleeping renderer cannot leave it billing.
+ */
+export const CirceLiveVoiceRenewInput = Schema.Struct({
+  sessionId: TrimmedNonEmptyString,
+});
+export type CirceLiveVoiceRenewInput = typeof CirceLiveVoiceRenewInput.Type;
+
 export const CirceLiveVoiceCreateResult = Schema.Struct({
   /** Cloud sessions must be closed through the node to free their relay reservation. */
   releaseRequired: Schema.optionalKey(Schema.Boolean),

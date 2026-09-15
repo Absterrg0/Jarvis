@@ -342,6 +342,17 @@ export const ApiLive = Api.make(
     yield* Cloudflare.Workers.cron("*/5 * * * *", () =>
       DpopProofs.DpopProofReplay.pipe(
         Effect.flatMap((dpopProofs) => dpopProofs.pruneExpired),
+        // Close expired cloud voice reservations on the server's own timer, so
+        // a killed renderer or node cannot leave a session billing until the
+        // next account create. Closure is confirmed upstream before freeing.
+        Effect.andThen(
+          LiveVoiceSessions.LiveVoiceSessions.pipe(
+            Effect.flatMap((sessions) => sessions.sweepExpired()),
+            Effect.catch((error) =>
+              Effect.logWarning("Cloud voice expired-session sweep failed", { error }),
+            ),
+          ),
+        ),
         // Terminal thread rows are kept briefly so finished agents show as
         // Done/Failed in the Live Activity; sweep them once they age out.
         Effect.andThen(

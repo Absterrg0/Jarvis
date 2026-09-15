@@ -97,10 +97,18 @@ Data-channel events can be observed in the browser devtools WebRTC internals or 
   against the running session. Ending the session cleanly (`session.close` then `session.closed`)
   finalizes usage. A dropped connection leaves final usage unconfirmed.
 - The client ends a session after 60 seconds without user speech and after 10 minutes at most, and
-  releases the microphone immediately on stop. The timers are client-side: a killed renderer or a
-  sleeping machine can leave a session billing until the relay or provider closes it. Cloud
-  cleanup uses `POST /v1/live/sessions/{session_id}/hangup`; local-key sessions close over their
-  data channel.
+  releases the microphone immediately on stop. Those client timers are the fast path.
+- The node and the relay also own server-side timers, so a killed or sleeping renderer cannot leave
+  a session billing. While a session is live the renderer renews a server-side lease through the
+  node every 20 seconds; the node closes any session whose lease lapses (three missed renewals) or
+  whose 12-minute ceiling passes. Cloud sessions close over their original authenticated relay
+  route; local-key sessions close straight against the provider with the node's key. Every closure
+  is confirmed with `POST /v1/live/sessions/{session_id}/hangup` before anything is treated as
+  ended.
+- The relay independently sweeps expired cloud reservations on its scheduled cron, across every
+  account, so billing stays bounded even if the node itself dies. A reservation is freed only after
+  confirmed upstream closure; a reservation whose upstream id is unknown is surfaced for the
+  recovery procedure below instead of being guessed away.
 - If the data channel closes unexpectedly, the renderer reports the failure and stops
   automatically. Pressing **Live conversation** starts a fresh session; work already accepted by the
   Director continues on the node.

@@ -16,6 +16,8 @@ import { LiveVoiceUpstream } from "./LiveVoiceUpstream.ts";
 
 /** When to attempt closure after a device disappears; never proof of closure. */
 const LIVE_VOICE_SESSION_TTL_MILLIS = 10 * 60_000;
+/** Expired reservations closed per sweep pass, so one pass never monopolizes a request. */
+const LIVE_VOICE_SWEEP_BATCH = 50;
 /** Sessions one account may start in the rolling usage window. */
 export const DEFAULT_LIVE_VOICE_SESSION_LIMIT = 60;
 const LIVE_VOICE_USAGE_WINDOW_MILLIS = 24 * 60 * 60_000;
@@ -88,6 +90,12 @@ export interface LiveVoiceSessionsShape {
     readonly environmentId: string;
     readonly sessionId: string;
   }) => Effect.Effect<void, LiveVoiceSessionsError>;
+  /**
+   * Close every expired reservation, not only the requesting account's. The
+   * scheduled sweep is the server-side timer that bounds billing after a killed
+   * renderer or node; a reservation is freed only after confirmed closure.
+   */
+  readonly sweepExpired: () => Effect.Effect<void, LiveVoiceSessionsError>;
 }
 
 export class LiveVoiceSessions extends Context.Service<LiveVoiceSessions, LiveVoiceSessionsShape>()(
@@ -382,6 +390,53 @@ export const make = Effect.gen(function* () {
           ),
         );
       yield* deleteReservation(userId, row.reservationId);
+    }),
+
+    sweepExpired: Effect.fn("relay.live_voice.sweep_expired")(function* () {
+      const liveVoice = configuration.liveVoice;
+      const publicKey = liveVoice?.apiKey ?? null;
+      // Without a deployment key no cloud session can exist; the sweep has
+      // nothing to close.
+      if (publicKey === null) return;
+      const nowIso = DateTime.formatIso(yield* DateTime.now);
+      const rows = yield* db
+        .select({
+          userId: relayLiveVoiceSessions.userId,
+          reservationId: relayLiveVoiceSessions.reservationId,
+          sessionId: relayLiveVoiceSessions.sessionId,
+        })
+        .from(relayLiveVoiceSessions)
+        .where(lte(relayLiveVoiceSessions.expiresAt, nowIso))
+        .limit(LIVE_VOICE_SWEEP_BATCH)
+        .pipe(Effect.mapError(persistence("sweep-expired")));
+      for (const row of rows) {
+        // A null id is uncertainty, never proof that nothing was created. The
+        // sweep cannot close it and must not free the slot; surface it for the
+        // operator recovery procedure instead.
+        if (!row.sessionId) {
+          yield* Effect.logWarning("Cloud voice expired reservation has no upstream id", {
+            userId: row.userId,
+            reservationId: row.reservationId,
+          });
+          continue;
+        }
+        const ended = yield* upstream.end({ apiKey: publicKey, sessionId: row.sessionId }).pipe(
+          Effect.as(true),
+          Effect.catch(() => Effect.succeed(false)),
+        );
+        if (ended) {
+          yield* deleteReservation(row.userId, row.reservationId).pipe(
+            Effect.catch(() => Effect.void),
+          );
+        } else {
+          // Keep the slot: a still-live session must never be freed by a guess.
+          yield* Effect.logWarning("Cloud voice sweep could not confirm upstream closure", {
+            userId: row.userId,
+            reservationId: row.reservationId,
+            sessionId: row.sessionId,
+          });
+        }
+      }
     }),
   });
 });

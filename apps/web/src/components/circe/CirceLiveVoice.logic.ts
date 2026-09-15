@@ -52,6 +52,12 @@ export const CIRCE_LIVE_VOICE_DELEGATION_RETRY_MS = 2_500;
 export const CIRCE_LIVE_VOICE_DEFAULT_IDLE_TIMEOUT_MS = 60_000;
 /** 10 minutes hard cap on one billed session. */
 export const CIRCE_LIVE_VOICE_DEFAULT_MAX_SESSION_MS = 10 * 60_000;
+/**
+ * How often the renderer renews its server-side lease. Three missed beats close
+ * the session on the node, so a killed or sleeping renderer cannot leave it
+ * billing on client timers alone.
+ */
+export const CIRCE_LIVE_VOICE_DEFAULT_RENEW_INTERVAL_MS = 20_000;
 /** Bounded startup so a stuck mic, ICE, or RPC cannot hang the button. */
 export const CIRCE_LIVE_VOICE_DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 
@@ -117,6 +123,13 @@ export interface CirceLiveVoiceBrowser {
 
 export interface CirceLiveVoiceControllerOptions {
   readonly release?: (sessionId: string) => Promise<void>;
+  /**
+   * Renew the server-side lease on the active session. The node closes a
+   * session whose lease lapses, so this is what keeps it alive and lets the
+   * server end it after a killed or sleeping renderer.
+   */
+  readonly renew?: (sessionId: string) => Promise<void>;
+  readonly renewIntervalMs?: number;
   readonly start: (input: {
     readonly sdpOffer: string;
     readonly context?: string;
@@ -284,6 +297,7 @@ export function createCirceLiveVoiceController(
   const idleTimeoutMs = options.idleTimeoutMs ?? CIRCE_LIVE_VOICE_DEFAULT_IDLE_TIMEOUT_MS;
   const maxSessionMs = options.maxSessionMs ?? CIRCE_LIVE_VOICE_DEFAULT_MAX_SESSION_MS;
   const startupTimeoutMs = options.startupTimeoutMs ?? CIRCE_LIVE_VOICE_DEFAULT_STARTUP_TIMEOUT_MS;
+  const renewIntervalMs = options.renewIntervalMs ?? CIRCE_LIVE_VOICE_DEFAULT_RENEW_INTERVAL_MS;
   const now = options.now ?? Date.now;
   let status: CirceLiveVoiceStatus = "idle";
   let transcript = createCirceLiveVoiceTranscript();
@@ -365,6 +379,8 @@ export function createCirceLiveVoiceController(
   let maxTimer: TimeoutHandle | null = null;
   let closeTimer: TimeoutHandle | null = null;
   let deferralTimer: TimeoutHandle | null = null;
+  let renewTimer: ReturnType<typeof setInterval> | null = null;
+  let liveSessionId: string | null = null;
   let deferredDelegationId: string | null = null;
   let lastUserSpeechAt = 0;
   // Speak a short cue the moment the line is live, so the user knows when
@@ -413,12 +429,19 @@ export function createCirceLiveVoiceController(
     deferralTimer = clearTimer(deferralTimer);
     deferredDelegationId = null;
   };
+  const clearRenewTimer = () => {
+    if (renewTimer !== null) {
+      clearInterval(renewTimer);
+      renewTimer = null;
+    }
+  };
   const clearSessionTimers = () => {
     clearStartupTimer();
     clearIdleTimer();
     clearMaxTimer();
     clearCloseTimer();
     clearDeferral();
+    clearRenewTimer();
   };
 
   // Reads through the mutable closure so an event received during an await
@@ -441,6 +464,7 @@ export function createCirceLiveVoiceController(
   const teardown = () => {
     releaseCloudSession();
     clearSessionTimers();
+    liveSessionId = null;
     stopLevelMeter();
     awaitingDelegation = false;
     const pendingResolve = resolveClosed;
@@ -568,6 +592,21 @@ export function createCirceLiveVoiceController(
     }, startupTimeoutMs);
   };
 
+  // Keeps the node's lease fresh while the session is live. If this renderer is
+  // killed or suspended, the renewals stop and the node closes the session on
+  // its own timer instead of leaving it billing.
+  const scheduleRenew = () => {
+    clearRenewTimer();
+    const renew = options.renew;
+    if (renew === undefined || renewIntervalMs <= 0) return;
+    const gen = generation;
+    renewTimer = setInterval(() => {
+      const sessionId = liveSessionId;
+      if (gen !== generation || sessionId === null || readStatus() !== "live") return;
+      void renew(sessionId).catch(() => undefined);
+    }, renewIntervalMs);
+  };
+
   const waitForIceGathering = (
     nextPeer: CirceLiveVoicePeerConnection,
     timeoutMs: number,
@@ -681,6 +720,7 @@ export function createCirceLiveVoiceController(
           append("commentary", "Hey, Circe here. Go ahead.");
         }
         scheduleIdle();
+        scheduleRenew();
         break;
       }
       case "session.input_transcript.delta":
@@ -950,6 +990,7 @@ export function createCirceLiveVoiceController(
           ...(context === undefined || context.length === 0 ? {} : { context }),
         })
         .then((result) => {
+          liveSessionId = result.sessionId;
           if (result.releaseRequired) {
             if (gen !== generation || peer !== nextPeer) void releaseSession(result.sessionId);
             else cloudSessionId = result.sessionId;

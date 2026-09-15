@@ -125,6 +125,8 @@ function deferred<T>() {
 function fixture(
   options: {
     readonly release?: (sessionId: string) => Promise<void>;
+    readonly renew?: (sessionId: string) => Promise<void>;
+    readonly renewIntervalMs?: number;
     readonly start?: (input: {
       sdpOffer: string;
       context?: string;
@@ -174,6 +176,8 @@ function fixture(
   };
   const controller = createCirceLiveVoiceController({
     ...(options.release ? { release: options.release } : {}),
+    ...(options.renew ? { renew: options.renew } : {}),
+    ...(options.renewIntervalMs === undefined ? {} : { renewIntervalMs: options.renewIntervalMs }),
     start: async (input) => {
       startCalls.push(input);
       return (
@@ -513,6 +517,35 @@ describe("Circe live voice controller", () => {
       f.peer.channel.emit({ type: "session.closed", reason: "close_requested" });
       expect(f.controller.getStatus()).toBe("idle");
       expect(f.closed).toEqual(["idle"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renews the server lease while live and stops once the session ends", async () => {
+    vi.useFakeTimers();
+    try {
+      const renews: string[] = [];
+      const f = fixture({
+        closeTimeoutMs: 1,
+        renew: async (sessionId) => {
+          renews.push(sessionId);
+        },
+        renewIntervalMs: 20_000,
+      });
+      await f.controller.start();
+      f.peer.channel.emit(started);
+      expect(renews).toEqual([]);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(renews).toEqual(["live_1"]);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(renews).toEqual(["live_1", "live_1"]);
+      // A terminal close clears the heartbeat: a dead renderer sends nothing,
+      // so the node's lease lapses and it closes the session server-side.
+      f.peer.channel.emit({ type: "session.closed", reason: "close_requested" });
+      expect(f.controller.getStatus()).toBe("idle");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(renews).toHaveLength(2);
     } finally {
       vi.useRealTimers();
     }

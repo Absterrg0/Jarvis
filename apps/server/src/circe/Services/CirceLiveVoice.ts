@@ -1,8 +1,10 @@
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
@@ -11,6 +13,7 @@ import {
   CirceLiveVoiceCreateInput,
   CirceLiveVoiceCreateResult,
   CirceLiveVoiceReleaseInput,
+  CirceLiveVoiceRenewInput,
   CirceLiveVoiceInvalidInputError,
   CirceLiveVoiceRuntimeError,
   CirceLiveVoiceUnavailableError,
@@ -27,6 +30,16 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 
 export const OPENAI_LIVE_SESSIONS_URL = "https://api.openai.com/v1/live/sessions";
 const LIVE_SESSION_TIMEOUT = "30 seconds";
+const LIVE_SESSION_END_TIMEOUT = "10 seconds";
+/**
+ * A live session must be renewed this often by its renderer. The renderer sends
+ * a heartbeat well inside this window; three missed beats close the session.
+ */
+const LIVE_SESSION_LEASE_MILLIS = 45_000;
+/** Absolute server-side ceiling, above the client's own 10-minute cap. */
+const LIVE_SESSION_MAX_MILLIS = 12 * 60_000;
+/** How often the node closes sessions whose lease lapsed. */
+const LIVE_SESSION_SWEEP_INTERVAL = "15 seconds";
 
 export interface CirceLiveVoiceShape {
   readonly releaseSession: (
@@ -35,6 +48,19 @@ export interface CirceLiveVoiceShape {
   readonly createSession: (
     input: CirceLiveVoiceCreateInput,
   ) => Effect.Effect<CirceLiveVoiceCreateResult, CirceLiveVoiceError>;
+  /**
+   * Renew one live session's server-side lease. Unknown ids are a no-op: a
+   * session that was already swept or released is never resurrected.
+   */
+  readonly renewSession: (
+    input: CirceLiveVoiceRenewInput,
+  ) => Effect.Effect<void, CirceLiveVoiceError>;
+  /**
+   * Close every live session whose lease lapsed or whose ceiling passed. This
+   * is the server-side timer that ends a session after a killed or sleeping
+   * renderer, with no dependence on client timers.
+   */
+  readonly sweepExpired: () => Effect.Effect<void, CirceLiveVoiceError>;
 }
 
 export class CirceLiveVoice extends Context.Service<CirceLiveVoice, CirceLiveVoiceShape>()(
@@ -43,6 +69,8 @@ export class CirceLiveVoice extends Context.Service<CirceLiveVoice, CirceLiveVoi
 
 const unavailableService: CirceLiveVoiceShape = {
   releaseSession: () => Effect.void,
+  renewSession: () => Effect.void,
+  sweepExpired: () => Effect.void,
   createSession: () =>
     Effect.fail(
       new CirceLiveVoiceUnavailableError({
@@ -277,8 +305,15 @@ export const layer = Layer.effect(
     );
 
     type RelayConfig = NonNullable<Effect.Success<typeof readRelayConfig>>;
-    // Retain the original route until release, even if the node is unlinked meanwhile.
-    const sessions = new Map<string, RelayConfig>();
+    interface LiveSessionLease {
+      readonly route: RelayConfig | null;
+      lastRenewedAt: number;
+      readonly deadlineAt: number;
+    }
+    // One lease per live session. The route pins the authenticated cloud path
+    // so a release after unlink still reaches the right relay; a local-key
+    // session keeps a null route and closes through the node's own key.
+    const leases = new Map<string, LiveSessionLease>();
     const executeRelay = (request: HttpClientRequest.HttpClientRequest) =>
       client.execute(request).pipe(
         Effect.flatMap(checkRelayResponse),
@@ -292,36 +327,100 @@ export const layer = Layer.effect(
         ),
       );
     const releasesToRetry = new Set<string>();
-    // Release is idempotent and safe to call for any id. An unknown id on an
-    // unlinked node is a no-op success, never an error, so a stale renderer
-    // can never wedge future sessions. Known ids always release on their
-    // original authenticated route, even after an unlink.
-    const releaseSession: CirceLiveVoiceShape["releaseSession"] = ({ sessionId }) =>
-      Effect.gen(function* () {
-        const known = sessions.get(sessionId);
-        const config = known ?? (yield* readRelayConfig);
-        if (config === null) {
-          releasesToRetry.delete(sessionId);
-          return;
-        }
-        yield* executeRelay(
-          HttpClientRequest.delete(`${config.endpoint}/${encodeURIComponent(sessionId)}`).pipe(
-            HttpClientRequest.setHeader("Authorization", `Bearer ${config.environmentCredential}`),
-          ),
-        ).pipe(
-          Effect.tapError(() =>
-            // The slot may still be held: retry on the next cloud create.
-            Effect.sync(() => releasesToRetry.add(sessionId)),
+    // Local-key sessions have no relay reservation. Close them straight against
+    // the provider with the node's own key, using the same confirmed-closure
+    // proof the relay uses (`session_id_not_found`).
+    const endLocalSession = (apiKey: string, sessionId: string) =>
+      client
+        .execute(
+          HttpClientRequest.post(
+            `${OPENAI_LIVE_SESSIONS_URL}/${encodeURIComponent(sessionId)}/hangup`,
+          ).pipe(HttpClientRequest.setHeader("Authorization", `Bearer ${apiKey}`)),
+        )
+        .pipe(
+          Effect.flatMap((response) => {
+            if (response.status >= 200 && response.status < 300) return Effect.void;
+            if (response.status === 404) {
+              return HttpClientResponse.schemaBodyJson(
+                Schema.Struct({
+                  error: Schema.Struct({ code: Schema.Literal("session_id_not_found") }),
+                }),
+              )(response).pipe(Effect.asVoid);
+            }
+            return HttpClientResponse.filterStatusOk(response).pipe(Effect.asVoid);
+          }),
+          Effect.timeout(LIVE_SESSION_END_TIMEOUT),
+          Effect.mapError(
+            () =>
+              new CirceLiveVoiceRuntimeError({
+                message: "The live voice session could not be closed.",
+              }),
           ),
         );
-        sessions.delete(sessionId);
-        releasesToRetry.delete(sessionId);
+    // Release is idempotent and safe to call for any id. An unknown id on an
+    // unlinked node closes upstream when a key is present and otherwise
+    // succeeds without contacting anyone, so a stale renderer can never wedge
+    // future sessions. Known ids always release on their original route.
+    const releaseSession: CirceLiveVoiceShape["releaseSession"] = ({ sessionId }) =>
+      Effect.gen(function* () {
+        const known = leases.get(sessionId);
+        const config = known === undefined ? yield* readRelayConfig : known.route;
+        if (config !== null) {
+          yield* executeRelay(
+            HttpClientRequest.delete(`${config.endpoint}/${encodeURIComponent(sessionId)}`).pipe(
+              HttpClientRequest.setHeader(
+                "Authorization",
+                `Bearer ${config.environmentCredential}`,
+              ),
+            ),
+          ).pipe(
+            Effect.tapError(() =>
+              // The slot may still be held: retry on the next cloud create.
+              Effect.sync(() => releasesToRetry.add(sessionId)),
+            ),
+          );
+          releasesToRetry.delete(sessionId);
+        } else {
+          const settings = yield* settingsService.getSettings.pipe(
+            Effect.orElseSucceed(() => null),
+          );
+          const apiKey = settings?.circeLiveVoice.apiKey.trim() ?? "";
+          if (apiKey.length > 0) {
+            yield* endLocalSession(apiKey, sessionId).pipe(
+              Effect.tapError(() => Effect.sync(() => releasesToRetry.add(sessionId))),
+            );
+            releasesToRetry.delete(sessionId);
+          } else {
+            releasesToRetry.delete(sessionId);
+          }
+        }
+        leases.delete(sessionId);
       });
-    return CirceLiveVoice.of({
+    const renewSession: CirceLiveVoiceShape["renewSession"] = ({ sessionId }) =>
+      Effect.gen(function* () {
+        const nowMillis = yield* Clock.currentTimeMillis;
+        const lease = leases.get(sessionId);
+        if (lease !== undefined) lease.lastRenewedAt = nowMillis;
+      });
+    const sweepExpired: CirceLiveVoiceShape["sweepExpired"] = () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        // Snapshot first: a successful release mutates the lease map, so
+        // iterating the live map would skip sessions or miss deletions.
+        const lapsed = Array.from(leases.entries()).filter(
+          ([, lease]) =>
+            now - lease.lastRenewedAt > LIVE_SESSION_LEASE_MILLIS || now >= lease.deadlineAt,
+        );
+        for (const [sessionId] of lapsed) {
+          yield* releaseSession({ sessionId }).pipe(Effect.catch(() => Effect.void));
+        }
+      });
+    const service = CirceLiveVoice.of({
       createSession: (input) =>
         Effect.gen(function* () {
           yield* validateCirceLiveVoiceCreateInput(input);
           const relayConfig = yield* readRelayConfig;
+          const startedAt = yield* Clock.currentTimeMillis;
           if (relayConfig !== null) {
             // Drain pending releases before minting: one account holds one
             // slot. Local sessions never touch the relay, so a stuck cloud
@@ -349,7 +448,11 @@ export const layer = Layer.effect(
                   }),
               ),
             );
-            sessions.set(session.sessionId, relayConfig);
+            leases.set(session.sessionId, {
+              route: relayConfig,
+              lastRenewedAt: startedAt,
+              deadlineAt: startedAt + LIVE_SESSION_MAX_MILLIS,
+            });
             return { ...session, releaseRequired: true };
           }
           const settings = yield* settingsService.getSettings.pipe(
@@ -361,11 +464,28 @@ export const layer = Layer.effect(
                 }),
             ),
           );
-          return yield* createCirceLiveVoiceSession(input, settings.circeLiveVoice).pipe(
+          const created = yield* createCirceLiveVoiceSession(input, settings.circeLiveVoice).pipe(
             Effect.provideService(HttpClient.HttpClient, client),
           );
+          leases.set(created.sessionId, {
+            route: null,
+            lastRenewedAt: startedAt,
+            deadlineAt: startedAt + LIVE_SESSION_MAX_MILLIS,
+          });
+          return created;
         }),
       releaseSession,
+      renewSession,
+      sweepExpired,
     });
+    // The server-side timer: close any session whose renderer stopped renewing,
+    // or whose ceiling passed, regardless of any client timer. A killed or
+    // sleeping renderer can then never leave a session billing.
+    yield* sweepExpired().pipe(
+      Effect.catch((error) => Effect.logWarning("Live voice session sweep failed", { error })),
+      Effect.repeat(Schedule.spaced(LIVE_SESSION_SWEEP_INTERVAL)),
+      Effect.forkScoped,
+    );
+    return service;
   }),
 );
