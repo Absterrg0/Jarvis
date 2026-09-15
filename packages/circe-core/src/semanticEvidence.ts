@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { normalizeDestinationPhrase, stripDestinationQuotes } from "./destinationSpan.ts";
 import {
   findSourceQuoteSpans,
+  isCirceNegatedOrContractedSpan,
   isCirceNegatedSpan,
   sourceSpanOverlapsQuotes,
 } from "./destinationSpan.ts";
@@ -342,13 +343,30 @@ export function validateSemanticProposal(input: {
     }
     // A device is cited by name; the value must be spoken inside the span, the
     // same proof a destination needs. Node never authorizes a project, but a
-    // value that was never heard must never route.
-    if (ref.role === "node" && !containsName(ref.span.text, ref.value)) {
-      return {
-        status: "malformed",
-        kind: "span",
-        reason: `ref ${index}: node value not spoken in span`,
-      };
+    // value that was never heard, was quoted, or was ruled out must never route.
+    if (ref.role === "node") {
+      if (!containsName(ref.span.text, ref.value)) {
+        return {
+          status: "malformed",
+          kind: "span",
+          reason: `ref ${index}: node value not spoken in span`,
+        };
+      }
+      const quotes = findSourceQuoteSpans(source);
+      if (sourceSpanOverlapsQuotes(ref.span.start, ref.span.end, quotes)) {
+        return {
+          status: "malformed",
+          kind: "span",
+          reason: "quoted device never authorizes a route",
+        };
+      }
+      if (isCirceNegatedOrContractedSpan(source, ref.span.start)) {
+        return {
+          status: "malformed",
+          kind: "span",
+          reason: "device ruled out by negation",
+        };
+      }
     }
   }
   const ordered = [...refs].sort((left, right) => left.span.start - right.span.start);

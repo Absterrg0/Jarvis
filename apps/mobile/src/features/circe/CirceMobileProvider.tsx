@@ -1634,6 +1634,12 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
           `More than one device is named "${executeRoute.nodeQuery}". Name the project instead, or rename one device.`,
         );
         return;
+      } else if (executeRoute.status === "compound-devices") {
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        setMessage(
+          `That turn names steps on more than one device (${executeRoute.nodeLabels.join(", ")}). Run the steps one at a time.`,
+        );
+        return;
       } else {
         // Ambient covers negated-only, malformed, unknown, and pinned
         // followups. A pinned task keeps its exact project; otherwise use

@@ -1,9 +1,15 @@
 import type {
   CirceProjectRef,
   CirceSemanticProposal,
+  CirceSemanticRef,
   EnvironmentId,
   ThreadId,
 } from "@t3tools/contracts";
+import {
+  findSourceQuoteSpans,
+  isCirceNegatedOrContractedSpan,
+  sourceSpanOverlapsQuotes,
+} from "@circe/core/destinationSpan";
 import {
   foldCirceMeshName,
   circeMeshCatalogCoverage,
@@ -74,6 +80,11 @@ export type CirceExecuteRoute =
       readonly status: "device-conflict";
       readonly projects: ReadonlyArray<CirceMeshProject>;
       readonly nodeLabel: string;
+    }
+  | {
+      /** A compound turn cites steps on more than one device. */
+      readonly status: "compound-devices";
+      readonly nodeLabels: ReadonlyArray<string>;
     };
 
 export interface CirceExecuteRouteCurrent {
@@ -94,6 +105,20 @@ const matchNodes = (catalog: CirceMeshCatalog, value: string): ReadonlyArray<Cir
   if (query.length === 0) return [];
   return catalog.nodes.filter((node) => foldCirceMeshName(node.label) === query);
 };
+
+/**
+ * A cited device authorizes routing only when its value was spoken inside the
+ * span and the span is neither quoted nor in negation scope — the same host
+ * conditions authorizing destination and task evidence already get. A device
+ * mention the user ruled out or quoted never routes.
+ */
+function nodeSpanAuthorizes(source: string, ref: CirceSemanticRef): boolean {
+  if (!containsFoldedName(ref.span.text, ref.value)) return false;
+  const quotes = findSourceQuoteSpans(source);
+  if (sourceSpanOverlapsQuotes(ref.span.start, ref.span.end, quotes)) return false;
+  if (isCirceNegatedOrContractedSpan(source, ref.span.start)) return false;
+  return true;
+}
 
 function checkSpan(source: string, start: number, end: number, text: string): boolean {
   if (!Number.isInteger(start) || !Number.isInteger(end)) return false;
@@ -140,21 +165,25 @@ export function resolveCirceProposalExecuteRoute(
   if (proposal.action === "unsupported") return { status: "ambient" };
   const refs = proposal.refs;
   if (refs.length > 8) return { status: "ambient" };
+  const steps = proposal.steps ?? [];
+  const stepRefs = steps.flatMap((step) => step.refs);
   const destinations = refs.filter((ref) => ref.role === "destination");
   const corrections = refs.filter((ref) => ref.role === "correction");
-  const nodeRefs = refs.filter((ref) => ref.role === "node");
+  const topNodeRefs = refs.filter((ref) => ref.role === "node");
+  const stepNodeRefs = stepRefs.filter((ref) => ref.role === "node");
   if (
     destinations.length > 1 ||
     corrections.length > 1 ||
     destinations.length + corrections.length > 1 ||
     refs.filter((ref) => ref.role === "task").length > 1 ||
     refs.filter((ref) => ref.role === "provider").length > 1 ||
-    nodeRefs.length > 1
+    topNodeRefs.length > 1
   ) {
     return { status: "ambient" };
   }
-  // Structural proof first: every span must reproduce the source exactly,
-  // spans must not overlap, and destination wrappers must contain their name.
+  // Structural proof first: every top-level span must reproduce the source
+  // exactly and spans must not overlap. Step refs are validated per step by the
+  // execution node; the client reads only their device refs for routing.
   const ordered = [...refs].sort((a, b) => a.span.start - b.span.start);
   for (const [index, ref] of ordered.entries()) {
     const prev = ordered[index - 1];
@@ -176,33 +205,58 @@ export function resolveCirceProposalExecuteRoute(
       return { status: "ambient" };
     }
   }
-
-  // An explicitly named device is a deliberate cross-node instruction: it is
-  // consulted before the pinned-followup rule, so naming a device re-routes a
-  // followup that a bare project mention could not.
-  const nodeRef = nodeRefs[0];
+  // A compound turn carries each step's own refs. A step destination can name
+  // the carrier project when the turn is routed to a step's device.
+  const stepTarget = stepRefs.find(
+    (ref) => ref.role === "destination" || ref.role === "correction",
+  );
+  const deviceTarget = target ?? stepTarget;
+  if (
+    stepTarget !== undefined &&
+    stepTarget.role === "destination" &&
+    !containsFoldedName(stepTarget.span.text, stepTarget.value)
+  ) {
+    return { status: "ambient" };
+  }
   const matches = matchProjects(catalog, target?.value ?? "");
-  if (nodeRef !== undefined) {
-    // Device equivalent of the destination rule: the value must be spoken
-    // inside the cited span, or it is not routing evidence at all.
-    if (!containsFoldedName(nodeRef.span.text, nodeRef.value)) return { status: "ambient" };
-    const nodes = matchNodes(catalog, nodeRef.value);
-    if (nodes.length === 0) {
-      // A named device is a hard constraint: never silently run elsewhere.
-      return { status: "device-unknown", nodeLabel: nodeRef.value };
+  const nodeRefs = [...topNodeRefs, ...stepNodeRefs];
+  if (nodeRefs.length > 0) {
+    // Every cited device must be real routing evidence: value spoken in the
+    // span, not quoted, not negated. Otherwise the turn stays ambient for the
+    // execution node to clarify.
+    if (nodeRefs.some((ref) => !nodeSpanAuthorizes(source, ref))) return { status: "ambient" };
+    const resolvedNodes: Array<CirceMeshNode> = [];
+    for (const ref of nodeRefs) {
+      const nodes = matchNodes(catalog, ref.value);
+      if (nodes.length === 0) {
+        // A named device is a hard constraint: never silently run elsewhere.
+        return { status: "device-unknown", nodeLabel: ref.value };
+      }
+      if (nodes.length > 1) {
+        return {
+          status: "needs-device",
+          nodeQuery: ref.value,
+          candidates: nodes.map((candidate) => ({
+            nodeId: candidate.nodeId,
+            label: candidate.label,
+            reachability: candidate.reachability,
+          })),
+        };
+      }
+      resolvedNodes.push(nodes[0]!);
     }
-    if (nodes.length > 1) {
+    const distinctNodes = new Map<string, CirceMeshNode>();
+    for (const candidate of resolvedNodes) distinctNodes.set(candidate.nodeId, candidate);
+    if (distinctNodes.size > 1) {
+      // One execution node per compound turn, for now: refuse rather than
+      // silently run every step on the ambient node.
       return {
-        status: "needs-device",
-        nodeQuery: nodeRef.value,
-        candidates: nodes.map((node) => ({
-          nodeId: node.nodeId,
-          label: node.label,
-          reachability: node.reachability,
-        })),
+        status: "compound-devices",
+        nodeLabels: [...distinctNodes.values()].map(nodeLabelOf),
       };
     }
-    const node = nodes[0]!;
+    const node = resolvedNodes[0]!;
+    const deviceMatches = matchProjects(catalog, deviceTarget?.value ?? "");
     const currentOnNode =
       current !== null && current.projectRef.nodeId === node.nodeId
         ? catalog.projects.find((project) => sameProjectRef(project.ref, current.projectRef))
@@ -213,7 +267,7 @@ export function resolveCirceProposalExecuteRoute(
     const readiness = circeMeshNodeReadiness(node);
     if (readiness.status !== "ready") {
       // A device-only turn on the current project there is still safe.
-      if (target === undefined && currentOnNode !== undefined) {
+      if (deviceTarget === undefined && currentOnNode !== undefined) {
         return { status: "routed", project: currentOnNode };
       }
       return {
@@ -226,13 +280,13 @@ export function resolveCirceProposalExecuteRoute(
         recovery: readiness.status === "unavailable" ? readiness.recovery : "retry",
       };
     }
-    const onNode = matches.filter((project) => project.ref.nodeId === node.nodeId);
-    const offNode = matches.filter((project) => project.ref.nodeId !== node.nodeId);
+    const onNode = deviceMatches.filter((project) => project.ref.nodeId === node.nodeId);
+    const offNode = deviceMatches.filter((project) => project.ref.nodeId !== node.nodeId);
     if (onNode.length === 1) return routeToProject(catalog, onNode[0]!);
     if (onNode.length > 1) {
       return {
         status: "needs-choice",
-        projectQuery: target?.value ?? "",
+        projectQuery: deviceTarget?.value ?? "",
         candidates: onNode.map((project) => ({ ...project, label: projectLabel(project) })),
       };
     }

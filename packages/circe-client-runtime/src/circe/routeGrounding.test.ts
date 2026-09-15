@@ -298,6 +298,105 @@ describe("proposal-first execute route grounding", () => {
     });
   });
 
+  it("stays ambient when a device mention is negated", () => {
+    for (const source of [
+      "Don't do this on Laptop",
+      "Do not run this on Laptop",
+      "not on Laptop",
+    ]) {
+      expect(
+        resolveCirceProposalExecuteRoute(
+          catalog,
+          source,
+          proposal("start", [nodeRef(source, "on Laptop", "Laptop")]),
+          ambientDesktop,
+        ),
+      ).toEqual({ status: "ambient" });
+    }
+  });
+
+  it("stays ambient when a device mention is quoted", () => {
+    const source = 'Write docs saying "on Laptop"';
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        proposal("start", [nodeRef(source, '"on Laptop"', "Laptop")]),
+        ambientDesktop,
+      ),
+    ).toEqual({ status: "ambient" });
+  });
+
+  it("routes a compound turn when every step names the same device", () => {
+    const source = "On Laptop stop auth, then start deployment";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            {
+              action: "stop",
+              refs: [nodeRef(source, "on Laptop", "Laptop")],
+              model: null,
+              effort: null,
+              answer: null,
+            },
+            { action: "start", refs: [], model: null, effort: null, answer: null },
+          ],
+        },
+        ambientDesktop,
+      ),
+    ).toEqual({
+      status: "routed",
+      project: expect.objectContaining({
+        ref: { nodeId: LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
+      }),
+    });
+  });
+
+  it("refuses a compound turn whose steps name different devices", () => {
+    const source = "On Laptop stop auth, then on Desktop start deployment";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            {
+              action: "stop",
+              refs: [nodeRef(source, "on Laptop", "Laptop")],
+              model: null,
+              effort: null,
+              answer: null,
+            },
+            {
+              action: "start",
+              refs: [nodeRef(source, "on Desktop", "Desktop")],
+              model: null,
+              effort: null,
+              answer: null,
+            },
+          ],
+        },
+        ambientDesktop,
+      ),
+    ).toMatchObject({
+      status: "compound-devices",
+      nodeLabels: expect.arrayContaining(["Laptop", "Desktop"]),
+    });
+  });
+
   it("lets a named device re-route a pinned followup", () => {
     const source = "Check auth in Rivvl on Laptop";
     expect(

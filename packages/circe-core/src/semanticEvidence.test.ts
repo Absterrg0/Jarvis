@@ -326,6 +326,35 @@ describe("device evidence", () => {
     ).toMatchObject({ status: "malformed", kind: "span" });
   });
 
+  it("rejects a negated device mention", () => {
+    for (const source of ["Do not run this on Laptop", "Don't run this on Laptop"]) {
+      const at = source.indexOf("on Laptop");
+      expect(
+        validate(source, [
+          {
+            span: { start: at, end: at + "on Laptop".length, text: "on Laptop" },
+            role: "node",
+            value: "Laptop",
+          },
+        ]),
+      ).toMatchObject({ status: "malformed", kind: "span" });
+    }
+  });
+
+  it("rejects a quoted device mention", () => {
+    const source = 'Write docs saying "on Laptop"';
+    const at = source.indexOf('"on Laptop"');
+    expect(
+      validate(source, [
+        {
+          span: { start: at, end: at + '"on Laptop"'.length, text: '"on Laptop"' },
+          role: "node",
+          value: "Laptop",
+        },
+      ]),
+    ).toMatchObject({ status: "malformed", kind: "span" });
+  });
+
   it("rejects more than one node ref", () => {
     const source = "Check auth on Laptop and Desktop";
     expect(

@@ -2019,6 +2019,21 @@ export function CirceVoiceRuntime({
             });
             syncPending();
             return;
+          } else if (route.status === "compound-devices") {
+            // One execution node per compound turn for now: refuse before
+            // dispatching rather than silently running every step ambient.
+            const message = `That turn names steps on more than one device (${route.nodeLabels.join(", ")}). Run the steps one at a time.`;
+            emitFeedback({
+              text: message,
+              kind: "needs-input",
+              inputMode,
+              captureId: voiceSubmission.captureId,
+              ...(voiceSubmission.requestId === undefined
+                ? {}
+                : { requestId: voiceSubmission.requestId }),
+            });
+            syncPending();
+            return;
           }
           // Uniqueness needs a complete catalog: the check runs once the
           // submission target is known (see below), so composer entries

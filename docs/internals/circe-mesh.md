@@ -102,10 +102,17 @@ node. Every node decision is deterministic host policy:
 - A cited `destination`/`correction` names a project; the client grounds that
   name against its mesh catalog and routes to the project's owning node.
 - A cited `node` names a device and is a hard constraint. The client requires
-  the device value to be spoken inside its span (the destination rule), then
-  grounds the label. An unknown label is reported, never silently ignored. A
-  device whose own catalog is not ready (`circeMeshNodeReadiness`) is reported
-  as not ready, because its absent project proves nothing.
+  the device value to be spoken inside its span (the destination rule), and the
+  span must be neither quoted nor in negation scope — including a contracted
+  negation ("don't"), which leaves a destination eligible but rules a device
+  out. An unknown label is reported, never silently ignored. A device whose own
+  catalog is not ready (`circeMeshNodeReadiness`) is reported as not ready,
+  because its absent project proves nothing.
+- A sequence carries each step's own refs, so the client reads step `node` refs
+  too. No step node refs keeps the previous behavior; every step node ref
+  resolving to one identical device routes the whole plan there; step node refs
+  on different devices refuse the compound (`compound-devices`) before anything
+  dispatches. One execution node per compound turn, for now.
 - A device reference outranks the pinned-followup rule: naming a device is a
   deliberate cross-node instruction, while a bare project mention never steals
   a pinned task.
