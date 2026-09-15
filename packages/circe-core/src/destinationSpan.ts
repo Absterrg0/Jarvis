@@ -103,6 +103,45 @@ export function isCirceNegatedSpan(source: string, spanStart: number): boolean {
   return isInCirceNegationScope(startInRest, rest);
 }
 
+// Contracted negation heads, folded form. Kept separate from NEGATION_HEADS
+// because "Don't change the flow in Rivvl" negates the verb while Rivvl stays
+// the destination, so destination routing must not treat a contraction as a
+// ruled-out target.
+const NEGATION_CONTRACTION_HEADS = [
+  "don t",
+  "dont",
+  "doesn t",
+  "doesnt",
+  "won t",
+  "wont",
+  "can t",
+  "cant",
+  "isn t",
+  "isnt",
+  "aren t",
+  "arent",
+  "wasn t",
+  "wasnt",
+  "weren t",
+  "werent",
+];
+
+/**
+ * Stricter negation for a hard routing constraint such as a named device: true
+ * for a bare negation head or a contracted negation in the same clause. "Don't
+ * do this on Laptop" rules the device out even though the same wording leaves a
+ * destination eligible ("Don't change the flow in Rivvl" still targets Rivvl).
+ */
+export function isCirceNegatedOrContractedSpan(source: string, spanStart: number): boolean {
+  if (isCirceNegatedSpan(source, spanStart)) return true;
+  const { rest, offset } = stripCirceInvocation(source);
+  const startInRest = spanStart - offset;
+  if (startInRest < 0) return false;
+  const before = rest.slice(Math.max(0, startInRest - 48), startInRest);
+  const folded = ` ${foldForNegation(before)} `;
+  return NEGATION_CONTRACTION_HEADS.some((head) => folded.includes(` ${head} `));
+}
+
 /** True for spans the host may delete: integers, ordered, inside source. */
 export function isDeletableSpan(source: string, span: SourceSpan): boolean {
   return (

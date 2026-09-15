@@ -300,3 +300,68 @@ describe("proposal schema", () => {
     ).toThrow();
   });
 });
+
+describe("device evidence", () => {
+  it("accepts one node ref without letting it name a project", () => {
+    const source = "Check auth in Rivvl on Laptop";
+    expect(
+      validate(source, [
+        ref(source, "destination", "in Rivvl", "Rivvl"),
+        ref(source, "node", "Laptop", "Laptop"),
+      ]),
+    ).toMatchObject({ status: "valid", target: { title: "Rivvl" } });
+  });
+
+  it("rejects a node value that was not spoken in its span", () => {
+    const source = "Do it on Desktop";
+    const at = source.indexOf("on Desktop");
+    expect(
+      validate(source, [
+        {
+          span: { start: at, end: at + "on Desktop".length, text: "on Desktop" },
+          role: "node",
+          value: "Laptop",
+        },
+      ]),
+    ).toMatchObject({ status: "malformed", kind: "span" });
+  });
+
+  it("rejects a negated device mention", () => {
+    for (const source of ["Do not run this on Laptop", "Don't run this on Laptop"]) {
+      const at = source.indexOf("on Laptop");
+      expect(
+        validate(source, [
+          {
+            span: { start: at, end: at + "on Laptop".length, text: "on Laptop" },
+            role: "node",
+            value: "Laptop",
+          },
+        ]),
+      ).toMatchObject({ status: "malformed", kind: "span" });
+    }
+  });
+
+  it("rejects a quoted device mention", () => {
+    const source = 'Write docs saying "on Laptop"';
+    const at = source.indexOf('"on Laptop"');
+    expect(
+      validate(source, [
+        {
+          span: { start: at, end: at + '"on Laptop"'.length, text: '"on Laptop"' },
+          role: "node",
+          value: "Laptop",
+        },
+      ]),
+    ).toMatchObject({ status: "malformed", kind: "span" });
+  });
+
+  it("rejects more than one node ref", () => {
+    const source = "Check auth on Laptop and Desktop";
+    expect(
+      validate(source, [
+        ref(source, "node", "Laptop", "Laptop"),
+        ref(source, "node", "Desktop", "Desktop"),
+      ]),
+    ).toMatchObject({ status: "malformed", kind: "cardinality" });
+  });
+});

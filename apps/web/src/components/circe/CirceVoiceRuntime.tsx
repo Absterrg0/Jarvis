@@ -1964,6 +1964,76 @@ export function CirceVoiceRuntime({
                 : { requestId: voiceSubmission.requestId }),
             });
             throw new Error(message);
+          } else if (route.status === "device-not-ready") {
+            emitFeedback({
+              text: route.message,
+              kind: "error",
+              inputMode,
+              captureId: voiceSubmission.captureId,
+              ...(voiceSubmission.requestId === undefined
+                ? {}
+                : { requestId: voiceSubmission.requestId }),
+            });
+            throw new Error(route.message);
+          } else if (route.status === "device-unknown") {
+            const message = `I couldn't find a device named ${route.nodeLabel}.`;
+            emitFeedback({
+              text: message,
+              kind: "error",
+              inputMode,
+              captureId: voiceSubmission.captureId,
+              ...(voiceSubmission.requestId === undefined
+                ? {}
+                : { requestId: voiceSubmission.requestId }),
+            });
+            throw new Error(message);
+          } else if (route.status === "device-conflict") {
+            // A device was named and a project was named, but the project lives
+            // elsewhere. Surface the exact conflict instead of guessing.
+            const message =
+              route.projects.length === 1
+                ? `${route.projects[0]!.title} is on ${route.projects[0]!.nodeLabel}, not ${route.nodeLabel}.`
+                : `That name is on ${[...new Set(route.projects.map((project) => project.nodeLabel))].join(", ")}, not ${route.nodeLabel}.`;
+            emitFeedback({
+              text: message,
+              kind: "error",
+              inputMode,
+              captureId: voiceSubmission.captureId,
+              ...(voiceSubmission.requestId === undefined
+                ? {}
+                : { requestId: voiceSubmission.requestId }),
+            });
+            throw new Error(message);
+          } else if (route.status === "needs-device") {
+            // A label shared by several devices cannot be grounded. Ask the
+            // user to name the project instead of silently staying ambient.
+            const message = `More than one device is named "${route.nodeQuery}". Name the project instead, or rename one device.`;
+            emitFeedback({
+              text: message,
+              kind: "needs-input",
+              inputMode,
+              captureId: voiceSubmission.captureId,
+              ...(voiceSubmission.requestId === undefined
+                ? {}
+                : { requestId: voiceSubmission.requestId }),
+            });
+            syncPending();
+            return;
+          } else if (route.status === "compound-devices") {
+            // One execution node per compound turn for now: refuse before
+            // dispatching rather than silently running every step ambient.
+            const message = `That turn names steps on more than one device (${route.nodeLabels.join(", ")}). Run the steps one at a time.`;
+            emitFeedback({
+              text: message,
+              kind: "needs-input",
+              inputMode,
+              captureId: voiceSubmission.captureId,
+              ...(voiceSubmission.requestId === undefined
+                ? {}
+                : { requestId: voiceSubmission.requestId }),
+            });
+            syncPending();
+            return;
           }
           // Uniqueness needs a complete catalog: the check runs once the
           // submission target is known (see below), so composer entries
@@ -2170,6 +2240,13 @@ export function CirceVoiceRuntime({
           resolved: resolvedCoverageProject,
           routed: meshRoutedProject !== undefined,
           pinned: submissionTarget?.contextThreadId !== undefined,
+          // Only a device that actually grounded (unique + ready) makes the
+          // project name sound under partial coverage.
+          deviceGrounded:
+            meshRoutedProject !== undefined &&
+            [...meshProposal.refs, ...(meshProposal.steps ?? []).flatMap((step) => step.refs)].some(
+              (ref) => ref.role === "node",
+            ),
         });
         if (coverageConfirm.status === "confirm") {
           const requestId = voiceSubmission.requestId ?? voiceSnapshot?.requestId ?? randomUUID();

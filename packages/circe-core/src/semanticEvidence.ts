@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { normalizeDestinationPhrase, stripDestinationQuotes } from "./destinationSpan.ts";
 import {
   findSourceQuoteSpans,
+  isCirceNegatedOrContractedSpan,
   isCirceNegatedSpan,
   sourceSpanOverlapsQuotes,
 } from "./destinationSpan.ts";
@@ -37,6 +38,8 @@ export const SemanticRole = Schema.Literals([
   "excluded",
   "correction",
   "provider",
+  /** A named device; the client routes on it, the execution node ignores it. */
+  "node",
 ]);
 export type SemanticRole = typeof SemanticRole.Type;
 
@@ -338,6 +341,33 @@ export function validateSemanticProposal(input: {
         reason: `ref ${index}: destination span too long`,
       };
     }
+    // A device is cited by name; the value must be spoken inside the span, the
+    // same proof a destination needs. Node never authorizes a project, but a
+    // value that was never heard, was quoted, or was ruled out must never route.
+    if (ref.role === "node") {
+      if (!containsName(ref.span.text, ref.value)) {
+        return {
+          status: "malformed",
+          kind: "span",
+          reason: `ref ${index}: node value not spoken in span`,
+        };
+      }
+      const quotes = findSourceQuoteSpans(source);
+      if (sourceSpanOverlapsQuotes(ref.span.start, ref.span.end, quotes)) {
+        return {
+          status: "malformed",
+          kind: "span",
+          reason: "quoted device never authorizes a route",
+        };
+      }
+      if (isCirceNegatedOrContractedSpan(source, ref.span.start)) {
+        return {
+          status: "malformed",
+          kind: "span",
+          reason: "device ruled out by negation",
+        };
+      }
+    }
   }
   const ordered = [...refs].sort((left, right) => left.span.start - right.span.start);
   for (const [index, ref] of ordered.entries()) {
@@ -354,12 +384,13 @@ export function validateSemanticProposal(input: {
     corrections > 1 ||
     destinations + corrections > 1 ||
     count("task") > 1 ||
-    count("provider") > 1
+    count("provider") > 1 ||
+    count("node") > 1
   ) {
     return {
       status: "malformed",
       kind: "cardinality",
-      reason: "one destination, task, and provider per turn",
+      reason: "one destination, task, node, and provider per turn",
     };
   }
 

@@ -371,6 +371,27 @@ describe("Circe semantic proposal bridge", () => {
     ).toThrow();
   });
 
+  it("accepts a device ref and node interpret evidence", () => {
+    expect(
+      decodeProposal({
+        action: "start",
+        refs: [{ span: { start: 0, end: 6, text: "Laptop" }, role: "node", value: "Laptop" }],
+        model: null,
+        effort: null,
+        answer: null,
+      }),
+    ).toMatchObject({ action: "start" });
+    expect(
+      Schema.decodeUnknownSync(CirceInterpretInput)({
+        utterance: "check auth on Laptop",
+        projects: [],
+        tasks: [],
+        providers: [],
+        nodes: [{ label: "Laptop" }],
+      }),
+    ).toMatchObject({ nodes: [{ label: "Laptop" }] });
+  });
+
   it("carries a bounded lookup or website target with no refs", () => {
     expect(
       decodeProposal({

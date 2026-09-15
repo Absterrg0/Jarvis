@@ -1557,8 +1557,8 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
       // against the real catalog. Ambiguity parks node-qualified choices,
       // disconnected reports unavailable with no fallback, and
       // negated/malformed stays ambient for authoritative clarification.
-      // Pins never leave the owner node: a pinned contextThreadId forces
-      // ambient so the turn never swaps projects on a mention.
+      // A pinned contextThreadId keeps its owner node against a project
+      // mention, but an explicitly named device re-routes the turn.
       const executeRoute = resolveCirceProposalExecuteRoute(
         evidenceCatalog,
         sourceUtterance,
@@ -1611,6 +1611,34 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
           `which is disconnected. Reconnect it and try again.`;
         setPreparedOriginInteractionId(nextOriginInteractionId());
         setMessage(unavailableMessage);
+        return;
+      } else if (executeRoute.status === "device-not-ready") {
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        setMessage(executeRoute.message);
+        return;
+      } else if (executeRoute.status === "device-unknown") {
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        setMessage(`I couldn't find a device named ${executeRoute.nodeLabel}.`);
+        return;
+      } else if (executeRoute.status === "device-conflict") {
+        const conflictMessage =
+          executeRoute.projects.length === 1
+            ? `${executeRoute.projects[0]!.title} is on ${executeRoute.projects[0]!.nodeLabel}, not ${executeRoute.nodeLabel}.`
+            : `That name is on ${[...new Set(executeRoute.projects.map((project) => project.nodeLabel))].join(", ")}, not ${executeRoute.nodeLabel}.`;
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        setMessage(conflictMessage);
+        return;
+      } else if (executeRoute.status === "needs-device") {
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        setMessage(
+          `More than one device is named "${executeRoute.nodeQuery}". Name the project instead, or rename one device.`,
+        );
+        return;
+      } else if (executeRoute.status === "compound-devices") {
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        setMessage(
+          `That turn names steps on more than one device (${executeRoute.nodeLabels.join(", ")}). Run the steps one at a time.`,
+        );
         return;
       } else {
         // Ambient covers negated-only, malformed, unknown, and pinned
@@ -1686,6 +1714,14 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
           resolved: executionProject,
           routed: executeRoute.status === "routed",
           pinned: focusContext?.threadId !== undefined,
+          // Only a device that actually grounded (unique + ready) makes the
+          // project name sound under partial coverage.
+          deviceGrounded:
+            executeRoute.status === "routed" &&
+            [
+              ...executionProposal.refs,
+              ...(executionProposal.steps ?? []).flatMap((step) => step.refs),
+            ].some((ref) => ref.role === "node"),
         });
         if (coverageConfirm.status === "confirm") {
           const label = `${coverageConfirm.project.title} — ${coverageConfirm.project.nodeLabel}`;

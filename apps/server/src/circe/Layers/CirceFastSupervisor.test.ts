@@ -93,7 +93,7 @@ describe("Circe fast supervisor", () => {
     expect(CIRCE_FAST_SUPERVISOR_SYSTEM_PROMPT).toContain('"action"');
     expect(CIRCE_FAST_SUPERVISOR_SYSTEM_PROMPT).toContain('"refs"');
     expect(CIRCE_FAST_SUPERVISOR_SYSTEM_PROMPT).toContain(
-      '"destination|task|subject|excluded|correction|provider"',
+      '"destination|task|subject|excluded|correction|provider|node"',
     );
   });
 

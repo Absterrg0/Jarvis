@@ -140,6 +140,7 @@ function buildMeshSemanticPrompt(input: {
     state: task.state ?? "unknown",
   }));
   const providers = evidence.providers.slice(0, 16).map((provider) => ({ name: provider.name }));
+  const nodes = (evidence.nodes ?? []).slice(0, 16).map((node) => ({ label: node.label }));
   const pendingRequest =
     evidence.pendingHint === "approval"
       ? "approval waiting: allow or deny it"
@@ -153,8 +154,9 @@ function buildMeshSemanticPrompt(input: {
     "Model proposes never authorizes. Return only the schema fields. Never invent or return internal IDs. Never call tools, dispatch work, or answer approvals.",
     "Use exact catalog names when naming a project, task, provider, model, or effort.",
     "Every ref cites the Original transcript with exact character spans: start and end are UTF-16 code units and text is the source slice copied byte-for-byte, including case, spacing, and punctuation. Offsets prove the text was copied, nothing more. The host rejects any span that does not reproduce the source exactly, any value that does not echo its span, and any destination span that does not contain its named project.",
-    "Roles: destination cites only the full routing wrapper, including its separator whitespace or comma, so removing precisely that span leaves the instruction unchanged otherwise. Never include a work verb, literal, constraint, or quoted command in a removable wrapper. correction cites the repaired-to mention. task cites the coded work's title; provider cites a requested runner, not a provider discussed as a subject. subject and excluded never authorize a route.",
-    "Cardinality is explicit: at most one destination or correction, one task, and one provider per turn. One coding task described with several constraints is a single start, continue, or steer with no task ref needed. For requests joining two independent commands with then, also, and, or commas, propose action sequence with a steps array of up to four complete single commands. The host validates every step before dispatching any; steps never nest. Use unsupported only for a turn you cannot express as one command or an ordered sequence.",
+    "Roles: destination cites only the full routing wrapper, including its separator whitespace or comma, so removing precisely that span leaves the instruction unchanged otherwise. Never include a work verb, literal, constraint, or quoted command in a removable wrapper. correction cites the repaired-to mention. task cites the coded work's title; provider cites a requested runner, not a provider discussed as a subject. node cites a named device from the Devices list and is a routing target, never a project. subject and excluded never authorize a route.",
+    "Cardinality is explicit: at most one destination or correction, one task, one node, and one provider per turn. One coding task described with several constraints is a single start, continue, or steer with no task ref needed. For requests joining two independent commands with then, also, and, or commas, propose action sequence with a steps array of up to four complete single commands. The host validates every step before dispatching any; steps never nest. Use unsupported only for a turn you cannot express as one command or an ordered sequence.",
+    "A named device is a routing target cited as role node with the exact device mention from the Devices list. Cite it only when the user actually names a device; never invent one. A node never names a project, and a destination never names a device: when the user gives both, cite both. The client routes to the cited device; a destination project on a different device is a conflict the host surfaces instead of guessing.",
     "Only a cited destination or correction span names the project. Mentions inside the work ('compare with X', 'mentioning Y', 'PRs about Z', 'branch W', 'Find docs about Fable') stay out of destination refs and never become the project. A bare object ('check out Zivil', 'Open Rivvl', 'look at Rivvl') is not a wrapper: cite nothing. A leading 'In <project>,' destination overrides any other project named later: 'In Rivvl, document checkout flow Circe uses' cites the In Rivvl wrapper for Rivvl and optionally Circe as subject.",
     "A leading negation rules out the named control or target: Don't, do not, and never mark ruled-out names excluded, never a destination. 'Don't stop the auth task, tell status' is status, never stop. 'Check auth but not in Fable' cites Fable excluded, never destination, and keeps the full wording. 'excluding the billing endpoint' cites the endpoint excluded.",
     "When a heard project mention is shown, it is advisory evidence only. Cite the heard text exactly as written when routing to it. A typo or mishearing ('Rivvil' for Rivvl, 'Rival' for Rivvl) never spells a catalog name: cite what was heard as subject or excluded, or omit refs and let the host clarify. Established aliases resolve, but only when cited exactly as heard.",
@@ -168,6 +170,7 @@ function buildMeshSemanticPrompt(input: {
     '- "move the API task to Backend" => action reroute with one task ref citing API and one destination ref citing to Backend.',
     '- "in Web, fix the header with Codex" => action start with one destination ref citing in Web and one provider ref citing Codex.',
     '- "Check auth in Rivvl" => action start with one destination ref citing in Rivvl.',
+    '- "Check auth in Rivvl on Desktop" => action start with one destination ref citing in Rivvl and one node ref citing Desktop.',
     '- "Don\'t stop auth task tell status" => action status with no destination ref.',
     '- "Fix auth, then run its tests" => action start: one coding task with several steps.',
     '- "Stop authentication, then create a deployment task" => action sequence with steps [stop authentication, start a deployment task].',
@@ -186,6 +189,7 @@ function buildMeshSemanticPrompt(input: {
     `Projects: ${JSON.stringify(projects)}`,
     `Recent tasks: ${JSON.stringify(tasks)}`,
     `Providers: ${JSON.stringify(providers)}`,
+    `Devices: ${JSON.stringify(nodes)}`,
   ].join("\n");
 }
 

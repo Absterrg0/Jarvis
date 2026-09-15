@@ -440,6 +440,67 @@ describe("mobile provider request lifecycle", () => {
     expect(state.execute.mock.calls[0]?.[0].sourceUtterance).toBe("In Beta, fix it");
   });
 
+  it("routes a cited device even from an ambient node", async () => {
+    const nodeB = EnvironmentId.make("node-B");
+    const betaId = ProjectId.make("beta");
+    const beta = {
+      ref: { nodeId: nodeB, projectId: betaId },
+      projectId: betaId,
+      title: "Beta",
+      workspaceRoot: "/work/beta",
+      nodeLabel: "Node B",
+      repositoryNames: [],
+      aliases: [],
+      aliasDetails: [],
+    };
+    state.catalog = {
+      nodes: [
+        { nodeId, label: "Node A", reachability: "online" },
+        { nodeId: nodeB, label: "Node B", reachability: "online" },
+      ],
+      projects: [project, beta],
+      providers: [],
+    };
+    render().selectProject(project);
+    const source = "In Beta on Node B";
+    const destinationAt = source.indexOf("In Beta");
+    const deviceAt = source.indexOf("on Node B");
+    state.interpret.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        action: "start",
+        refs: [
+          {
+            span: {
+              start: destinationAt,
+              end: destinationAt + "In Beta".length,
+              text: "In Beta",
+            },
+            role: "destination",
+            value: "Beta",
+          },
+          {
+            span: {
+              start: deviceAt,
+              end: deviceAt + "on Node B".length,
+              text: "on Node B",
+            },
+            role: "node",
+            value: "Node B",
+          },
+        ],
+        model: null,
+        effort: null,
+        answer: null,
+      },
+    });
+    await instruction(source);
+    expect(state.execute).toHaveBeenCalledTimes(1);
+    expect(state.execute.mock.calls[0]?.[0]).toMatchObject({
+      projectRef: { nodeId: nodeB, projectId: betaId },
+    });
+  });
+
   it("asks with node-qualified choices when one name lives on two nodes", async () => {
     const nodeB = EnvironmentId.make("node-B");
     const apiAId = ProjectId.make("api-a");

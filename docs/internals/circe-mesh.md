@@ -93,3 +93,41 @@ relay brokers for that account on that environment. It does not revoke an
 already-issued environment session, close an existing socket, or affect direct,
 LAN, Tailscale, or SSH routes, which do not consult the relay. Treat the flag as
 account-level access policy at the relay boundary, not as session revocation.
+
+## Routing a turn to a device
+
+The supervisor classifies intent and cites names; it never chooses an execution
+node. Every node decision is deterministic host policy:
+
+- A cited `destination`/`correction` names a project; the client grounds that
+  name against its mesh catalog and routes to the project's owning node.
+- A cited `node` names a device and is a hard constraint. The client requires
+  the device value to be spoken inside its span (the destination rule), and the
+  span must be neither quoted nor in negation scope — including a contracted
+  negation ("don't"), which leaves a destination eligible but rules a device
+  out. An unknown label is reported, never silently ignored. A device whose own
+  catalog is not ready (`circeMeshNodeReadiness`) is reported as not ready,
+  because its absent project proves nothing.
+- A sequence carries each step's own refs, so the client reads step `node` refs
+  too. No step node refs keeps the previous behavior; every step node ref
+  resolving to one identical device routes the whole plan there; step node refs
+  on different devices refuse the compound (`compound-devices`) before anything
+  dispatches. One execution node per compound turn, for now.
+- A device reference outranks the pinned-followup rule: naming a device is a
+  deliberate cross-node instruction, while a bare project mention never steals
+  a pinned task.
+- When both are cited and the project does not live on the ready, cited device,
+  the host surfaces the conflict (project nodes vs device) rather than inviting
+  the user to abandon the device they named.
+- A label shared by several nodes asks an explicit device choice; a project
+  ambiguous within the cited device asks a node-qualified project choice.
+- Partial-catalog uniqueness confirmation is bypassed only when a unique, ready
+  device actually grounded the turn. A cited but ungrounded device does not
+  qualify.
+
+Only the client grounds a device label: the execution node cannot resolve a
+label it does not own, so the `node` role is non-authorizing for the server,
+exactly like `subject` and `excluded`. The evidence carries device labels only,
+never IDs, so a stale or hostile mesh catalog can at most produce a route the
+client rejects. A compound turn is still resolved against one execution node:
+per-step cross-node dispatch is not part of this contract.
