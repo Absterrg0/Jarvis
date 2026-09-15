@@ -37,6 +37,8 @@ export const SemanticRole = Schema.Literals([
   "excluded",
   "correction",
   "provider",
+  /** A named device; the client routes on it, the execution node ignores it. */
+  "node",
 ]);
 export type SemanticRole = typeof SemanticRole.Type;
 
@@ -354,12 +356,13 @@ export function validateSemanticProposal(input: {
     corrections > 1 ||
     destinations + corrections > 1 ||
     count("task") > 1 ||
-    count("provider") > 1
+    count("provider") > 1 ||
+    count("node") > 1
   ) {
     return {
       status: "malformed",
       kind: "cardinality",
-      reason: "one destination, task, and provider per turn",
+      reason: "one destination, task, node, and provider per turn",
     };
   }
 

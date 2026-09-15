@@ -93,3 +93,26 @@ relay brokers for that account on that environment. It does not revoke an
 already-issued environment session, close an existing socket, or affect direct,
 LAN, Tailscale, or SSH routes, which do not consult the relay. Treat the flag as
 account-level access policy at the relay boundary, not as session revocation.
+
+## Routing a turn to a device
+
+The supervisor classifies intent and cites names; it never chooses an execution
+node. Every node decision is deterministic host policy:
+
+- A cited `destination`/`correction` names a project; the client grounds that
+  name against its mesh catalog and routes to the project's owning node.
+- A cited `node` names a device. The client grounds the label, and the cited
+  device chooses the execution node directly. A device reference outranks the
+  pinned-followup rule: naming a device is a deliberate cross-node instruction,
+  while a bare project mention never steals a pinned task.
+- When both are cited and the project does not live on the cited device, the
+  host surfaces the conflict (project node vs device) instead of guessing.
+- Ambiguous names still ask with node-qualified choices, and an offline owner
+  (project or device) reports unavailable with no fallback.
+
+Only the client grounds a device label: the execution node cannot resolve a
+label it does not own, so the `node` role is non-authorizing for the server,
+exactly like `subject` and `excluded`. The evidence carries device labels only,
+never IDs, so a stale or hostile mesh catalog can at most produce a route the
+client rejects. A compound turn is still resolved against one execution node:
+per-step cross-node dispatch is not part of this contract.

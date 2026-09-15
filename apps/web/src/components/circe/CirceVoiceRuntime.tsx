@@ -1964,6 +1964,35 @@ export function CirceVoiceRuntime({
                 : { requestId: voiceSubmission.requestId }),
             });
             throw new Error(message);
+          } else if (route.status === "device-unavailable") {
+            const message = `${route.nodeLabel} is disconnected. Reconnect it and try again.`;
+            emitFeedback({
+              text: message,
+              kind: "error",
+              inputMode,
+              captureId: voiceSubmission.captureId,
+              ...(voiceSubmission.requestId === undefined
+                ? {}
+                : { requestId: voiceSubmission.requestId }),
+            });
+            throw new Error(message);
+          } else if (route.status === "device-conflict") {
+            // A device was named and a project was named, but the project lives
+            // elsewhere. Surface the exact conflict instead of guessing.
+            const message =
+              route.project.nodeLabel === route.nodeLabel
+                ? `${route.project.title} is on ${route.project.nodeLabel}.`
+                : `${route.project.title} is on ${route.project.nodeLabel}, not ${route.nodeLabel}. Name a project on ${route.nodeLabel} or switch devices.`;
+            emitFeedback({
+              text: message,
+              kind: "error",
+              inputMode,
+              captureId: voiceSubmission.captureId,
+              ...(voiceSubmission.requestId === undefined
+                ? {}
+                : { requestId: voiceSubmission.requestId }),
+            });
+            throw new Error(message);
           }
           // Uniqueness needs a complete catalog: the check runs once the
           // submission target is known (see below), so composer entries

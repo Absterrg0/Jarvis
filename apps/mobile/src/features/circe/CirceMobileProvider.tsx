@@ -1557,8 +1557,8 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
       // against the real catalog. Ambiguity parks node-qualified choices,
       // disconnected reports unavailable with no fallback, and
       // negated/malformed stays ambient for authoritative clarification.
-      // Pins never leave the owner node: a pinned contextThreadId forces
-      // ambient so the turn never swaps projects on a mention.
+      // A pinned contextThreadId keeps its owner node against a project
+      // mention, but an explicitly named device re-routes the turn.
       const executeRoute = resolveCirceProposalExecuteRoute(
         evidenceCatalog,
         sourceUtterance,
@@ -1611,6 +1611,18 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
           `which is disconnected. Reconnect it and try again.`;
         setPreparedOriginInteractionId(nextOriginInteractionId());
         setMessage(unavailableMessage);
+        return;
+      } else if (executeRoute.status === "device-unavailable") {
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        setMessage(`${executeRoute.nodeLabel} is disconnected. Reconnect it and try again.`);
+        return;
+      } else if (executeRoute.status === "device-conflict") {
+        const conflictMessage =
+          executeRoute.project.nodeLabel === executeRoute.nodeLabel
+            ? `${executeRoute.project.title} is on ${executeRoute.project.nodeLabel}.`
+            : `${executeRoute.project.title} is on ${executeRoute.project.nodeLabel}, not ${executeRoute.nodeLabel}. Name a project on ${executeRoute.nodeLabel} or switch devices.`;
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        setMessage(conflictMessage);
         return;
       } else {
         // Ambient covers negated-only, malformed, unknown, and pinned

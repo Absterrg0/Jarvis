@@ -1394,7 +1394,7 @@ describe("proposal preparation contract", () => {
     const full = buildCirceSemanticPrompt(input, ready(input));
     const fast = buildCirceFastSemanticPrompt(input, ready(input));
     expect(fast).toContain('"action"');
-    expect(fast).toContain('"destination|task|subject|excluded|correction|provider"');
+    expect(fast).toContain('"destination|task|subject|excluded|correction|provider|node"');
     expect(fast).toContain("Check auth in Rivvl");
     expect(fast).toContain("Original transcript");
     expect(fast.length).toBeLessThan(full.length / 2);

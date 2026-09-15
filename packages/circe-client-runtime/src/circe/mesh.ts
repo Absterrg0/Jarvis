@@ -440,6 +440,19 @@ export function buildCirceInterpretInput(
     if (!providerNames.has(key)) providerNames.set(key, name.slice(0, 120));
     if (providerNames.size >= 16) break;
   }
+  // Devices are routing targets the supervisor may cite. Labels only, never
+  // IDs: the client grounds the label to its owning node. Deduplicated by
+  // folded label so a repeated name does not imply a choice it cannot make.
+  const nodes = [
+    ...new Set(
+      catalog.nodes
+        .map((node) => node.label.trim())
+        .filter((label) => label.length > 0)
+        .map((label) => label.slice(0, 120)),
+    ),
+  ]
+    .slice(0, 16)
+    .map((label) => ({ label }));
   const tasks = (options.tasks ?? []).slice(0, 8).map((task) => ({
     title: task.title.slice(0, 240),
     ...(task.project === undefined ? {} : { project: task.project.slice(0, 240) }),
@@ -451,6 +464,7 @@ export function buildCirceInterpretInput(
     projects,
     tasks,
     providers: [...providerNames.values()].map((name) => ({ name })),
+    nodes,
     ...(options.currentProjectTitle === undefined
       ? {}
       : { currentProjectTitle: options.currentProjectTitle.slice(0, 240) }),

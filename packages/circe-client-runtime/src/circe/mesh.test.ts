@@ -914,7 +914,7 @@ describe("Circe mesh", () => {
 
   it("builds bounded untrusted interpret evidence with names only", () => {
     const catalog = {
-      nodes: [],
+      nodes: [{ nodeId: NODE_LAPTOP, label: "Laptop", reachability: "online" as const }],
       projects: [
         {
           projectId: ProjectId.make("rivvl-laptop"),
@@ -938,6 +938,8 @@ describe("Circe mesh", () => {
     expect(input.projects).toHaveLength(1);
     expect(input.projects[0]).toMatchObject({ title: "Rivvl" });
     expect(input.projects[0]?.names).toContain("Rivvl");
+    // Device labels ride as untrusted evidence so the supervisor can cite them.
+    expect(input.nodes).toEqual([{ label: "Laptop" }]);
     expect(input).not.toHaveProperty("expectedReply");
     expect(input).not.toHaveProperty("contextThreadId");
   });

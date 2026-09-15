@@ -871,6 +871,50 @@ describe("Circe voice runtime", () => {
       }
     });
 
+    it("routes a cited device to its owning node", async () => {
+      resetCirceCommandBusForTests();
+      try {
+        await readyOnMesh({ twoRivvls: false });
+        const source = "Check auth in Rivvl on Laptop";
+        const destinationAt = source.indexOf("in Rivvl");
+        const deviceAt = source.indexOf("on Laptop");
+        mockInterpretSuccess({
+          action: "start",
+          refs: [
+            {
+              span: {
+                start: destinationAt,
+                end: destinationAt + "in Rivvl".length,
+                text: "in Rivvl",
+              },
+              role: "destination",
+              value: "Rivvl",
+            },
+            {
+              span: { start: deviceAt, end: deviceAt + "on Laptop".length, text: "on Laptop" },
+              role: "node",
+              value: "Laptop",
+            },
+          ],
+          model: null,
+          effort: null,
+          answer: null,
+        });
+        transcript(source, { captureId: "device-route", purpose: "command" });
+        for (let turn = 0; turn < 50 && state.execute.mock.calls.length === 0; turn += 1) {
+          await Promise.resolve();
+          render();
+        }
+        await finished.promise;
+        expect(state.execute).toHaveBeenCalledTimes(1);
+        expect(state.execute.mock.calls[0]?.[0]).toMatchObject({
+          projectRef: { nodeId: laptopNode, projectId: rivvlLaptop },
+        });
+      } finally {
+        resetCirceCommandBusForTests();
+      }
+    });
+
     it("routes an explicit destination from a typed composer entry the same way", async () => {
       resetCirceCommandBusForTests();
       try {

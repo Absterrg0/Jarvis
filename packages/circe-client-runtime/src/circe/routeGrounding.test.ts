@@ -75,6 +75,15 @@ function destinationRef(source: string, wrapper: string, value: string) {
   };
 }
 
+function nodeRef(source: string, mention: string, value: string) {
+  const start = source.indexOf(mention);
+  return {
+    span: { start, end: start + mention.length, text: mention },
+    role: "node" as const,
+    value,
+  };
+}
+
 describe("proposal-first execute route grounding", () => {
   it("routes an explicit destination to its owning node", () => {
     const source = "Check PRs in Rivvl";
@@ -84,6 +93,119 @@ describe("proposal-first execute route grounding", () => {
         source,
         proposal("start", [destinationRef(source, "in Rivvl", "Rivvl")]),
         ambientDesktop,
+      ),
+    ).toEqual({
+      status: "routed",
+      project: expect.objectContaining({
+        ref: { nodeId: LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
+      }),
+    });
+  });
+
+  it("routes a device mention to its node", () => {
+    const source = "Start a task on Laptop";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        proposal("start", [nodeRef(source, "on Laptop", "Laptop")]),
+        ambientDesktop,
+      ),
+    ).toEqual({
+      status: "routed",
+      project: expect.objectContaining({
+        ref: { nodeId: LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
+      }),
+    });
+  });
+
+  it("routes a project and its device together", () => {
+    const source = "Check auth in Rivvl on Laptop";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        proposal("start", [
+          destinationRef(source, "in Rivvl", "Rivvl"),
+          nodeRef(source, "on Laptop", "Laptop"),
+        ]),
+        ambientDesktop,
+      ),
+    ).toEqual({
+      status: "routed",
+      project: expect.objectContaining({
+        ref: { nodeId: LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
+      }),
+    });
+  });
+
+  it("surfaces a project/device conflict instead of guessing", () => {
+    const source = "Check auth in Rivvl on Desktop";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        proposal("start", [
+          destinationRef(source, "in Rivvl", "Rivvl"),
+          nodeRef(source, "on Desktop", "Desktop"),
+        ]),
+        ambientDesktop,
+      ),
+    ).toEqual({
+      status: "device-conflict",
+      project: expect.objectContaining({
+        ref: { nodeId: LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
+      }),
+      nodeLabel: "Desktop",
+    });
+  });
+
+  it("reports a disconnected named device with no project", () => {
+    const source = "Do the thing on VPS";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        proposal("start", [nodeRef(source, "on VPS", "VPS")]),
+        ambientDesktop,
+      ),
+    ).toEqual({ status: "device-unavailable", nodeLabel: "VPS" });
+  });
+
+  it("falls through to project routing when the device label matches nothing", () => {
+    const source = "Check auth in Rivvl on Nowhere";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        proposal("start", [
+          destinationRef(source, "in Rivvl", "Rivvl"),
+          nodeRef(source, "on Nowhere", "Nowhere"),
+        ]),
+        ambientDesktop,
+      ),
+    ).toEqual({
+      status: "routed",
+      project: expect.objectContaining({
+        ref: { nodeId: LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
+      }),
+    });
+  });
+
+  it("lets a named device re-route a pinned followup", () => {
+    const source = "Check auth in Rivvl on Laptop";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        proposal("start", [
+          destinationRef(source, "in Rivvl", "Rivvl"),
+          nodeRef(source, "on Laptop", "Laptop"),
+        ]),
+        {
+          projectRef: { nodeId: DESKTOP, projectId: ProjectId.make("circe-desktop") },
+          contextThreadId: ThreadId.make("pinned-desktop"),
+        },
       ),
     ).toEqual({
       status: "routed",

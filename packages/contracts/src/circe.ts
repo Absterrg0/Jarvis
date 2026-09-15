@@ -114,6 +114,12 @@ export const CirceSemanticRole = Schema.Literals([
   "excluded",
   "correction",
   "provider",
+  /**
+   * A named device (Circe node). The client grounds the label to its owning
+   * node and routes there; the execution node never resolves it. At most one
+   * per turn, and it never names a project.
+   */
+  "node",
 ]);
 export type CirceSemanticRole = typeof CirceSemanticRole.Type;
 
@@ -234,6 +240,16 @@ export const CirceInterpretEvidenceProvider = Schema.Struct({
 });
 export type CirceInterpretEvidenceProvider = typeof CirceInterpretEvidenceProvider.Type;
 
+/**
+ * One connected device the supervisor may cite as a routing target. Labels
+ * only, never IDs: the client grounds the label against its real catalog, so a
+ * stale or hostile catalog can at most produce a route the client rejects.
+ */
+export const CirceInterpretEvidenceNode = Schema.Struct({
+  label: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120)),
+});
+export type CirceInterpretEvidenceNode = typeof CirceInterpretEvidenceNode.Type;
+
 export const CirceInterpretPendingHint = Schema.Literals([
   "none",
   "approval",
@@ -254,6 +270,8 @@ export const CirceInterpretInput = Schema.Struct({
   projects: Schema.Array(CirceInterpretEvidenceProject),
   tasks: Schema.Array(CirceInterpretEvidenceTask),
   providers: Schema.Array(CirceInterpretEvidenceProvider),
+  /** Connected devices a cited device name can resolve against. Names only. */
+  nodes: Schema.optional(Schema.Array(CirceInterpretEvidenceNode)),
   currentProjectTitle: Schema.optional(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(240)),
   ),

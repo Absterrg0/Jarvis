@@ -47,6 +47,18 @@ including requests sent from another device. An explicit spoken choice overrides
 Existing tasks and their follow-ups keep their original agent. Choose **Use project defaults** and
 then **Save** to clear the Circe-specific choice.
 
+### Send work to a specific device
+
+Name a device to run work there: "start a task to check auth in Rivvl on my laptop" or "on
+Desktop, fix the login bug." Circe routes to the device you name, even when a task is already
+focused on another device. If you name a project that lives on a different device, Circe tells you
+where that project is instead of guessing. A compound turn that names steps on different devices is
+not supported yet: run those steps one at a time.
+
+Without a device name, Circe routes by project. Name the project and the work runs on the device
+that owns it. If two devices have a project with the same name, Circe asks which one, listing each
+project with its device.
+
 ## One Circe product per node
 
 The Windows unified installer presents one Circe application, launcher, and uninstall entry. The

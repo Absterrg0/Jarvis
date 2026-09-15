@@ -300,3 +300,25 @@ describe("proposal schema", () => {
     ).toThrow();
   });
 });
+
+describe("device evidence", () => {
+  it("accepts one node ref without letting it name a project", () => {
+    const source = "Check auth in Rivvl on Laptop";
+    expect(
+      validate(source, [
+        ref(source, "destination", "in Rivvl", "Rivvl"),
+        ref(source, "node", "Laptop", "Laptop"),
+      ]),
+    ).toMatchObject({ status: "valid", target: { title: "Rivvl" } });
+  });
+
+  it("rejects more than one node ref", () => {
+    const source = "Check auth on Laptop and Desktop";
+    expect(
+      validate(source, [
+        ref(source, "node", "Laptop", "Laptop"),
+        ref(source, "node", "Desktop", "Desktop"),
+      ]),
+    ).toMatchObject({ status: "malformed", kind: "cardinality" });
+  });
+});
