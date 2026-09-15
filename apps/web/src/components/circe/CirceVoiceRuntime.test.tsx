@@ -413,6 +413,40 @@ describe("Circe voice runtime", () => {
     });
     expect(consume).toHaveBeenCalledTimes(1);
   });
+
+  it("answers a server frame with its exact id and no second supervisor call", async () => {
+    state.execute.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        status: "needs-input",
+        reason: "control-target-required",
+        prompt: "Which project did you mean? Say its name, its number, or say cancel.",
+        choices: ["Rivvl", "Beacon"],
+        clarificationFrameId: "frame-1",
+      },
+    });
+    await ready();
+    transcript("Fix the bug", { captureId: "capture", purpose: "command" });
+    await state.drain?.();
+    await vi.waitFor(() =>
+      expect(
+        events.some(
+          (entry) =>
+            entry === "speech:Which project did you mean? Say its name, its number, or say cancel.",
+        ),
+      ).toBe(true),
+    );
+    // The first turn may consult the supervisor; the frame answer must not.
+    state.interpret.mockClear();
+    transcript("Rivvl", { captureId: "reply", purpose: "command" });
+    await finished.promise;
+    expect(state.interpret).not.toHaveBeenCalled();
+    expect(state.execute).toHaveBeenCalledTimes(2);
+    expect(state.execute.mock.calls[1]?.[0]).toMatchObject({
+      utterance: "Rivvl",
+      clarificationFrameId: "frame-1",
+    });
+  });
   it("applies a plan's focus and start outcomes instead of returning early", async () => {
     const focusedProject = ProjectId.make("focused-project");
     const startedThread = ThreadId.make("plan-task");

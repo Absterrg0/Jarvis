@@ -790,8 +790,15 @@ export function createCirceLiveVoiceController(
           clearDeferral();
           deferredDelegationId = event.delegationId;
           deferralTimer = setTimeout(() => {
+            const held = deferredDelegationId;
             deferralTimer = null;
             deferredDelegationId = null;
+            // Acoustic repair only: no speech arrived for this delegation, so
+            // there is nothing to dispatch and no frame to consult. One short
+            // nudge, then silence; the next delegation starts fresh.
+            if (held !== null && readStatus() === "live") {
+              append("commentary", "Didn't catch that, say again.");
+            }
           }, CIRCE_LIVE_VOICE_DELEGATION_RETRY_MS);
           break;
         }
