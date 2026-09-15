@@ -326,6 +326,7 @@ describe("proposal-first execute route grounding", () => {
         {
           ...catalog.projects[0]!,
           projectId: ProjectId.make("rivvl-vps"),
+          nodeId: VPS,
           ref: { nodeId: VPS, projectId: ProjectId.make("rivvl-vps") },
           nodeLabel: "VPS",
         },
