@@ -46,9 +46,13 @@ half4 main(float2 xy) {
   float clampedR = min(r, 1.0);
   float z = sqrt(max(0.0, 1.0 - clampedR * clampedR));
 
-  // Design system v1 puts copper from ~81% of the radius outward, so the
-  // falloff is deliberately broad rather than a hairline.
-  float fresnel = pow(1.0 - z, 2.4);
+  // Art-directed, not physical. A 'pow(1 - z, n)' falloff with n above ~2 is
+  // what produced a hairline of light on an otherwise black disc: it stays
+  // almost zero until the final pixels. Two explicit fields are far easier to
+  // reason about, and the shell body starts around 46% of the radius.
+  float bodyShell = smoothstep(0.46, 0.90, r);
+  float outerShell = smoothstep(0.76, 0.985, r);
+  float fresnel = clamp(bodyShell * 0.55 + outerShell * 0.75, 0.0, 1.0);
   float angle = atan(uv.y, uv.x);
 
   // The two broad warm regions travel slowly, so the object is never static

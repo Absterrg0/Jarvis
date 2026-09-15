@@ -1,6 +1,31 @@
+// @effect-diagnostics nodeBuiltinImport:off
+
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
+
 import { describe, expect, it } from "vite-plus/test";
 
 import { resolveOrbParams } from "./orbState";
+
+const orbDir = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
+
+/** Every production renderer file. Excludes tests, by construction. */
+const RENDERER_FILES = [
+  "CirceOrb.tsx",
+  "OrbBase.tsx",
+  "OrbGlow.tsx",
+  "OrbParticles.tsx",
+  "OrbShell.tsx",
+  "OrbVolume.tsx",
+  "RibbonField.tsx",
+] as const;
+
+function rendererSource(): string {
+  return RENDERER_FILES.map((file) =>
+    NodeFS.readFileSync(NodePath.join(orbDir, file), "utf8"),
+  ).join("\n");
+}
 
 describe("orb state params", () => {
   it("keeps listening more expressive than idle", () => {
@@ -10,6 +35,7 @@ describe("orb state params", () => {
     expect(listening.fieldAmplitude).toBeGreaterThan(idle.fieldAmplitude);
     expect(listening.rimIntensity).toBeGreaterThan(idle.rimIntensity);
     expect(listening.bloomIntensity).toBeGreaterThan(idle.bloomIntensity);
+    expect(listening.volumeIntensity).toBeGreaterThan(idle.volumeIntensity);
     expect(listening.energyResponse).toBeGreaterThan(idle.energyResponse);
   });
 
@@ -28,7 +54,6 @@ describe("orb state params", () => {
     const listening = resolveOrbParams("listening");
     expect(thinking.energyResponse).toBeLessThan(listening.energyResponse);
     expect(thinking.fieldAmplitude).toBeLessThan(listening.fieldAmplitude);
-    // The shell still moves faster than at rest.
     expect(thinking.rimIntensity).toBeGreaterThan(resolveOrbParams("idle").rimIntensity);
   });
 
@@ -46,5 +71,15 @@ describe("orb state params", () => {
 
     const idle = resolveOrbParams("idle", { reducedMotion: true });
     expect(idle.bloomIntensity).toBeLessThan(listening.bloomIntensity);
+  });
+
+  it("consumes every state parameter in a production renderer", () => {
+    // An earlier revision defined parameters that no renderer read, so the
+    // tuning surface gave the impression of control without changing anything.
+    // Every key returned here must be referenced by a real renderer file.
+    const source = rendererSource();
+    for (const key of Object.keys(resolveOrbParams("idle"))) {
+      expect(source, `${key} has no consumer in the renderer`).toContain(`params.${key}`);
+    }
   });
 });

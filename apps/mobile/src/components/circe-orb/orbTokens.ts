@@ -46,8 +46,15 @@ export function rgbaOf(hex: string, alpha = 1): [number, number, number, number]
   ];
 }
 
-/** Attaches an alpha channel to a #RRGGBB color, as #RRGGBBAA. */
+/**
+ * Attaches an alpha channel to a #RRGGBB color, as #RRGGBBAA.
+ *
+ * Marked as a worklet so it can also be called while building gradient color
+ * stops on the UI thread, which is how bloom responds to microphone energy
+ * without a React render.
+ */
 export function alphaColor(hex: string, alpha: number): string {
+  "worklet";
   const clamped = Math.round(Math.min(1, Math.max(0, alpha)) * 255);
   return `${hex}${clamped.toString(16).padStart(2, "0").toUpperCase()}`;
 }

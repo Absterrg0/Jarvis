@@ -22,6 +22,11 @@ export interface OrbStateParams {
   readonly rimIntensity: number;
   /** Atmospheric bloom intensity. */
   readonly bloomIntensity: number;
+  /**
+   * Interior lit volume. This is what keeps the sphere from reading as a flat
+   * black disc between a dark base and a thin rim.
+   */
+  readonly volumeIntensity: number;
   /** How much ember warmth bleeds into the dark core. */
   readonly coreWarmth: number;
   /** Grain visibility. Zero keeps the hero frame perfectly still. */
@@ -39,6 +44,7 @@ const BASE: Record<CirceOrbState, OrbStateParams> = {
     fieldCycleSeconds: 11,
     rimIntensity: 0.8,
     bloomIntensity: 0.45,
+    volumeIntensity: 1,
     coreWarmth: 0.72,
     particleAmount: 0,
     motionScale: 1,
@@ -50,6 +56,7 @@ const BASE: Record<CirceOrbState, OrbStateParams> = {
     fieldCycleSeconds: 5,
     rimIntensity: 1.15,
     bloomIntensity: 0.8,
+    volumeIntensity: 1.25,
     coreWarmth: 0.8,
     particleAmount: 0.9,
     motionScale: 1.15,
@@ -63,6 +70,7 @@ const BASE: Record<CirceOrbState, OrbStateParams> = {
     fieldCycleSeconds: 9,
     rimIntensity: 1.05,
     bloomIntensity: 0.55,
+    volumeIntensity: 1.1,
     coreWarmth: 0.82,
     particleAmount: 0.6,
     motionScale: 0.75,
@@ -74,6 +82,7 @@ const BASE: Record<CirceOrbState, OrbStateParams> = {
     fieldCycleSeconds: 6,
     rimIntensity: 1.25,
     bloomIntensity: 0.85,
+    volumeIntensity: 1.3,
     coreWarmth: 0.68,
     particleAmount: 0.9,
     motionScale: 1.05,
@@ -85,6 +94,7 @@ const BASE: Record<CirceOrbState, OrbStateParams> = {
     fieldCycleSeconds: 12,
     rimIntensity: 1.4,
     bloomIntensity: 0.95,
+    volumeIntensity: 1.15,
     coreWarmth: 0.6,
     particleAmount: 0.5,
     motionScale: 0.9,
@@ -96,6 +106,7 @@ const BASE: Record<CirceOrbState, OrbStateParams> = {
     fieldCycleSeconds: 8,
     rimIntensity: 0.6,
     bloomIntensity: 0.35,
+    volumeIntensity: 0.7,
     coreWarmth: 0.35,
     particleAmount: 0.15,
     motionScale: 0.7,

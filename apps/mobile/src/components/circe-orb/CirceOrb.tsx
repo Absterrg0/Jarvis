@@ -13,8 +13,10 @@ import { OrbBase } from "./OrbBase";
 import { OrbGlow } from "./OrbGlow";
 import { OrbParticles } from "./OrbParticles";
 import { OrbShell } from "./OrbShell";
-import { OrbStrandPlane } from "./WaveField";
+import { OrbVolume } from "./OrbVolume";
+import { OrbRibbonPlane } from "./RibbonField";
 import { ORB_APPEARANCE, ORB_MOTION, type OrbAppearance } from "./orbTokens";
+
 import { resolveOrbParams } from "./orbState";
 import type { CirceOrbProps } from "./types";
 
@@ -31,17 +33,19 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
  * decision in this file:
  *
  *   1. atmospheric bloom
- *   2. rear fibers                     (behind the object)
+ *   2. rear ribbon                     (behind the object)
  *   3. sphere group
  *        a. dark absorptive base
- *        b. refracted interior fibers  (inside the glass)
- *        c. transparent shell + lip    (over the glass)
- *   4. front fibers                    (one or two, crossing over)
+ *        b. refracted interior ribbon  (inside the glass)
+ *        c. interior volume            (the missing lit volume)
+ *        d. transparent shell + lip    (over the glass)
+ *   4. front ribbon                    (two filaments, crossing over)
  *   5. grain                           (off in idle)
  *
- * The interior fibers must sit between (a) and (c). Painting them after an
- * opaque sphere is what makes them look printed onto its surface instead of
- * suspended inside it.
+ * The interior ribbon and the volume pass must both sit between (a) and (d).
+ * Painting fibers after an opaque sphere makes them look printed onto its
+ * surface, and omitting the volume pass is what leaves a flat black disc
+ * between a dark base and a hairline rim.
  *
  * The object barely moves and the field carries the animation. Motion is
  * time-based, never per-frame increments, so a 120 Hz device drifts at the same
@@ -159,13 +163,14 @@ export function CirceOrb({
           centerY={centerY}
           radius={radius}
           bloomIntensity={params.bloomIntensity}
+          energySV={energySV}
           appearance={appearance}
           reducedMotion={reducedMotion}
         />
 
         {/* 2. Rear fibers. */}
         {showField ? (
-          <OrbStrandPlane
+          <OrbRibbonPlane
             plane="rear"
             width={fieldWidth}
             centerX={centerX}
@@ -189,7 +194,7 @@ export function CirceOrb({
           />
 
           {showField ? (
-            <OrbStrandPlane
+            <OrbRibbonPlane
               plane="interior"
               width={fieldWidth}
               centerX={centerX}
@@ -203,6 +208,14 @@ export function CirceOrb({
             />
           ) : null}
 
+          <OrbVolume
+            centerX={centerX}
+            centerY={centerY}
+            radius={radius}
+            energySV={energySV}
+            volumeIntensity={params.volumeIntensity}
+          />
+
           <OrbShell
             centerX={centerX}
             centerY={centerY}
@@ -215,7 +228,7 @@ export function CirceOrb({
 
         {/* 4. One or two fibers crossing in front. */}
         {showField ? (
-          <OrbStrandPlane
+          <OrbRibbonPlane
             plane="front"
             width={fieldWidth}
             centerX={centerX}
