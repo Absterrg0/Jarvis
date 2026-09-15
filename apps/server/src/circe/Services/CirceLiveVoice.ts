@@ -26,10 +26,7 @@ import {
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import { RELAY_ENVIRONMENT_CREDENTIAL_SECRET, RELAY_URL_SECRET } from "../../cloud/config.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
-import {
-  CirceLiveVoiceSessionRepository,
-  type CirceLiveVoiceSessionLease,
-} from "../../persistence/Services/CirceLiveVoiceSessions.ts";
+import { CirceLiveVoiceSessionRepository } from "../../persistence/Services/CirceLiveVoiceSessions.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 
 export const OPENAI_LIVE_SESSIONS_URL = "https://api.openai.com/v1/live/sessions";
@@ -44,6 +41,11 @@ const LIVE_SESSION_LEASE_MILLIS = 45_000;
 const LIVE_SESSION_MAX_MILLIS = 12 * 60_000;
 /** How often the node closes sessions whose lease lapsed. */
 const LIVE_SESSION_SWEEP_INTERVAL = "15 seconds";
+/**
+ * How often startup retries a failed lease-recovery read. A read failure must
+ * never be treated as an empty ledger, so recovery is retried until it works.
+ */
+const LIVE_SESSION_RECOVERY_RETRY_INTERVAL = "15 seconds";
 
 export interface CirceLiveVoiceShape {
   readonly releaseSession: (
@@ -514,8 +516,18 @@ export const layer = Layer.effect(
                           Effect.catch(() => Effect.succeed(false)),
                         );
                   if (!closed) {
+                    // Both the durable write and the compensating hangup failed.
+                    // The row is lost, but the session id, deadline, and route
+                    // are still known: keep the in-memory lease so the sweeper
+                    // retries the close for this process lifetime instead of
+                    // discarding the only remaining cleanup handle.
+                    leases.set(created.sessionId, {
+                      route: null,
+                      lastRenewedAt: startedAt,
+                      deadlineAt,
+                    });
                     yield* Effect.logError(
-                      "Local live voice session is untracked and closure is unconfirmed",
+                      "Local live voice session closure is unconfirmed; retrying from the sweeper",
                       { sessionId: created.sessionId },
                     );
                   }
@@ -536,21 +548,39 @@ export const layer = Layer.effect(
     // sweeper. A live renderer resumes heartbeats within the renew window and
     // keeps its session; a dead one is swept after that window. A lease whose
     // absolute deadline already passed closes on the first sweep immediately.
-    const recovered = yield* leaseRepository.list().pipe(
-      Effect.catch((error) =>
-        Effect.gen(function* () {
-          yield* Effect.logError("Local live voice leases could not be recovered", { error });
-          return [] as ReadonlyArray<CirceLiveVoiceSessionLease>;
-        }),
-      ),
+    //
+    // A failed read must never be taken for an empty ledger: the first attempt
+    // runs here, and a failure retries in the background until it succeeds, so
+    // recovered sessions are never abandoned for the process lifetime.
+    const recoverLeases = Effect.gen(function* () {
+      const rows = yield* leaseRepository.list();
+      const recoveredAt = yield* Clock.currentTimeMillis;
+      for (const row of rows) {
+        if (!leases.has(row.sessionId)) {
+          leases.set(row.sessionId, {
+            route: null,
+            lastRenewedAt: recoveredAt,
+            deadlineAt: row.deadlineAt,
+          });
+        }
+      }
+    });
+    const firstRecovery = yield* recoverLeases.pipe(
+      Effect.map(() => ({ recovered: true as const })),
+      Effect.catch((error) => Effect.succeed({ recovered: false as const, error })),
     );
-    const recoveredAt = yield* Clock.currentTimeMillis;
-    for (const row of recovered) {
-      leases.set(row.sessionId, {
-        route: null,
-        lastRenewedAt: recoveredAt,
-        deadlineAt: row.deadlineAt,
-      });
+    if (!firstRecovery.recovered) {
+      yield* Effect.logError(
+        "Local live voice lease recovery failed at startup; retrying until it succeeds",
+        { error: firstRecovery.error },
+      );
+      yield* recoverLeases.pipe(
+        Effect.tapError((error) =>
+          Effect.logError("Local live voice lease recovery retry failed", { error }),
+        ),
+        Effect.retry(Schedule.spaced(LIVE_SESSION_RECOVERY_RETRY_INTERVAL)),
+        Effect.forkScoped,
+      );
     }
     // The server-side timer: close any session whose renderer stopped renewing,
     // or whose ceiling passed, regardless of any client timer. A killed or

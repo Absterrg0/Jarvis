@@ -175,13 +175,21 @@ function makeLeaseStore(
     readonly seed?: ReadonlyArray<CirceLiveVoiceSessionLease>;
     readonly failPut?: boolean;
     readonly failRemove?: boolean;
+    /** Fail the first N list calls, to exercise recovery retry. */
+    readonly failListTimes?: number;
   } = {},
 ) {
   const rows = new Map<string, CirceLiveVoiceSessionLease>(
     (options.seed ?? []).map((row) => [row.sessionId, row]),
   );
+  let listCalls = 0;
   const service = CirceLiveVoiceSessionRepository.of({
-    list: () => Effect.succeed(Array.from(rows.values())),
+    list: () => {
+      listCalls += 1;
+      return options.failListTimes !== undefined && listCalls <= options.failListTimes
+        ? Effect.fail(new PersistenceSqlError({ operation: "CirceLiveVoiceSessions.list" }))
+        : Effect.succeed(Array.from(rows.values()));
+    },
     put: (lease) =>
       options.failPut === true
         ? Effect.fail(new PersistenceSqlError({ operation: "CirceLiveVoiceSessions.put" }))
@@ -193,7 +201,7 @@ function makeLeaseStore(
         ? Effect.fail(new PersistenceSqlError({ operation: "CirceLiveVoiceSessions.remove" }))
         : Effect.sync(() => rows.delete(input.sessionId)),
   });
-  return { service, rows };
+  return { service, rows, listCalls: () => listCalls };
 }
 
 function cloudFixture(
@@ -608,6 +616,56 @@ describe("local live voice durability", () => {
       const service = yield* CirceLiveVoice;
       yield* service.createSession(input);
       expect(leaseStore.rows.size).toBe(0);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("retries a failed lease recovery instead of treating it as empty", () => {
+    const seed: CirceLiveVoiceSessionLease = {
+      sessionId: "live_recovered",
+      environmentId: EnvironmentId.make("node-one"),
+      createdAt: 0,
+      deadlineAt: 10_000_000_000,
+    };
+    const { serviceLayer, calls, leaseStore } = localFixture(
+      (request) =>
+        request.url.endsWith("/hangup") ? Response.json({}) : localAnswer("live_recovered"),
+      // The startup read and the recovery fiber's first attempt both fail; only
+      // a later retry succeeds, so this proves the failure is not read as empty.
+      { seed: [seed], failListTimes: 2 },
+    );
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      // The ledger read failed, so nothing is recovered and nothing closes yet.
+      yield* service.sweepExpired();
+      expect(calls.filter(isHangup)).toHaveLength(0);
+      expect(leaseStore.rows.has("live_recovered")).toBe(true);
+      // The retry succeeds, seeds the lease, and the sweeper closes it once it lapses.
+      yield* TestClock.adjust("30 seconds");
+      yield* TestClock.adjust("90 seconds");
+      yield* service.sweepExpired();
+      expect(leaseStore.rows.has("live_recovered")).toBe(false);
+      expect(calls.filter(isHangup)).toHaveLength(1);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("retains an unconfirmed session when persistence and hangup both fail", () => {
+    const { serviceLayer, calls } = localFixture(
+      (request) =>
+        request.url.endsWith("/hangup")
+          ? new Response("nope", { status: 500 })
+          : localAnswer("live_local"),
+      { failPut: true },
+    );
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      const error = yield* service.createSession(input).pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "CirceLiveVoiceRuntimeError" });
+      expect(calls.filter(isHangup)).toHaveLength(1);
+      // The durable write and the compensating hangup both failed; the sweeper
+      // must still retry the close instead of dropping the only handle.
+      yield* TestClock.adjust("90 seconds");
+      yield* service.sweepExpired();
+      expect(calls.filter(isHangup).length).toBeGreaterThanOrEqual(2);
     }).pipe(Effect.provide(serviceLayer));
   });
 });
