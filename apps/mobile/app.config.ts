@@ -88,7 +88,7 @@ const RELEASE_ASSETS = {
   splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.circeIosIconPng),
   androidAdaptiveForeground,
 
-  androidAdaptiveBackgroundColor: "#000000",
+  androidAdaptiveBackgroundColor: "#0F1620",
   androidAdaptiveBackgroundImage: undefined,
   androidSplashIcon: "./assets/android-splash-icon-prod.png",
   androidMonochromeIcon: "./assets/android-icon-mark.png",
@@ -144,10 +144,10 @@ const iosBundleIdentifier = isIosPersonalTeamBuild
   ? personalTeamBundleIdentifier!
   : variant.iosBundleIdentifier;
 
-const dmSansFonts = {
-  regular: "@expo-google-fonts/dm-sans/400Regular/DMSans_400Regular.ttf",
-  medium: "@expo-google-fonts/dm-sans/500Medium/DMSans_500Medium.ttf",
-  bold: "@expo-google-fonts/dm-sans/700Bold/DMSans_700Bold.ttf",
+const interFonts = {
+  regular: "@expo-google-fonts/inter/400Regular/Inter_400Regular.ttf",
+  medium: "@expo-google-fonts/inter/500Medium/Inter_500Medium.ttf",
+  bold: "@expo-google-fonts/inter/700Bold/Inter_700Bold.ttf",
 } as const;
 
 const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
@@ -305,21 +305,21 @@ const config: ExpoConfig = {
       "expo-font",
       {
         ios: {
-          fonts: [dmSansFonts.regular, dmSansFonts.medium, dmSansFonts.bold],
+          fonts: [interFonts.regular, interFonts.medium, interFonts.bold],
         },
         android: {
           fonts: [
             {
-              fontFamily: "DMSans-Regular",
-              fontDefinitions: [{ path: dmSansFonts.regular, weight: 400 }],
+              fontFamily: "Inter-Regular",
+              fontDefinitions: [{ path: interFonts.regular, weight: 400 }],
             },
             {
-              fontFamily: "DMSans-Medium",
-              fontDefinitions: [{ path: dmSansFonts.medium, weight: 500 }],
+              fontFamily: "Inter-Medium",
+              fontDefinitions: [{ path: interFonts.medium, weight: 500 }],
             },
             {
-              fontFamily: "DMSans-Bold",
-              fontDefinitions: [{ path: dmSansFonts.bold, weight: 700 }],
+              fontFamily: "Inter-Bold",
+              fontDefinitions: [{ path: interFonts.bold, weight: 700 }],
             },
           ],
         },

@@ -294,6 +294,20 @@ export function createMobileThemeVariables(
     "--color-dot-separator": withAlpha(c.textMuted, 0.35),
     "--color-wordmark": c.text,
     "--color-chevron": withAlpha(c.textMuted, 0.42),
+    // Circe reference tokens, v1.0. Static per appearance so every generated
+    // theme carries the same set and Circe chrome stays consistent.
+    "--color-circe-copper": appearance === "dark" ? "#e08a66" : "#c97857",
+    "--color-circe-copper-deep": appearance === "dark" ? "#ed9877" : "#b96849",
+    "--color-circe-peach": "#e8ae93",
+    "--color-circe-blush": appearance === "dark" ? "#33231f" : "#f2dfd6",
+    "--color-circe-rose": "#c9a79b",
+    "--color-circe-stone": "#dcd3cd",
+    "--color-circe-success": appearance === "dark" ? "#67c996" : "#49a878",
+    "--color-circe-canvas": appearance === "dark" ? "#0f1620" : "#faf7f3",
+    "--color-circe-card": appearance === "dark" ? "#151b22" : "#fffdfc",
+    "--color-circe-ink": appearance === "dark" ? "#f6f2ef" : "#14171b",
+    "--color-circe-tabbar": appearance === "dark" ? "#151b22" : "#fffdfc",
+    "--color-circe-tabbar-border": appearance === "dark" ? "#2d343e" : "#e3ddd8",
   };
 }
 

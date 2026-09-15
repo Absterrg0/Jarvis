@@ -122,6 +122,24 @@
       --color-dot-separator: rgba(29, 26, 21, 0.35);
       --color-wordmark: #1d1a15;
       --color-chevron: rgba(29, 26, 21, 0.3);
+
+      /* Circe reference tokens v1.0 (static, not derived from the shared
+         palette). Copper is the signature accent; peach carries hover and
+         ambient glow; success and siblings are semantic only. These tokens
+         survive runtime theme variable overrides so Circe-owned chrome stays
+         consistent. Values must match createMobileThemeVariables. */
+      --color-circe-copper: #c97857;
+      --color-circe-copper-deep: #b96849;
+      --color-circe-peach: #e8ae93;
+      --color-circe-blush: #f2dfd6;
+      --color-circe-rose: #c9a79b;
+      --color-circe-stone: #dcd3cd;
+      --color-circe-success: #49a878;
+      --color-circe-canvas: #faf7f3;
+      --color-circe-card: #fffdfc;
+      --color-circe-ink: #14171b;
+      --color-circe-tabbar: #fffdfc;
+      --color-circe-tabbar-border: #e3ddd8;
     }
 
     @variant dark {
@@ -233,6 +251,21 @@
       --color-dot-separator: rgba(255, 255, 255, 0.2);
       --color-wordmark: #e9e6df;
       --color-chevron: rgba(255, 255, 255, 0.2);
+
+      /* Circe reference tokens v1.0, dark expression. Deep blue-charcoal,
+         never pure black. Values must match createMobileThemeVariables. */
+      --color-circe-copper: #e08a66;
+      --color-circe-copper-deep: #ed9877;
+      --color-circe-peach: #e8ae93;
+      --color-circe-blush: #33231f;
+      --color-circe-rose: #c9a79b;
+      --color-circe-stone: #dcd3cd;
+      --color-circe-success: #67c996;
+      --color-circe-canvas: #0f1620;
+      --color-circe-card: #151b22;
+      --color-circe-ink: #f6f2ef;
+      --color-circe-tabbar: #151b22;
+      --color-circe-tabbar-border: #2d343e;
     }
   }
 }
@@ -240,9 +273,13 @@
 /* ─── Typography ────────────────────────────────────────────────────── */
 @theme {
   /* Keep these native family names aligned with app.config.ts. */
-  --font-sans: "DMSans-Regular";
-  --font-medium: "DMSans-Medium";
-  --font-bold: "DMSans-Bold";
+  --font-sans: "Inter-Regular";
+  --font-medium: "Inter-Medium";
+  --font-bold: "Inter-Bold";
+  /* Display serif for Circe identity moments only (wordmark, greetings,
+     empty states). System serif stack so no native rebuild is required;
+     bundle Instrument Serif later without changing call sites. */
+  --font-circe-serif: Georgia, "Times New Roman", serif;
 
   /* Keep this scale aligned with src/lib/typography.ts for native style props. */
   --text-3xs: 11px;
@@ -277,4 +314,8 @@
 @utility font-t3-extrabold {
   font-family: var(--font-bold);
   font-weight: 800;
+}
+
+@utility font-circe-serif {
+  font-family: var(--font-circe-serif);
 }

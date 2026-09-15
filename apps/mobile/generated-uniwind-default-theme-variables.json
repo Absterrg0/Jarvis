@@ -74,7 +74,19 @@
     "--color-drawer-shadow": "rgba(0, 0, 0, 0.12)",
     "--color-dot-separator": "rgba(29, 26, 21, 0.35)",
     "--color-wordmark": "#1d1a15",
-    "--color-chevron": "rgba(29, 26, 21, 0.3)"
+    "--color-chevron": "rgba(29, 26, 21, 0.3)",
+    "--color-circe-copper": "#c97857",
+    "--color-circe-copper-deep": "#b96849",
+    "--color-circe-peach": "#e8ae93",
+    "--color-circe-blush": "#f2dfd6",
+    "--color-circe-rose": "#c9a79b",
+    "--color-circe-stone": "#dcd3cd",
+    "--color-circe-success": "#49a878",
+    "--color-circe-canvas": "#faf7f3",
+    "--color-circe-card": "#fffdfc",
+    "--color-circe-ink": "#14171b",
+    "--color-circe-tabbar": "#fffdfc",
+    "--color-circe-tabbar-border": "#e3ddd8"
   },
   "dark": {
     "--color-screen": "#16181b",
@@ -151,6 +163,18 @@
     "--color-drawer-shadow": "rgba(0, 0, 0, 0.32)",
     "--color-dot-separator": "rgba(255, 255, 255, 0.2)",
     "--color-wordmark": "#e9e6df",
-    "--color-chevron": "rgba(255, 255, 255, 0.2)"
+    "--color-chevron": "rgba(255, 255, 255, 0.2)",
+    "--color-circe-copper": "#e08a66",
+    "--color-circe-copper-deep": "#ed9877",
+    "--color-circe-peach": "#e8ae93",
+    "--color-circe-blush": "#33231f",
+    "--color-circe-rose": "#c9a79b",
+    "--color-circe-stone": "#dcd3cd",
+    "--color-circe-success": "#67c996",
+    "--color-circe-canvas": "#0f1620",
+    "--color-circe-card": "#151b22",
+    "--color-circe-ink": "#f6f2ef",
+    "--color-circe-tabbar": "#151b22",
+    "--color-circe-tabbar-border": "#2d343e"
   }
 }
