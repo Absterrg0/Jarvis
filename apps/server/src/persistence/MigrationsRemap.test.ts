@@ -39,6 +39,7 @@ const EXPECTED_MANIFEST: ReadonlyArray<readonly [number, string]> = [
   [63, "ProjectionThreadBranchPullRequest"],
   [64, "ProjectionThreadsActiveOrderKey"],
   [65, "ProjectionThreadPullRequests"],
+  [66, "CirceLiveVoiceSessions"],
 ];
 
 layer("MigrationRemap", (it) => {
@@ -46,10 +47,10 @@ layer("MigrationRemap", (it) => {
     Effect.gen(function* () {
       const ids = migrationManifest.map(([id]) => id as number);
       const names = migrationManifest.map(([, name]) => name as string);
-      // Contiguous 1..65: no gaps, no duplicates, no renumbered slots.
+      // Contiguous 1..66: no gaps, no duplicates, no renumbered slots.
       assert.deepEqual(
         ids,
-        Array.from({ length: 65 }, (_, index) => index + 1),
+        Array.from({ length: 66 }, (_, index) => index + 1),
       );
       assert.equal(new Set(names).size, names.length);
       for (const [id, name] of EXPECTED_MANIFEST) {
@@ -58,7 +59,7 @@ layer("MigrationRemap", (it) => {
     }),
   );
 
-  it.effect("upgrades a shipped 1-58 database by applying only 59-65", () =>
+  it.effect("upgrades a shipped 1-58 database by applying only 59-66", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
@@ -68,7 +69,7 @@ layer("MigrationRemap", (it) => {
       const second = yield* runMigrations();
       assert.deepEqual(
         second.map(([id]) => Number(id)),
-        [59, 60, 61, 62, 63, 64, 65],
+        [59, 60, 61, 62, 63, 64, 65, 66],
       );
 
       // The shifted 47/48/49 rows keep the names databases recorded before
@@ -76,7 +77,7 @@ layer("MigrationRemap", (it) => {
       const recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
         SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
       `;
-      assert.equal(recorded.length, 65);
+      assert.equal(recorded.length, 66);
       assert.deepEqual(
         recorded.slice(46, 49).map((row) => [Number(row.migration_id), row.name]),
         [
@@ -95,6 +96,7 @@ layer("MigrationRemap", (it) => {
           [63, "ProjectionThreadBranchPullRequest"],
           [64, "ProjectionThreadsActiveOrderKey"],
           [65, "ProjectionThreadPullRequests"],
+          [66, "CirceLiveVoiceSessions"],
         ],
       );
 

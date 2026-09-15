@@ -104,7 +104,10 @@ Data-channel events can be observed in the browser devtools WebRTC internals or 
   whose 12-minute ceiling passes. Cloud sessions close over their original authenticated relay
   route; local-key sessions close straight against the provider with the node's key. Every closure
   is confirmed with `POST /v1/live/sessions/{session_id}/hangup` before anything is treated as
-  ended.
+  ended. Local-key leases are persisted, so a node restart still closes one whose renderer was
+  killed: a recovered session gets one lease window of grace for a live renderer to resume
+  heartbeats, a session whose ceiling already passed closes on startup, and a session the node
+  cannot close (for example no local key) keeps its durable record for the next attempt.
 - The relay independently sweeps expired cloud reservations on its scheduled cron, across every
   account, so billing stays bounded even if the node itself dies. A reservation is freed only after
   confirmed upstream closure; a reservation whose upstream id is unknown is surfaced for the

@@ -147,6 +147,7 @@ import { CirceFollowUpQueueLive } from "./circe/Layers/CirceFollowUpQueue.ts";
 import { CircePresentationFanoutLive } from "./circe/Layers/CircePresentationFanout.ts";
 import { CircePushNotificationsLive } from "./circe/push/ExpoPushNotifications.ts";
 import { CircePushRegistrationsLive } from "./persistence/Layers/CircePushRegistrations.ts";
+import { CirceLiveVoiceSessionsLive } from "./persistence/Layers/CirceLiveVoiceSessions.ts";
 import * as CirceLiveVoice from "./circe/Services/CirceLiveVoice.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
@@ -607,7 +608,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
-  Layer.provide(CirceLiveVoice.layer),
+  Layer.provide(CirceLiveVoice.layer.pipe(Layer.provide(CirceLiveVoiceSessionsLive))),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(DesktopUse.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),

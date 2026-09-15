@@ -26,6 +26,10 @@ import {
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import { RELAY_ENVIRONMENT_CREDENTIAL_SECRET, RELAY_URL_SECRET } from "../../cloud/config.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import {
+  CirceLiveVoiceSessionRepository,
+  type CirceLiveVoiceSessionLease,
+} from "../../persistence/Services/CirceLiveVoiceSessions.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 
 export const OPENAI_LIVE_SESSIONS_URL = "https://api.openai.com/v1/live/sessions";
@@ -269,6 +273,7 @@ export const layer = Layer.effect(
     const settingsService = yield* ServerSettingsService;
     const secrets = yield* ServerSecretStore.ServerSecretStore;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+    const leaseRepository = yield* CirceLiveVoiceSessionRepository;
     const client = yield* HttpClient.HttpClient;
     const readSecretString = (name: string) =>
       secrets
@@ -380,21 +385,40 @@ export const layer = Layer.effect(
             ),
           );
           releasesToRetry.delete(sessionId);
-        } else {
-          const settings = yield* settingsService.getSettings.pipe(
-            Effect.orElseSucceed(() => null),
+          leases.delete(sessionId);
+          return;
+        }
+        // Local-key session: confirm upstream closure before forgetting it. A
+        // failed close, or no key to close with, keeps both the in-memory
+        // lease and its durable row so a later sweep retries it.
+        const settings = yield* settingsService.getSettings.pipe(Effect.orElseSucceed(() => null));
+        const apiKey = settings?.circeLiveVoice.apiKey.trim() ?? "";
+        if (apiKey.length === 0) {
+          yield* Effect.logWarning(
+            "Local live voice session retained: no API key is available to close it",
+            { sessionId },
           );
-          const apiKey = settings?.circeLiveVoice.apiKey.trim() ?? "";
-          if (apiKey.length > 0) {
-            yield* endLocalSession(apiKey, sessionId).pipe(
-              Effect.tapError(() => Effect.sync(() => releasesToRetry.add(sessionId))),
-            );
-            releasesToRetry.delete(sessionId);
-          } else {
-            releasesToRetry.delete(sessionId);
-          }
+          return;
+        }
+        const closed = yield* endLocalSession(apiKey, sessionId).pipe(
+          Effect.as(true),
+          Effect.catch(() => Effect.succeed(false)),
+        );
+        if (!closed) {
+          yield* Effect.logWarning("Local live voice session close was not confirmed", {
+            sessionId,
+          });
+          return;
         }
         leases.delete(sessionId);
+        yield* leaseRepository.remove({ sessionId }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Local live voice lease could not be removed after closure", {
+              sessionId,
+              error,
+            }),
+          ),
+        );
       });
     const renewSession: CirceLiveVoiceShape["renewSession"] = ({ sessionId }) =>
       Effect.gen(function* () {
@@ -467,17 +491,67 @@ export const layer = Layer.effect(
           const created = yield* createCirceLiveVoiceSession(input, settings.circeLiveVoice).pipe(
             Effect.provideService(HttpClient.HttpClient, client),
           );
-          leases.set(created.sessionId, {
-            route: null,
-            lastRenewedAt: startedAt,
-            deadlineAt: startedAt + LIVE_SESSION_MAX_MILLIS,
-          });
+          const deadlineAt = startedAt + LIVE_SESSION_MAX_MILLIS;
+          const environmentId = yield* serverEnvironment.getEnvironmentId;
+          // Persist the lease before returning it. If the write fails the
+          // session exists upstream with no durable owner, so close it before
+          // failing rather than leak an untracked billed session.
+          yield* leaseRepository
+            .put({ sessionId: created.sessionId, environmentId, createdAt: startedAt, deadlineAt })
+            .pipe(
+              Effect.catch((persistenceError) =>
+                Effect.gen(function* () {
+                  yield* Effect.logWarning(
+                    "Local live voice lease could not be persisted; closing the session",
+                    { sessionId: created.sessionId, error: persistenceError },
+                  );
+                  const apiKey = settings.circeLiveVoice.apiKey.trim();
+                  const closed =
+                    apiKey.length === 0
+                      ? false
+                      : yield* endLocalSession(apiKey, created.sessionId).pipe(
+                          Effect.as(true),
+                          Effect.catch(() => Effect.succeed(false)),
+                        );
+                  if (!closed) {
+                    yield* Effect.logError(
+                      "Local live voice session is untracked and closure is unconfirmed",
+                      { sessionId: created.sessionId },
+                    );
+                  }
+                  return yield* new CirceLiveVoiceRuntimeError({
+                    message: "Live voice could not be tracked on this node.",
+                  });
+                }),
+              ),
+            );
+          leases.set(created.sessionId, { route: null, lastRenewedAt: startedAt, deadlineAt });
           return created;
         }),
       releaseSession,
       renewSession,
       sweepExpired,
     });
+    // Recover durable local leases from a previous process before starting the
+    // sweeper. A live renderer resumes heartbeats within the renew window and
+    // keeps its session; a dead one is swept after that window. A lease whose
+    // absolute deadline already passed closes on the first sweep immediately.
+    const recovered = yield* leaseRepository.list().pipe(
+      Effect.catch((error) =>
+        Effect.gen(function* () {
+          yield* Effect.logError("Local live voice leases could not be recovered", { error });
+          return [] as ReadonlyArray<CirceLiveVoiceSessionLease>;
+        }),
+      ),
+    );
+    const recoveredAt = yield* Clock.currentTimeMillis;
+    for (const row of recovered) {
+      leases.set(row.sessionId, {
+        route: null,
+        lastRenewedAt: recoveredAt,
+        deadlineAt: row.deadlineAt,
+      });
+    }
     // The server-side timer: close any session whose renderer stopped renewing,
     // or whose ceiling passed, regardless of any client timer. A killed or
     // sleeping renderer can then never leave a session billing.
