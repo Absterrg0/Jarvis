@@ -912,6 +912,60 @@ describe("cloud live voice release", () => {
     expect(f.tracks[0]?.stopped).toBe(true);
   });
 
+  it("speaks a one-time acoustic repair when a held delegation never receives speech", async () => {
+    vi.useFakeTimers();
+    try {
+      const delegated: string[] = [];
+      const f = fixture({
+        closeTimeoutMs: 1,
+        idleTimeoutMs: 0,
+        maxSessionMs: 0,
+        delegate: (utterance) => {
+          delegated.push(utterance);
+          return true;
+        },
+      });
+      await f.controller.start();
+      f.peer.channel.emit(started);
+      // The model asked for backend help but no transcript ever lands.
+      f.peer.channel.emit({
+        type: "session.delegation.created",
+        delegation: { id: "item_empty", target: "client" },
+      });
+      expect(delegated).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2_500);
+      // Stateless repair: one spoken nudge, nothing dispatched, no frame.
+      expect(delegated).toEqual([]);
+      const repairs = f.peer.channel
+        .events()
+        .filter(
+          (event) =>
+            event.type === "session.commentary.append" &&
+            typeof event.content === "string" &&
+            event.content.includes("Didn't catch that"),
+        );
+      expect(repairs).toHaveLength(1);
+      // No retry loop: further silence stays silent.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(
+        f.peer.channel
+          .events()
+          .filter(
+            (event) =>
+              event.type === "session.commentary.append" &&
+              typeof event.content === "string" &&
+              event.content.includes("Didn't catch that"),
+          ),
+      ).toHaveLength(1);
+      expect(delegated).toEqual([]);
+      const closePromise = f.controller.close();
+      await vi.advanceTimersByTimeAsync(1);
+      await closePromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("attempts graceful close for a local session whose creation resolves late", async () => {
     const entered = deferred<void>();
     const answer = deferred<CirceLiveVoiceStartResult>();
