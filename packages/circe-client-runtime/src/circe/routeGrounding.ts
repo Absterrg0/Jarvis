@@ -1,10 +1,17 @@
-import type { CirceProjectRef, CirceSemanticProposal, ThreadId } from "@t3tools/contracts";
+import type {
+  CirceProjectRef,
+  CirceSemanticProposal,
+  EnvironmentId,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   foldCirceMeshName,
   circeMeshCatalogCoverage,
+  circeMeshNodeReadiness,
   meshProjectMatchNames,
   type CirceMeshCatalog,
   type CirceMeshNode,
+  type CirceMeshNodeRecoveryAction,
   type CirceMeshProject,
   type CirceMeshProjectCandidate,
 } from "./mesh.ts";
@@ -15,15 +22,21 @@ import {
  * correction ref against the real bounded catalog after role-aware negation.
  * No prepositions, no regex, no inferred spans: only cited refs route.
  *
- * A qualified pinned followup (an active task thread) never swaps to a
+ * A qualified pinned followup (an active task session) never swaps to a
  * mentioned project, but an explicitly named device does re-route it: naming a
  * device is a deliberate cross-node instruction. A negated (excluded-only)
  * turn never chooses a node. Malformed spans, unheard values, and unknown names
  * stay ambient so the execution node clarifies authoritatively instead of
- * routing on distrust. Ambiguity asks with node-qualified candidates; an
- * unambiguous destination on a disconnected node reports unavailable with no
- * fallback.
+ * routing on distrust. A named device is a hard constraint: a project that does
+ * not live there is a conflict, an unknown device is reported, and a device
+ * whose catalog is not ready is never treated as authoritative.
  */
+
+export type CirceDeviceCandidate = {
+  readonly nodeId: EnvironmentId;
+  readonly label: string;
+  readonly reachability: CirceMeshNode["reachability"];
+};
 
 export type CirceExecuteRoute =
   | { readonly status: "ambient" }
@@ -34,18 +47,32 @@ export type CirceExecuteRoute =
       readonly candidates: ReadonlyArray<CirceMeshProjectCandidate>;
     }
   | {
+      /** A device label shared by more than one node. */
+      readonly status: "needs-device";
+      readonly nodeQuery: string;
+      readonly candidates: ReadonlyArray<CirceDeviceCandidate>;
+    }
+  | {
       readonly status: "unavailable";
       readonly project: CirceMeshProject;
       readonly nodeLabel: string;
     }
   | {
-      readonly status: "device-unavailable";
+      /** The cited device exists but its own catalog is not ready. */
+      readonly status: "device-not-ready";
+      readonly nodeLabel: string;
+      readonly message: string;
+      readonly recovery: CirceMeshNodeRecoveryAction;
+    }
+  | {
+      /** The cited device label matches no node: a hard routing constraint. */
+      readonly status: "device-unknown";
       readonly nodeLabel: string;
     }
   | {
-      /** A destination project that does not live on the cited device. */
+      /** The named project does not live on the cited device. */
       readonly status: "device-conflict";
-      readonly project: CirceMeshProject;
+      readonly projects: ReadonlyArray<CirceMeshProject>;
       readonly nodeLabel: string;
     };
 
@@ -59,6 +86,8 @@ const sameProjectRef = (left: CirceProjectRef, right: CirceProjectRef): boolean 
 
 const projectLabel = (project: CirceMeshProject): string =>
   `${project.title} — ${project.nodeLabel}`;
+
+const nodeLabelOf = (node: CirceMeshNode): string => node.label;
 
 const matchNodes = (catalog: CirceMeshCatalog, value: string): ReadonlyArray<CirceMeshNode> => {
   const query = foldCirceMeshName(value);
@@ -154,64 +183,79 @@ export function resolveCirceProposalExecuteRoute(
   const nodeRef = nodeRefs[0];
   const matches = matchProjects(catalog, target?.value ?? "");
   if (nodeRef !== undefined) {
+    // Device equivalent of the destination rule: the value must be spoken
+    // inside the cited span, or it is not routing evidence at all.
+    if (!containsFoldedName(nodeRef.span.text, nodeRef.value)) return { status: "ambient" };
     const nodes = matchNodes(catalog, nodeRef.value);
-    if (nodes.length === 1) {
-      const node = nodes[0]!;
-      const onNode = matches.filter((project) => project.ref.nodeId === node.nodeId);
-      const offNode = matches.filter((project) => project.ref.nodeId !== node.nodeId);
-      if (onNode.length === 1) {
-        // A device and a project that agrees with it: route to that project.
-        return routeToProject(catalog, onNode[0]!);
-      }
-      if (onNode.length > 1) {
-        return {
-          status: "needs-choice",
-          projectQuery: target?.value ?? "",
-          candidates: onNode.map((project) => ({ ...project, label: projectLabel(project) })),
-        };
-      }
-      if (offNode.length === 1) {
-        // The named project lives on another device: surface the conflict
-        // instead of guessing which the user meant.
-        return { status: "device-conflict", project: offNode[0]!, nodeLabel: node.label };
-      }
-      if (offNode.length > 1) {
-        return {
-          status: "needs-choice",
-          projectQuery: target?.value ?? "",
-          candidates: offNode.map((project) => ({ ...project, label: projectLabel(project) })),
-        };
-      }
-      // Device named with no resolvable project: prefer the current project on
-      // that device, else the device's only project, else ask within the device.
-      if (node.reachability !== "online") {
-        return { status: "device-unavailable", nodeLabel: node.label };
-      }
-      const nodeProjects = catalog.projects.filter((project) => project.ref.nodeId === node.nodeId);
-      const currentOnNode =
-        current !== null && current.projectRef.nodeId === node.nodeId
-          ? nodeProjects.find((project) => sameProjectRef(project.ref, current.projectRef))
-          : undefined;
-      if (currentOnNode !== undefined) return { status: "routed", project: currentOnNode };
-      if (nodeProjects.length === 1) return { status: "routed", project: nodeProjects[0]! };
-      if (nodeProjects.length > 1) {
-        return {
-          status: "needs-choice",
-          projectQuery: "",
-          candidates: nodeProjects.map((project) => ({ ...project, label: projectLabel(project) })),
-        };
-      }
-      // Online device with no projects: stay ambient and let the execution
-      // node clarify the missing project.
-      return { status: "ambient" };
+    if (nodes.length === 0) {
+      // A named device is a hard constraint: never silently run elsewhere.
+      return { status: "device-unknown", nodeLabel: nodeRef.value };
     }
     if (nodes.length > 1) {
-      // A label shared by several devices is not a route: fall through so the
-      // project mention (or execution-node clarification) decides instead.
-      return { status: "ambient" };
+      return {
+        status: "needs-device",
+        nodeQuery: nodeRef.value,
+        candidates: nodes.map((node) => ({
+          nodeId: node.nodeId,
+          label: node.label,
+          reachability: node.reachability,
+        })),
+      };
     }
-    // No device matched the label: not routing evidence, so fall through to
-    // project routing exactly as if the node ref were absent.
+    const node = nodes[0]!;
+    const currentOnNode =
+      current !== null && current.projectRef.nodeId === node.nodeId
+        ? catalog.projects.find((project) => sameProjectRef(project.ref, current.projectRef))
+        : undefined;
+    // The device's own catalog must be read before any project assertion: an
+    // online node with a pending or failed catalog has unknown projects, so
+    // its absence of a project proves nothing.
+    const readiness = circeMeshNodeReadiness(node);
+    if (readiness.status !== "ready") {
+      // A device-only turn on the current project there is still safe.
+      if (target === undefined && currentOnNode !== undefined) {
+        return { status: "routed", project: currentOnNode };
+      }
+      return {
+        status: "device-not-ready",
+        nodeLabel: nodeLabelOf(node),
+        message:
+          readiness.status === "unavailable"
+            ? readiness.message
+            : `${nodeLabelOf(node)}'s project list is still loading. Try again in a moment.`,
+        recovery: readiness.status === "unavailable" ? readiness.recovery : "retry",
+      };
+    }
+    const onNode = matches.filter((project) => project.ref.nodeId === node.nodeId);
+    const offNode = matches.filter((project) => project.ref.nodeId !== node.nodeId);
+    if (onNode.length === 1) return routeToProject(catalog, onNode[0]!);
+    if (onNode.length > 1) {
+      return {
+        status: "needs-choice",
+        projectQuery: target?.value ?? "",
+        candidates: onNode.map((project) => ({ ...project, label: projectLabel(project) })),
+      };
+    }
+    if (offNode.length > 0) {
+      // The named project lives elsewhere. The device is ready and does not
+      // hold it, so this is a conflict rather than an invitation to abandon
+      // the device the user named.
+      return { status: "device-conflict", projects: offNode, nodeLabel: nodeLabelOf(node) };
+    }
+    // Device named with no named project: prefer the current project there,
+    // else the device's only project, else ask within the device.
+    const nodeProjects = catalog.projects.filter((project) => project.ref.nodeId === node.nodeId);
+    if (currentOnNode !== undefined) return { status: "routed", project: currentOnNode };
+    if (nodeProjects.length === 1) return { status: "routed", project: nodeProjects[0]! };
+    if (nodeProjects.length > 1) {
+      return {
+        status: "needs-choice",
+        projectQuery: "",
+        candidates: nodeProjects.map((project) => ({ ...project, label: projectLabel(project) })),
+      };
+    }
+    // A ready device with no projects has nothing to route to.
+    return { status: "ambient" };
   }
 
   // A pinned followup keeps its task before any project mention is considered.
@@ -290,11 +334,16 @@ export function resolveCirceRouteCoverageConfirm(input: {
   readonly resolved: CirceMeshProject | undefined;
   readonly routed: boolean;
   readonly pinned: boolean;
+  /**
+   * True only when a unique, catalog-ready device was grounded for this turn.
+   * The device choice is explicit then, so partial coverage of other nodes
+   * cannot make the project name unsound. A cited-but-ungrounded device does
+   * not qualify.
+   */
+  readonly deviceGrounded?: boolean;
 }): CirceRouteCoverageCheck {
   if (input.pinned) return { status: "proceed" };
-  // A cited device is an explicit routing target: the choice is already made,
-  // so partial catalog coverage cannot make it unsound.
-  if (input.proposal.refs.some((ref) => ref.role === "node")) return { status: "proceed" };
+  if (input.deviceGrounded === true) return { status: "proceed" };
   const coverage = circeMeshCatalogCoverage(input.catalog);
   if (coverage.complete) return { status: "proceed" };
   const confirm = (project: CirceMeshProject): CirceRouteCoverageCheck => ({

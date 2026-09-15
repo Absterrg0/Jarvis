@@ -340,6 +340,16 @@ export function validateSemanticProposal(input: {
         reason: `ref ${index}: destination span too long`,
       };
     }
+    // A device is cited by name; the value must be spoken inside the span, the
+    // same proof a destination needs. Node never authorizes a project, but a
+    // value that was never heard must never route.
+    if (ref.role === "node" && !containsName(ref.span.text, ref.value)) {
+      return {
+        status: "malformed",
+        kind: "span",
+        reason: `ref ${index}: node value not spoken in span`,
+      };
+    }
   }
   const ordered = [...refs].sort((left, right) => left.span.start - right.span.start);
   for (const [index, ref] of ordered.entries()) {

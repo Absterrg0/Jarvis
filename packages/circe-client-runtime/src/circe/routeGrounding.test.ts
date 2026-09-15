@@ -153,26 +153,35 @@ describe("proposal-first execute route grounding", () => {
       ),
     ).toEqual({
       status: "device-conflict",
-      project: expect.objectContaining({
-        ref: { nodeId: LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
-      }),
+      projects: [
+        expect.objectContaining({
+          ref: { nodeId: LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
+        }),
+      ],
       nodeLabel: "Desktop",
     });
   });
 
-  it("reports a disconnected named device with no project", () => {
-    const source = "Do the thing on VPS";
+  it("stays ambient when the node value is not spoken inside its span", () => {
+    const source = "Do it on Desktop";
+    const at = source.indexOf("on Desktop");
     expect(
       resolveCirceProposalExecuteRoute(
         catalog,
         source,
-        proposal("start", [nodeRef(source, "on VPS", "VPS")]),
+        proposal("start", [
+          {
+            span: { start: at, end: at + "on Desktop".length, text: "on Desktop" },
+            role: "node",
+            value: "Laptop",
+          },
+        ]),
         ambientDesktop,
       ),
-    ).toEqual({ status: "device-unavailable", nodeLabel: "VPS" });
+    ).toEqual({ status: "ambient" });
   });
 
-  it("falls through to project routing when the device label matches nothing", () => {
+  it("reports an unknown device label as a hard constraint", () => {
     const source = "Check auth in Rivvl on Nowhere";
     expect(
       resolveCirceProposalExecuteRoute(
@@ -184,11 +193,108 @@ describe("proposal-first execute route grounding", () => {
         ]),
         ambientDesktop,
       ),
-    ).toEqual({
-      status: "routed",
-      project: expect.objectContaining({
-        ref: { nodeId: LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
-      }),
+    ).toEqual({ status: "device-unknown", nodeLabel: "Nowhere" });
+  });
+
+  it("reports a disconnected named device with no project", () => {
+    const source = "Do the thing on VPS";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        proposal("start", [nodeRef(source, "on VPS", "VPS")]),
+        ambientDesktop,
+      ),
+    ).toMatchObject({ status: "device-not-ready", nodeLabel: "VPS" });
+  });
+
+  it("does not assert a project is missing from a device with an unread catalog", () => {
+    const unread: CirceMeshCatalog = {
+      ...catalog,
+      nodes: [
+        { nodeId: LAPTOP, label: "Laptop", reachability: "online" },
+        {
+          nodeId: DESKTOP,
+          label: "Desktop",
+          reachability: "online",
+          catalogError: "Desktop's catalog could not be read.",
+          catalogErrorKind: "service",
+        },
+      ],
+    };
+    const source = "Check auth in Rivvl on Desktop";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        unread,
+        source,
+        proposal("start", [
+          destinationRef(source, "in Rivvl", "Rivvl"),
+          nodeRef(source, "on Desktop", "Desktop"),
+        ]),
+        ambientDesktop,
+      ),
+    ).toMatchObject({ status: "device-not-ready", nodeLabel: "Desktop" });
+  });
+
+  it("keeps a device constraint when the project lives on several other devices", () => {
+    const twoRivvls: CirceMeshCatalog = {
+      ...catalog,
+      projects: [
+        ...catalog.projects,
+        {
+          ...catalog.projects[0]!,
+          projectId: ProjectId.make("rivvl-vps"),
+          ref: { nodeId: VPS, projectId: ProjectId.make("rivvl-vps") },
+          nodeLabel: "VPS",
+        },
+      ],
+    };
+    const source = "Check auth in Rivvl on Desktop";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        twoRivvls,
+        source,
+        proposal("start", [
+          destinationRef(source, "in Rivvl", "Rivvl"),
+          nodeRef(source, "on Desktop", "Desktop"),
+        ]),
+        ambientDesktop,
+      ),
+    ).toMatchObject({
+      status: "device-conflict",
+      nodeLabel: "Desktop",
+      projects: expect.arrayContaining([
+        expect.objectContaining({ ref: { nodeId: VPS, projectId: ProjectId.make("rivvl-vps") } }),
+        expect.objectContaining({
+          ref: { nodeId: LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
+        }),
+      ]),
+    });
+  });
+
+  it("asks when one device label names more than one node", () => {
+    const shared: CirceMeshCatalog = {
+      ...catalog,
+      nodes: [
+        { nodeId: LAPTOP, label: "Work Laptop", reachability: "online" },
+        { nodeId: DESKTOP, label: "Work Laptop", reachability: "online" },
+      ],
+    };
+    const source = "Fix it on Work Laptop";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        shared,
+        source,
+        proposal("start", [nodeRef(source, "on Work Laptop", "Work Laptop")]),
+        null,
+      ),
+    ).toMatchObject({
+      status: "needs-device",
+      nodeQuery: "Work Laptop",
+      candidates: expect.arrayContaining([
+        expect.objectContaining({ nodeId: LAPTOP }),
+        expect.objectContaining({ nodeId: DESKTOP }),
+      ]),
     });
   });
 
@@ -569,6 +675,42 @@ describe("route coverage confirmation under partial catalogs", () => {
         pinned: false,
       }),
     ).toEqual({ status: "confirm", project: atlas, nodeLabels: ["Remote"] });
+  });
+
+  it("does not bypass coverage for an ungrounded device ref", () => {
+    const source = "Check out Atlas on Laptop";
+    expect(
+      resolveCirceRouteCoverageConfirm({
+        catalog: partialCatalog,
+        source,
+        proposal: proposal("start", [
+          destinationRef(source, "Atlas", "Atlas"),
+          nodeRef(source, "on Laptop", "Laptop"),
+        ]),
+        resolved: atlas,
+        routed: true,
+        pinned: false,
+        deviceGrounded: false,
+      }),
+    ).toEqual({ status: "confirm", project: atlas, nodeLabels: ["Remote"] });
+  });
+
+  it("proceeds once a unique ready device is grounded", () => {
+    const source = "Check out Atlas on Laptop";
+    expect(
+      resolveCirceRouteCoverageConfirm({
+        catalog: partialCatalog,
+        source,
+        proposal: proposal("start", [
+          destinationRef(source, "Atlas", "Atlas"),
+          nodeRef(source, "on Laptop", "Laptop"),
+        ]),
+        resolved: atlas,
+        routed: true,
+        pinned: false,
+        deviceGrounded: true,
+      }),
+    ).toEqual({ status: "proceed" });
   });
 
   it("lets an excluded ambient name reach the execution veto instead", () => {

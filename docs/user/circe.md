@@ -51,9 +51,10 @@ then **Save** to clear the Circe-specific choice.
 
 Name a device to run work there: "start a task to check auth in Rivvl on my laptop" or "on
 Desktop, fix the login bug." Circe routes to the device you name, even when a task is already
-focused on another device. If you name a project that lives on a different device, Circe tells you
-where that project is instead of guessing. A compound turn that names steps on different devices is
-not supported yet: run those steps one at a time.
+focused on another device. A device name is a hard constraint: if the device does not exist, Circe
+says so; if the project you named lives on a different device, Circe tells you where it is; and if
+two devices share a name, Circe asks you to name the project instead. A compound turn that names
+steps on different devices is not supported yet: run those steps one at a time.
 
 Without a device name, Circe routes by project. Name the project and the work runs on the device
 that owns it. If two devices have a project with the same name, Circe asks which one, listing each

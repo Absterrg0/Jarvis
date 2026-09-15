@@ -101,14 +101,22 @@ node. Every node decision is deterministic host policy:
 
 - A cited `destination`/`correction` names a project; the client grounds that
   name against its mesh catalog and routes to the project's owning node.
-- A cited `node` names a device. The client grounds the label, and the cited
-  device chooses the execution node directly. A device reference outranks the
-  pinned-followup rule: naming a device is a deliberate cross-node instruction,
-  while a bare project mention never steals a pinned task.
-- When both are cited and the project does not live on the cited device, the
-  host surfaces the conflict (project node vs device) instead of guessing.
-- Ambiguous names still ask with node-qualified choices, and an offline owner
-  (project or device) reports unavailable with no fallback.
+- A cited `node` names a device and is a hard constraint. The client requires
+  the device value to be spoken inside its span (the destination rule), then
+  grounds the label. An unknown label is reported, never silently ignored. A
+  device whose own catalog is not ready (`circeMeshNodeReadiness`) is reported
+  as not ready, because its absent project proves nothing.
+- A device reference outranks the pinned-followup rule: naming a device is a
+  deliberate cross-node instruction, while a bare project mention never steals
+  a pinned task.
+- When both are cited and the project does not live on the ready, cited device,
+  the host surfaces the conflict (project nodes vs device) rather than inviting
+  the user to abandon the device they named.
+- A label shared by several nodes asks an explicit device choice; a project
+  ambiguous within the cited device asks a node-qualified project choice.
+- Partial-catalog uniqueness confirmation is bypassed only when a unique, ready
+  device actually grounded the turn. A cited but ungrounded device does not
+  qualify.
 
 Only the client grounds a device label: the execution node cannot resolve a
 label it does not own, so the `node` role is non-authorizing for the server,

@@ -312,6 +312,20 @@ describe("device evidence", () => {
     ).toMatchObject({ status: "valid", target: { title: "Rivvl" } });
   });
 
+  it("rejects a node value that was not spoken in its span", () => {
+    const source = "Do it on Desktop";
+    const at = source.indexOf("on Desktop");
+    expect(
+      validate(source, [
+        {
+          span: { start: at, end: at + "on Desktop".length, text: "on Desktop" },
+          role: "node",
+          value: "Laptop",
+        },
+      ]),
+    ).toMatchObject({ status: "malformed", kind: "span" });
+  });
+
   it("rejects more than one node ref", () => {
     const source = "Check auth on Laptop and Desktop";
     expect(
