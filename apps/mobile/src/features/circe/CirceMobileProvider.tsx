@@ -17,6 +17,7 @@ import type {
   EnvironmentId,
   CircePresentationEvent,
   CirceTaskDeskView,
+  CirceTaskRef,
   ModelSelection,
   ThreadId,
 } from "@t3tools/contracts";
@@ -39,6 +40,7 @@ import {
   resolveCirceProposalExecuteRoute,
   resolveCirceRouteCoverageConfirm,
 } from "@circe/client-runtime/circe/routeGrounding";
+import { circePlanTargetOutcomes } from "@circe/client-runtime/circe/planPresentation";
 
 import { uuidv4 } from "../../lib/uuid";
 import { circeEnvironment } from "../../state/circe";
@@ -50,9 +52,11 @@ import { useAtomCommand as useMobileAtomCommand } from "../../state/use-atom-com
 import type { CirceClientContextTask } from "@circe/client-runtime/circe/commandContext";
 import {
   attachMobileCirceTask,
+  attachMobileCirceTasks,
   buildMobileCirceExecuteInput,
   classifyServerFrameCancel,
   createMobileCirceTurn,
+  mobileTurnTaskRefs,
   resolveMobileFocusContextTask,
   resolveRetainedFrameId,
   restoreMobileFocusFromDesk,
@@ -337,7 +341,7 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
       knownDesks?: ReadonlyMap<EnvironmentId, CirceTaskDeskView>,
     ) => {
       const turns = [...activeTurnsRef.current.values()].filter(
-        (turn) => turn.taskRef !== undefined,
+        (turn) => mobileTurnTaskRefs(turn).length > 0,
       );
       if (turns.length === 0) return;
       const retainedTurnsByNode = groupRetainedThreadIdsByNode(turns);
@@ -955,6 +959,40 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
             requestId,
           };
           replaceActiveTurn(turn);
+        }
+      } else if (result.value.status === "plan") {
+        // A validated multi-command turn already ran in order. Apply every
+        // step's focus or start in order, then keep the origin presentation
+        // listener alive while any started step still needs reports.
+        const startedRefs: Array<CirceTaskRef> = [];
+        for (const outcome of circePlanTargetOutcomes(result.value.steps, turn.projectRef)) {
+          if (outcome.kind === "project") {
+            adoptExplicitFocus({ projectRef: outcome.projectRef });
+            continue;
+          }
+          const focus = {
+            projectRef: outcome.projectRef,
+            task: {
+              threadId: outcome.taskRef.threadId,
+              taskRef: outcome.taskRef,
+              projectRef: outcome.projectRef,
+            },
+          };
+          adoptExplicitFocus(focus);
+          if (outcome.kind === "start") startedRefs.push(outcome.taskRef);
+        }
+        setMessage(result.value.message);
+        if (startedRefs.length > 0) {
+          // An execution acknowledgement is not completion: retain the turn
+          // (and its listener) until every started task settles.
+          replaceActiveTurn(attachMobileCirceTasks(turn, startedRefs));
+        } else {
+          removeActiveTurn(turn.originInteractionId);
+        }
+        // A focus onto another node needs its own desk read for enrichment.
+        const focusedNodeId = taskDeskNodeIdRef.current;
+        if (focusedNodeId !== null && focusedNodeId !== turn.projectRef.nodeId) {
+          void refreshTaskDesk(focusedNodeId);
         }
       } else if (result.value.action === "focused") {
         // Explicit focus adopts the exact response identity: the task
@@ -1749,10 +1787,25 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
         void refreshTaskDesk(turn.projectRef.nodeId);
       }
       if (event.kind === "completed" || event.kind === "failed") {
-        removeActiveTurn(turn.originInteractionId);
+        // One started task settling must not end a compound interaction's
+        // listener while another started task is still running.
+        const current = activeTurnsRef.current.get(turn.originInteractionId);
+        if (current === undefined) {
+          removeActiveTurn(turn.originInteractionId);
+          return;
+        }
+        const remaining = mobileTurnTaskRefs(current).filter(
+          (ref) => ref.threadId !== event.threadId,
+        );
+        const next = remaining[0];
+        if (next === undefined) {
+          removeActiveTurn(turn.originInteractionId);
+          return;
+        }
+        replaceActiveTurn({ ...current, taskRef: next, taskRefs: remaining });
       }
     },
-    [refreshTaskDesk, removeActiveTurn],
+    [refreshTaskDesk, removeActiveTurn, replaceActiveTurn],
   );
 
   const value = useMemo<CirceControllerValue>(

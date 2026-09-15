@@ -28,6 +28,7 @@ import {
   CircePresentationEvent,
   CircePushToken,
   CircePushRegistrationInput,
+  CircePendingInteraction,
 } from "./circe.ts";
 
 const decodeProposal = Schema.decodeUnknownSync(CirceSemanticProposal);
@@ -539,6 +540,142 @@ describe("Circe pre-accept request cancellation", () => {
     });
     expect(decodeExecutionResult({ status: "cancelled", requestId: "request-1" })).toMatchObject({
       status: "cancelled",
+    });
+  });
+});
+
+describe("Circe multi-command execution", () => {
+  it("decodes a plan with ordered step outcomes", () => {
+    expect(
+      decodeExecutionResult({
+        status: "plan",
+        message: "Stopped authentication. Started a deployment task.",
+        steps: [
+          { action: "stop", status: "acknowledged", message: "Stopped authentication." },
+          { action: "start", status: "started", message: "Started a deployment task." },
+        ],
+      }),
+    ).toMatchObject({ status: "plan" });
+    expect(() =>
+      decodeExecutionResult({
+        status: "plan",
+        message: "x",
+        steps: [{ action: "stop", status: "bogus", message: "y" }],
+      }),
+    ).toThrow();
+  });
+
+  it("keeps the node-qualified task identity on focus and started steps", () => {
+    expect(
+      decodeExecutionResult({
+        status: "plan",
+        message: "Switched to Beacon. Here are your projects.",
+        steps: [
+          {
+            action: "focused",
+            status: "acknowledged",
+            message: "Switched to Beacon.",
+            projectId: "project-2",
+            taskRef: { executionNodeId: "node-1", threadId: "thread-1" },
+          },
+          { action: "projects-listed", status: "acknowledged", message: "Two projects." },
+        ],
+      }),
+    ).toMatchObject({
+      status: "plan",
+      steps: [
+        { taskRef: { executionNodeId: "node-1", threadId: "thread-1" } },
+        { action: "projects-listed" },
+      ],
+    });
+  });
+
+  it("accepts an explicit null steps on a single-command proposal", () => {
+    expect(
+      decodeProposal({
+        action: "list-projects",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        lookup: null,
+        website: null,
+        steps: null,
+      }),
+    ).toMatchObject({ action: "list-projects" });
+  });
+});
+
+describe("Circe plan clarification frame", () => {
+  const decodePendingInteraction = Schema.decodeUnknownSync(CircePendingInteraction);
+  it("carries the remaining steps and the pending question", () => {
+    expect(
+      decodePendingInteraction({
+        kind: "plan",
+        frame: {
+          frameId: "frame-1",
+          originalUtterance: "Switch to Nowhere, then list my projects.",
+          originProjectId: "project-1",
+          steps: [
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+          ],
+          clarification: "project",
+          prompt: "I couldn't match Nowhere to a project.",
+          projectCandidates: [{ projectId: "project-2", label: "Beacon" }],
+          createdAt: "2026-08-12T00:00:00.000Z",
+          expiresAt: "2026-08-12T00:05:00.000Z",
+        },
+      }),
+    ).toMatchObject({ kind: "plan" });
+    expect(() =>
+      decodePendingInteraction({
+        kind: "plan",
+        frame: {
+          originalUtterance: "x",
+          originProjectId: "project-1",
+          steps: [],
+          clarification: "project",
+          prompt: "y",
+          createdAt: "2026-08-12T00:00:00.000Z",
+          expiresAt: "2026-08-12T00:05:00.000Z",
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("carries the pending index and pinned destructive targets", () => {
+    expect(
+      decodePendingInteraction({
+        kind: "plan",
+        frame: {
+          frameId: "frame-2",
+          originalUtterance: "Stop the current task, then list my projects.",
+          originProjectId: "project-1",
+          originNodeId: "node-1",
+          steps: [
+            { action: "stop", refs: [], model: null, effort: null, answer: null },
+            { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+          ],
+          pendingIndex: 0,
+          firstIndex: 0,
+          destructiveTargets: [
+            { index: 0, taskRef: { executionNodeId: "node-1", threadId: "thread-1" } },
+          ],
+          stepBindings: [{ index: 1, confirmedProjectId: "project-2" }],
+          clarification: "confirm",
+          prompt: 'This turn includes stopping a task. Say "confirm" to run all 2 steps.',
+          createdAt: "2026-08-12T00:00:00.000Z",
+          expiresAt: "2026-08-12T00:05:00.000Z",
+        },
+      }),
+    ).toMatchObject({
+      kind: "plan",
+      frame: {
+        pendingIndex: 0,
+        destructiveTargets: [{ index: 0, taskRef: { threadId: "thread-1" } }],
+        stepBindings: [{ index: 1, confirmedProjectId: "project-2" }],
+      },
     });
   });
 });

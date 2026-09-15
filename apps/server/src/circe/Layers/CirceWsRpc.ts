@@ -288,6 +288,7 @@ export const circeRpcScopeExtension = {
   [WS_METHODS.circeQuickLookup]: AuthOrchestrationOperateScope,
   [WS_METHODS.circeVoiceLiveStart]: AuthOrchestrationOperateScope,
   [WS_METHODS.circeVoiceLiveRelease]: AuthOrchestrationOperateScope,
+  [WS_METHODS.circeVoiceLiveRenew]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<
   Record<RpcGroup.Rpcs<typeof CirceWsRpcGroup>["_tag"], AuthEnvironmentScope>
 >;
@@ -434,6 +435,16 @@ export const CirceWsRpcHandlerExtensionLive = Layer.effect(
                   presetOffersVoice: (config.circeNodePreset ?? "full") !== "headless",
                   liveVoice,
                 }),
+                { "rpc.aggregate": "circe.voice" },
+              ),
+            // Renderer liveness for an active session. Unknown ids are a no-op,
+            // so a renew after a sweep or release can never resurrect a session.
+            [WS_METHODS.circeVoiceLiveRenew]: (input) =>
+              context.observeRpcEffect(
+                WS_METHODS.circeVoiceLiveRenew,
+                liveVoice
+                  .renewSession(input)
+                  .pipe(Effect.mapError(toCirceVoiceLiveStartClientError)),
                 { "rpc.aggregate": "circe.voice" },
               ),
             [WS_METHODS.circeGetTaskDesk]: (_input) =>

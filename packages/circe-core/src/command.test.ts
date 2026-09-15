@@ -17,6 +17,7 @@ import {
   decodeCirceSemanticProposal,
   resolveCirceInstruction,
   interpretCirceCommand,
+  interpretCircePlan,
   interpretPendingCirceReply,
   prepareCirceSemanticTurn,
   type CirceCommand,
@@ -24,6 +25,7 @@ import {
   type CirceCommandTask,
   type CirceSemanticProposal,
   type CirceSemanticProposalAction,
+  type CirceSemanticStep,
   type PreparedCirceSemanticTurn,
   type SemanticRef,
   type SemanticRole,
@@ -1143,6 +1145,55 @@ describe("Beacon semantic command boundary", () => {
     });
   });
 
+  it("never substitutes another task for a stale typed confirmation", () => {
+    const otherTask: CirceCommandTask = {
+      ...task,
+      threadId: ThreadId.make("other-thread"),
+      title: "Release preparation",
+      objective: "Prepare the release",
+    };
+    const source = "Stop the current task.";
+    const result = interpret(
+      context({
+        utterance: source,
+        confirmedTaskId: ThreadId.make("deleted-thread"),
+        recentCommandTasks: [task, otherTask],
+      }),
+      proposal("stop", source),
+    );
+    // Without the guard this fell through to candidates[0] and stopped the
+    // wrong task.
+    expect(result).toMatchObject({ status: "needs-input", reason: "control-target-required" });
+    if (result.status === "needs-input") {
+      expect(result.taskClarification?.candidates.map((candidate) => candidate.threadId)).toEqual([
+        task.threadId,
+        otherTask.threadId,
+      ]);
+    }
+  });
+
+  it("keeps a present typed confirmation authoritative over the citation", () => {
+    const otherTask: CirceCommandTask = {
+      ...task,
+      threadId: ThreadId.make("other-thread"),
+      title: "Release preparation",
+      objective: "Prepare the release",
+    };
+    const source = "Stop Release preparation.";
+    const result = interpret(
+      context({
+        utterance: source,
+        confirmedTaskId: task.threadId,
+        recentCommandTasks: [task, otherTask],
+      }),
+      proposal("stop", source, [{ role: "task", text: "Release preparation" }]),
+    );
+    expect(result).toMatchObject({
+      status: "command",
+      command: { type: "stop", task: { threadId: task.threadId } },
+    });
+  });
+
   it("keeps ambiguous acoustic project grounding ahead of the model", () => {
     const prepared = prepareCirceSemanticTurn(
       context({
@@ -1182,6 +1233,49 @@ describe("Beacon semantic command boundary", () => {
         proposal("start", "Fix it.", [{ role: "provider", text: "Fix", value: "fable-alt" }]),
       ),
     ).toMatchObject({ status: "needs-input", reason: "provider-not-found" });
+  });
+
+  it("decodes a step clause span and rejects a non-integer one", () => {
+    expect(
+      decodeCirceSemanticProposal({
+        action: "sequence",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        steps: [
+          {
+            action: "start",
+            refs: [],
+            sourceSpan: { start: 0, end: 4 },
+            model: null,
+            effort: null,
+            answer: null,
+          },
+          { action: "start", refs: [], model: null, effort: null, answer: null },
+        ],
+      }),
+    ).toMatchObject({ action: "sequence" });
+    expect(() =>
+      decodeCirceSemanticProposal({
+        action: "sequence",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        steps: [
+          {
+            action: "start",
+            refs: [],
+            sourceSpan: { start: 0.5, end: 4 },
+            model: null,
+            effort: null,
+            answer: null,
+          },
+          { action: "start", refs: [], model: null, effort: null, answer: null },
+        ],
+      }),
+    ).toThrow();
   });
 
   it("rejects malformed proposals and unavailable saved selections", () => {
@@ -2590,5 +2684,109 @@ describe("v1 simple-command hardening", () => {
     });
     const result = interpret(input, proposal("start", "Fix authentication."));
     expect(result).toMatchObject({ status: "needs-input", reason: "provider-unavailable" });
+  });
+
+  it("validates every step of a multi-command plan before returning commands", () => {
+    const source = "List my projects, then answer what is new today.";
+    const input = context({ utterance: source });
+    const steps: ReadonlyArray<CirceSemanticStep> = [
+      { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+      { action: "converse", refs: [], model: null, effort: null, answer: "Nothing new." },
+    ];
+    const plan = interpretCircePlan(input, ready(input), steps);
+    expect(plan.status).toBe("plan");
+    if (plan.status !== "plan") return;
+    // A question in a project's scope runs as a durable conversation thread,
+    // so the second validated command is a start.
+    expect(plan.commands.map((command) => command.type)).toEqual(["list-projects", "start"]);
+  });
+
+  it("returns needs-input with no commands when a later step cannot resolve", () => {
+    const source = "List my projects, then fix auth in Nowhere.";
+    const input = context({ utterance: source });
+    const steps: ReadonlyArray<CirceSemanticStep> = [
+      { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+      {
+        action: "start",
+        refs: [ref(source, "destination", "in Nowhere", "Nowhere")],
+        model: null,
+        effort: null,
+        answer: null,
+      },
+    ];
+    expect(interpretCircePlan(input, ready(input), steps)).toMatchObject({
+      status: "needs-input",
+    });
+  });
+
+  it("does not treat a single step as a plan", () => {
+    const input = context({ utterance: "List my projects." });
+    expect(
+      interpretCircePlan(input, ready(input), [
+        { action: "list-projects", refs: [], model: null, effort: null, answer: null },
+      ]),
+    ).toMatchObject({ status: "needs-input" });
+  });
+
+  it("scopes each step's instruction to its own clause span", () => {
+    const source = "Create a task to fix auth, then create a task to add release notes.";
+    const input = context({ utterance: source });
+    const firstEnd = source.indexOf(", then");
+    const secondStart = firstEnd + ", then ".length;
+    const plan = interpretCircePlan(input, ready(input), [
+      {
+        action: "start",
+        refs: [],
+        sourceSpan: { start: 0, end: firstEnd },
+        model: null,
+        effort: null,
+        answer: null,
+      },
+      {
+        action: "start",
+        refs: [],
+        sourceSpan: { start: secondStart, end: source.length },
+        model: null,
+        effort: null,
+        answer: null,
+      },
+    ]);
+    expect(plan.status).toBe("plan");
+    if (plan.status !== "plan") return;
+    const objectives = plan.commands.map((command) =>
+      command.type === "start" ? command.objective : "",
+    );
+    expect(objectives[0]).toContain("fix auth");
+    expect(objectives[0]).not.toContain("release notes");
+    expect(objectives[1]).toContain("release notes");
+    expect(objectives[1]).not.toContain("fix auth");
+  });
+
+  it("falls back to the whole turn when a step's clause span is unusable", () => {
+    const source = "Create a task to fix auth, then create a task to add release notes.";
+    const input = context({ utterance: source });
+    const plan = interpretCircePlan(input, ready(input), [
+      {
+        action: "start",
+        refs: [],
+        sourceSpan: { start: 0, end: source.length + 50 },
+        model: null,
+        effort: null,
+        answer: null,
+      },
+      {
+        action: "start",
+        refs: [],
+        sourceSpan: { start: 0, end: 0 },
+        model: null,
+        effort: null,
+        answer: null,
+      },
+    ]);
+    expect(plan.status).toBe("plan");
+    if (plan.status !== "plan") return;
+    expect(
+      plan.commands.map((command) => (command.type === "start" ? command.objective : "")),
+    ).toEqual([source, source]);
   });
 });

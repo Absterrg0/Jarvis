@@ -142,6 +142,52 @@ describe("retireFinishedMobileTurns", () => {
       }),
     ).toEqual([]);
   });
+
+  it("retires a compound turn only after every started task settles", () => {
+    const first = ThreadId.make("thread-a");
+    const second = ThreadId.make("thread-b");
+    const compound = {
+      originInteractionId: "compound",
+      projectRef: { nodeId: node },
+      taskRef: { threadId: first, executionNodeId: node },
+      taskRefs: [
+        { threadId: first, executionNodeId: node },
+        { threadId: second, executionNodeId: node },
+      ],
+    };
+    // One task still running keeps the whole interaction alive.
+    expect(
+      retireFinishedMobileTurns({
+        turns: [compound],
+        desks: new Map([
+          [
+            node,
+            [
+              { threadId: first, state: "ready" as const },
+              { threadId: second, state: "running" as const },
+            ],
+          ],
+        ]),
+        cataloguedNodeIds: new Set([node]),
+      }),
+    ).toEqual([]);
+    // Both terminal retires it exactly once.
+    expect(
+      retireFinishedMobileTurns({
+        turns: [compound],
+        desks: new Map([
+          [
+            node,
+            [
+              { threadId: first, state: "ready" as const },
+              { threadId: second, state: "failed" as const },
+            ],
+          ],
+        ]),
+        cataloguedNodeIds: new Set([node]),
+      }),
+    ).toEqual(["compound"]);
+  });
 });
 
 describe("groupRetainedThreadIdsByNode", () => {
@@ -158,6 +204,23 @@ describe("groupRetainedThreadIdsByNode", () => {
       new Map([
         [node, [ThreadId.make("thread-a"), ThreadId.make("thread-b")]],
         [otherNode, [ThreadId.make("thread-c")]],
+      ]),
+    );
+  });
+
+  it("groups every task of a compound turn by its own node", () => {
+    const compound = {
+      originInteractionId: "compound",
+      projectRef: { nodeId: node },
+      taskRefs: [
+        { threadId: ThreadId.make("thread-a"), executionNodeId: node },
+        { threadId: ThreadId.make("thread-b"), executionNodeId: otherNode },
+      ],
+    };
+    expect(groupRetainedThreadIdsByNode([compound])).toEqual(
+      new Map([
+        [node, [ThreadId.make("thread-a")]],
+        [otherNode, [ThreadId.make("thread-b")]],
       ]),
     );
   });

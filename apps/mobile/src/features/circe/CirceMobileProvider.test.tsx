@@ -1,4 +1,4 @@
-import { isValidElement } from "react";
+import { Children, isValidElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   EnvironmentId,
@@ -122,6 +122,19 @@ function render() {
   if (!isValidElement<{ value: ReturnType<typeof useCirceController> }>(tree))
     throw new Error("Missing provider value");
   return tree.props.value;
+}
+function renderTree() {
+  hooks.beginRender();
+  const tree = CirceMobileProvider({ children: null });
+  if (!isValidElement<{ value: ReturnType<typeof useCirceController>; children: ReactNode }>(tree))
+    throw new Error("Missing provider tree");
+  return tree;
+}
+/** Retained presentation listeners rendered for the active origin interactions. */
+function retainedListeners(children: ReactNode): number {
+  return Children.toArray(children).filter(
+    (child) => isValidElement(child) && (child.props as { turn?: unknown }).turn !== undefined,
+  ).length;
 }
 async function instruction(text: string) {
   const controller = render();
@@ -922,5 +935,68 @@ describe("mobile assistant quick actions", () => {
     });
     expect(render().message).toBe("Ahmedabad: 31°C.");
     expect(state.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("mobile provider compound plan outcomes", () => {
+  it("focuses the plan's project and retains the listener while a step runs", async () => {
+    const focusedProject = ProjectId.make("focused-project");
+    const startedThread = ThreadId.make("plan-task");
+    state.execute.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        status: "plan",
+        message: "Switched. Started the task.",
+        steps: [
+          {
+            action: "focused",
+            status: "acknowledged",
+            message: "Switched.",
+            projectId: focusedProject,
+          },
+          {
+            action: "start",
+            status: "started",
+            message: "Started.",
+            threadId: startedThread,
+            projectId: focusedProject,
+            taskRef: { executionNodeId: nodeId, threadId: startedThread },
+          },
+        ],
+      },
+    });
+    const tree = renderTree();
+    await tree.props.value.runInstruction(tree.props.value.createTextTurn(), "switch, then start");
+    expect(state.save.mock.calls.at(-1)?.[0]).toEqual({
+      preferredCirceProjectRef: { nodeId, projectId: focusedProject },
+    });
+    // The started step must keep the origin listener mounted for its reports.
+    expect(retainedListeners(renderTree().props.children)).toBe(1);
+  });
+
+  it("releases the interaction when a plan starts no work", async () => {
+    const focusedProject = ProjectId.make("focused-project");
+    state.execute.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        status: "plan",
+        message: "Switched. Two projects.",
+        steps: [
+          {
+            action: "focused",
+            status: "acknowledged",
+            message: "Switched.",
+            projectId: focusedProject,
+          },
+          { action: "projects-listed", status: "acknowledged", message: "Two projects." },
+        ],
+      },
+    });
+    const tree = renderTree();
+    await tree.props.value.runInstruction(tree.props.value.createTextTurn(), "switch, then list");
+    expect(state.save.mock.calls.at(-1)?.[0]).toEqual({
+      preferredCirceProjectRef: { nodeId, projectId: focusedProject },
+    });
+    expect(retainedListeners(renderTree().props.children)).toBe(0);
   });
 });

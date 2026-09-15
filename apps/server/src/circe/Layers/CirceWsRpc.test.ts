@@ -45,6 +45,9 @@ describe("Circe WebSocket RPC extension", () => {
     expect(circeRpcScopeExtension[WS_METHODS.circeVoiceLiveStart]).toBe(
       AuthOrchestrationOperateScope,
     );
+    expect(circeRpcScopeExtension[WS_METHODS.circeVoiceLiveRenew]).toBe(
+      AuthOrchestrationOperateScope,
+    );
   });
 
   it.effect("delegates live voice sessions on a preset that offers voice", () =>
@@ -52,6 +55,8 @@ describe("Circe WebSocket RPC extension", () => {
       const calls: string[] = [];
       const liveVoice = {
         releaseSession: () => Effect.void,
+        renewSession: () => Effect.void,
+        sweepExpired: () => Effect.void,
         createSession: () => {
           calls.push("create");
           return Effect.succeed({

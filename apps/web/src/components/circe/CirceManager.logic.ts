@@ -594,6 +594,13 @@ export function circeExecutionFeedback(result: CirceExecutionResult): CirceExecu
       visual: { state: "Circe", detail: result.message, kind: "completed" },
     };
   }
+  if (result.status === "plan") {
+    return {
+      cue: false,
+      speech: result.message,
+      visual: { state: "Circe", detail: result.message, kind: "completed" },
+    };
+  }
   return {
     cue: false,
     speech: result.acknowledgement ?? "Working on it.",

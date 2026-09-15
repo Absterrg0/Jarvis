@@ -2,14 +2,20 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import { TestClock } from "effect/testing";
 import { EnvironmentId } from "@t3tools/contracts";
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { layerTest as settingsLayerTest } from "../../serverSettings.ts";
 import { RELAY_URL_SECRET, RELAY_ENVIRONMENT_CREDENTIAL_SECRET } from "../../cloud/config.ts";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import type { CirceLiveVoiceCreateInput, CirceLiveVoiceSettings } from "@t3tools/contracts";
+import { PersistenceSqlError } from "../../persistence/Errors.ts";
+import {
+  CirceLiveVoiceSessionRepository,
+  type CirceLiveVoiceSessionLease,
+} from "../../persistence/Services/CirceLiveVoiceSessions.ts";
 
 import {
   CirceLiveVoice,
@@ -31,7 +37,7 @@ const settings: CirceLiveVoiceSettings = {
 };
 
 function fixture(
-  respond: () => Response = () =>
+  respond: (request: HttpClientRequest.HttpClientRequest) => Response = () =>
     Response.json({
       session: { id: "live_123" },
       transport: { type: "webrtc", sdp: "v=0\r\ns=answer\r\n" },
@@ -52,7 +58,7 @@ function fixture(
         bodyText:
           request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "",
       });
-      return HttpClientResponse.fromWeb(request, respond());
+      return HttpClientResponse.fromWeb(request, respond(request));
     }),
   );
   return { http, calls };
@@ -164,8 +170,46 @@ describe("CirceLiveVoice service", () => {
   });
 });
 
-function cloudFixture(respond: () => Response) {
+function makeLeaseStore(
+  options: {
+    readonly seed?: ReadonlyArray<CirceLiveVoiceSessionLease>;
+    readonly failPut?: boolean;
+    readonly failRemove?: boolean;
+    /** Fail the first N list calls, to exercise recovery retry. */
+    readonly failListTimes?: number;
+  } = {},
+) {
+  const rows = new Map<string, CirceLiveVoiceSessionLease>(
+    (options.seed ?? []).map((row) => [row.sessionId, row]),
+  );
+  let listCalls = 0;
+  const service = CirceLiveVoiceSessionRepository.of({
+    list: () => {
+      listCalls += 1;
+      return options.failListTimes !== undefined && listCalls <= options.failListTimes
+        ? Effect.fail(new PersistenceSqlError({ operation: "CirceLiveVoiceSessions.list" }))
+        : Effect.succeed(Array.from(rows.values()));
+    },
+    put: (lease) =>
+      options.failPut === true
+        ? Effect.fail(new PersistenceSqlError({ operation: "CirceLiveVoiceSessions.put" }))
+        : Effect.sync(() => {
+            rows.set(lease.sessionId, lease);
+          }),
+    remove: (input) =>
+      options.failRemove === true
+        ? Effect.fail(new PersistenceSqlError({ operation: "CirceLiveVoiceSessions.remove" }))
+        : Effect.sync(() => rows.delete(input.sessionId)),
+  });
+  return { service, rows, listCalls: () => listCalls };
+}
+
+function cloudFixture(
+  respond: (request: HttpClientRequest.HttpClientRequest) => Response,
+  leaseOptions: Parameters<typeof makeLeaseStore>[0] = {},
+) {
   const { http, calls } = fixture(respond);
+  const leaseStore = makeLeaseStore(leaseOptions);
   const values = new Map([
     [RELAY_URL_SECRET, "https://relay.example/"],
     [RELAY_ENVIRONMENT_CREDENTIAL_SECRET, "environment-secret"],
@@ -192,10 +236,42 @@ function cloudFixture(respond: () => Response) {
           remove: () => Effect.die("unused"),
           getOrCreateRandom: () => Effect.die("unused"),
         }),
+        Layer.succeed(CirceLiveVoiceSessionRepository, leaseStore.service),
       ),
     ),
   );
-  return { serviceLayer, calls, values };
+  return { serviceLayer, calls, values, leaseStore };
+}
+
+function localFixture(
+  respond: (request: HttpClientRequest.HttpClientRequest) => Response,
+  leaseOptions: Parameters<typeof makeLeaseStore>[0] = {},
+) {
+  const { http, calls } = fixture(respond);
+  const leaseStore = makeLeaseStore(leaseOptions);
+  const serviceLayer = layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(HttpClient.HttpClient, http),
+        settingsLayerTest({ circeLiveVoice: { apiKey: "sk-live-secret" } }),
+        Layer.succeed(ServerEnvironment, {
+          getEnvironmentId: Effect.succeed(EnvironmentId.make("node-one")),
+          getDescriptor: Effect.die("unused"),
+          setLabel: () => Effect.die("unused"),
+        }),
+        Layer.succeed(ServerSecretStore, {
+          // Unlinked node: no relay secrets, so the node closes with its own key.
+          get: () => Effect.succeed(Option.none()),
+          set: () => Effect.die("unused"),
+          create: () => Effect.die("unused"),
+          remove: () => Effect.die("unused"),
+          getOrCreateRandom: () => Effect.die("unused"),
+        }),
+        Layer.succeed(CirceLiveVoiceSessionRepository, leaseStore.service),
+      ),
+    ),
+  );
+  return { serviceLayer, calls, leaseStore };
 }
 
 describe("linked node live voice", () => {
@@ -252,6 +328,33 @@ describe("cloud live voice lifecycle", () => {
           "Bearer environment-secret",
         ],
       ]);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+  it.effect("closes a session whose renderer stopped renewing", () => {
+    const { serviceLayer, calls } = cloudFixture(() => Response.json(answer));
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* service.createSession(input);
+      // No renewals arrive: the lease lapses and the server closes the session
+      // on its own timer, independent of any client-side close.
+      yield* TestClock.adjust("2 minutes");
+      yield* service.sweepExpired();
+      expect(calls.filter((call) => call.method === "DELETE").map((call) => call.url)).toEqual([
+        "https://relay.example/v1/environments/node-one/live-voice/sessions/cloud_1",
+      ]);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+  it.effect("keeps a session open while its renderer renews the lease", () => {
+    const { serviceLayer, calls } = cloudFixture(() => Response.json(answer));
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* service.createSession(input);
+      for (let beat = 0; beat < 3; beat += 1) {
+        yield* TestClock.adjust("40 seconds");
+        yield* service.renewSession({ sessionId: answer.sessionId });
+      }
+      yield* service.sweepExpired();
+      expect(calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
     }).pipe(Effect.provide(serviceLayer));
   });
   it.effect("reads links at request time and validates before contacting the relay", () => {
@@ -381,6 +484,211 @@ describe("cloud release retry", () => {
       yield* service.createSession(input);
       expect(calls.map((call) => call.method)).toEqual(["POST", "DELETE", "DELETE", "POST"]);
       yield* service.releaseSession({ sessionId: "cloud_retry" });
+    }).pipe(Effect.provide(serviceLayer));
+  });
+});
+
+describe("local live voice durability", () => {
+  const localAnswer = (id: string) =>
+    Response.json({ session: { id }, transport: { sdp: "v=0\r\ns=answer\r\n" } });
+  const isHangup = (call: { readonly method: string; readonly url: string }) =>
+    call.method === "POST" && call.url.endsWith("/hangup");
+
+  it.effect("persists a local lease and deletes it only after confirmed closure", () => {
+    const { serviceLayer, calls, leaseStore } = localFixture(() => localAnswer("live_local"));
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      expect(yield* service.createSession(input)).toMatchObject({ sessionId: "live_local" });
+      expect(leaseStore.rows.has("live_local")).toBe(true);
+      yield* service.releaseSession({ sessionId: "live_local" });
+      expect(leaseStore.rows.has("live_local")).toBe(false);
+      expect(calls.filter(isHangup)).toHaveLength(1);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("keeps the durable lease when the close is not confirmed", () => {
+    const { serviceLayer, calls, leaseStore } = localFixture((request) =>
+      request.url.endsWith("/hangup")
+        ? new Response("nope", { status: 500 })
+        : localAnswer("live_local"),
+    );
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* service.createSession(input);
+      yield* service.releaseSession({ sessionId: "live_local" });
+      // Unconfirmed close: the row survives so a later sweep retries it.
+      expect(leaseStore.rows.has("live_local")).toBe(true);
+      expect(calls.filter(isHangup)).toHaveLength(1);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("compensates with a hangup when the lease cannot be persisted", () => {
+    const { serviceLayer, calls, leaseStore } = localFixture(() => localAnswer("live_local"), {
+      failPut: true,
+    });
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      const error = yield* service.createSession(input).pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "CirceLiveVoiceRuntimeError" });
+      expect(leaseStore.rows.size).toBe(0);
+      expect(calls.filter(isHangup)).toHaveLength(1);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("closes a recovered lease whose deadline already passed", () => {
+    const seed: CirceLiveVoiceSessionLease = {
+      sessionId: "live_dead",
+      environmentId: EnvironmentId.make("node-one"),
+      createdAt: -1000,
+      deadlineAt: -1,
+    };
+    const { serviceLayer, calls, leaseStore } = localFixture(
+      (request) => (request.url.endsWith("/hangup") ? Response.json({}) : localAnswer("live_dead")),
+      { seed: [seed] },
+    );
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* service.sweepExpired();
+      expect(leaseStore.rows.has("live_dead")).toBe(false);
+      expect(calls.filter(isHangup)).toHaveLength(1);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("gives a recovered lease grace, then closes it when renewals stop", () => {
+    const seed: CirceLiveVoiceSessionLease = {
+      sessionId: "live_recovered",
+      environmentId: EnvironmentId.make("node-one"),
+      createdAt: 0,
+      deadlineAt: 10_000_000_000,
+    };
+    const { serviceLayer, calls, leaseStore } = localFixture(
+      (request) =>
+        request.url.endsWith("/hangup") ? Response.json({}) : localAnswer("live_recovered"),
+      { seed: [seed] },
+    );
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      // Recovered within the window: a live renderer resumes heartbeats and the
+      // session survives the startup grace.
+      yield* service.sweepExpired();
+      yield* service.renewSession({ sessionId: "live_recovered" });
+      expect(leaseStore.rows.has("live_recovered")).toBe(true);
+      expect(calls.filter(isHangup)).toHaveLength(0);
+      // Renewals stop: the lease lapses and the server closes it.
+      yield* TestClock.adjust("90 seconds");
+      yield* service.sweepExpired();
+      expect(leaseStore.rows.has("live_recovered")).toBe(false);
+      expect(calls.filter(isHangup)).toHaveLength(1);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("retains a recovered lease when no API key can close it", () => {
+    const seed: CirceLiveVoiceSessionLease = {
+      sessionId: "live_nokey",
+      environmentId: EnvironmentId.make("node-one"),
+      createdAt: 0,
+      deadlineAt: 10_000_000_000,
+    };
+    const { serviceLayer, calls, leaseStore } = cloudFixture(() => Response.json({}), {
+      seed: [seed],
+    });
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* TestClock.adjust("90 seconds");
+      yield* service.sweepExpired();
+      // A linked node with no local key cannot close a recovered local session,
+      // so it must keep the durable row rather than forget it.
+      expect(leaseStore.rows.has("live_nokey")).toBe(true);
+      expect(calls.filter(isHangup)).toHaveLength(0);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("does not persist cloud leases", () => {
+    const { serviceLayer, leaseStore } = cloudFixture(() =>
+      Response.json({
+        sessionId: "cloud_only",
+        sdpAnswer: "v=0\r\ns=answer\r\n",
+        model: "gpt-live-1",
+        voice: "marin",
+      }),
+    );
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* service.createSession(input);
+      expect(leaseStore.rows.size).toBe(0);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("retries a failed lease recovery instead of treating it as empty", () => {
+    const seed: CirceLiveVoiceSessionLease = {
+      sessionId: "live_recovered",
+      environmentId: EnvironmentId.make("node-one"),
+      createdAt: 0,
+      deadlineAt: 10_000_000_000,
+    };
+    const { serviceLayer, calls, leaseStore } = localFixture(
+      (request) =>
+        request.url.endsWith("/hangup") ? Response.json({}) : localAnswer("live_recovered"),
+      // The startup read and the recovery fiber's first attempt both fail; only
+      // a later retry succeeds, so this proves the failure is not read as empty.
+      { seed: [seed], failListTimes: 2 },
+    );
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      // The ledger read failed, so nothing is recovered and nothing closes yet.
+      yield* service.sweepExpired();
+      expect(calls.filter(isHangup)).toHaveLength(0);
+      expect(leaseStore.rows.has("live_recovered")).toBe(true);
+      // The retry succeeds, seeds the lease, and the sweeper closes it once it lapses.
+      yield* TestClock.adjust("30 seconds");
+      yield* TestClock.adjust("90 seconds");
+      yield* service.sweepExpired();
+      expect(leaseStore.rows.has("live_recovered")).toBe(false);
+      expect(calls.filter(isHangup)).toHaveLength(1);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("retains an unconfirmed session when persistence and hangup both fail", () => {
+    const { serviceLayer, calls } = localFixture(
+      (request) =>
+        request.url.endsWith("/hangup")
+          ? new Response("nope", { status: 500 })
+          : localAnswer("live_local"),
+      { failPut: true },
+    );
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      const error = yield* service.createSession(input).pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "CirceLiveVoiceRuntimeError" });
+      expect(calls.filter(isHangup)).toHaveLength(1);
+      // The durable write and the compensating hangup both failed; the sweeper
+      // must still retry the close instead of dropping the only handle.
+      yield* TestClock.adjust("90 seconds");
+      yield* service.sweepExpired();
+      expect(calls.filter(isHangup).length).toBeGreaterThanOrEqual(2);
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("backs off a failed close instead of retrying every sweep", () => {
+    const { serviceLayer, calls } = localFixture(
+      (request) =>
+        request.url.endsWith("/hangup")
+          ? new Response("nope", { status: 500 })
+          : localAnswer("live_local"),
+      { failPut: true },
+    );
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* service.createSession(input).pipe(Effect.flip);
+      // Let the lease lapse so the sweeper attempts a close; the attempt fails
+      // and records a backoff.
+      yield* TestClock.adjust("60 seconds");
+      yield* service.sweepExpired();
+      const afterLapsed = calls.filter(isHangup).length;
+      expect(afterLapsed).toBeGreaterThan(1);
+      // A sweep at the same instant is inside the backoff window: no retry.
+      yield* service.sweepExpired();
+      expect(calls.filter(isHangup)).toHaveLength(afterLapsed);
     }).pipe(Effect.provide(serviceLayer));
   });
 });

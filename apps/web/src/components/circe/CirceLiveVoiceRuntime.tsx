@@ -48,10 +48,18 @@ function CirceLiveVoiceEnvironmentRuntime({
     reportFailure: false,
     reportDefect: false,
   });
+  const renewSession = useAtomCommand(circeLiveVoiceEnvironment.renew, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const releaseSessionRef = useRef(releaseSession);
   useEffect(() => {
     releaseSessionRef.current = releaseSession;
   }, [releaseSession]);
+  const renewSessionRef = useRef(renewSession);
+  useEffect(() => {
+    renewSessionRef.current = renewSession;
+  }, [renewSession]);
   const closingRef = useRef(Promise.resolve());
   const catalog = useAtomValue(circeMeshCatalogAtom);
   const catalogRef = useRef(catalog);
@@ -115,6 +123,11 @@ function CirceLiveVoiceEnvironmentRuntime({
       release: async (sessionId) => {
         const result = await releaseSessionRef.current({ environmentId, input: { sessionId } });
         if (result._tag === "Failure") throw new Error(liveVoiceFailureMessage(result));
+      },
+      renew: async (sessionId) => {
+        // Best-effort: a renew failure must not tear down a live conversation.
+        // The node closes the session only if renewals stop entirely.
+        await renewSessionRef.current({ environmentId, input: { sessionId } });
       },
       start: async ({ sdpOffer, context }) => {
         await closingRef.current;

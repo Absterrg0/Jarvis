@@ -12,7 +12,10 @@ import {
   TextGenerationError,
   type CirceCancelRequestInput,
   type CirceCancelRequestResult,
+  type CircePlanClarificationFrame,
   type CirceRequestMetadata,
+  type CirceSemanticStep,
+  type CirceTaskRef,
   type OrchestrationProjectShell,
   type OrchestrationThread,
   type TurnId,
@@ -45,15 +48,20 @@ import { CirceTaskDesk } from "../Services/CirceTaskDesk.ts";
 import {
   buildCirceFastSemanticPrompt,
   buildCirceSemanticPrompt,
+  circeCommandIsDestructive,
   decodeCirceSemanticProposal,
   describeCirceTaskStatus,
   interpretCirceCommand,
+  interpretCircePlan,
   interpretPendingCirceReply,
   CirceSemanticProposal,
   prepareCirceSemanticTurn,
+  scopeCirceStepClause,
   validateCirceModelSelection,
   type CirceCommandContext,
+  type CirceCommandNeedsInput,
   type CirceCommandTask,
+  type CircePlanStepBinding,
 } from "@circe/core/command";
 import {
   tryBoundedLocalGrammar,
@@ -79,6 +87,7 @@ import { circeRequestAcceptanceKey } from "@circe/core/requestIdentity";
 import type {
   CirceControllerExecuteInput,
   CirceControllerError,
+  CirceExecutionPlanStep,
   CirceExecutionResult,
 } from "../Services/CirceController.ts";
 import {
@@ -145,7 +154,7 @@ function buildMeshSemanticPrompt(input: {
     "Use exact catalog names when naming a project, task, provider, model, or effort.",
     "Every ref cites the Original transcript with exact character spans: start and end are UTF-16 code units and text is the source slice copied byte-for-byte, including case, spacing, and punctuation. Offsets prove the text was copied, nothing more. The host rejects any span that does not reproduce the source exactly, any value that does not echo its span, and any destination span that does not contain its named project.",
     "Roles: destination cites only the full routing wrapper, including its separator whitespace or comma, so removing precisely that span leaves the instruction unchanged otherwise. Never include a work verb, literal, constraint, or quoted command in a removable wrapper. correction cites the repaired-to mention. task cites the coded work's title; provider cites a requested runner, not a provider discussed as a subject. subject and excluded never authorize a route.",
-    "Cardinality is explicit: at most one destination or correction, one task, and one provider per turn. One coding task described with several constraints is a single start, continue, or steer with no task ref needed. For requests joining two independent control commands with then, also, and, or commas, propose action unsupported with empty refs. The host answers with needs-input and nothing dispatches.",
+    "Cardinality is explicit: at most one destination or correction, one task, and one provider per turn. One coding task described with several constraints is a single start, continue, or steer with no task ref needed. For requests joining two independent commands with then, also, and, or commas, propose action sequence with a steps array of up to four complete single commands. The host validates every step before dispatching any; steps never nest. Use unsupported only for a turn you cannot express as one command or an ordered sequence.",
     "Only a cited destination or correction span names the project. Mentions inside the work ('compare with X', 'mentioning Y', 'PRs about Z', 'branch W', 'Find docs about Fable') stay out of destination refs and never become the project. A bare object ('check out Zivil', 'Open Rivvl', 'look at Rivvl') is not a wrapper: cite nothing. A leading 'In <project>,' destination overrides any other project named later: 'In Rivvl, document checkout flow Circe uses' cites the In Rivvl wrapper for Rivvl and optionally Circe as subject.",
     "A leading negation rules out the named control or target: Don't, do not, and never mark ruled-out names excluded, never a destination. 'Don't stop the auth task, tell status' is status, never stop. 'Check auth but not in Fable' cites Fable excluded, never destination, and keeps the full wording. 'excluding the billing endpoint' cites the endpoint excluded.",
     "When a heard project mention is shown, it is advisory evidence only. Cite the heard text exactly as written when routing to it. A typo or mishearing ('Rivvil' for Rivvl, 'Rival' for Rivvl) never spells a catalog name: cite what was heard as subject or excluded, or omit refs and let the host clarify. Established aliases resolve, but only when cited exactly as heard.",
@@ -161,7 +170,7 @@ function buildMeshSemanticPrompt(input: {
     '- "Check auth in Rivvl" => action start with one destination ref citing in Rivvl.',
     '- "Don\'t stop auth task tell status" => action status with no destination ref.',
     '- "Fix auth, then run its tests" => action start: one coding task with several steps.',
-    '- "Stop authentication, then create a deployment task" => action unsupported: two independent Circe controls.',
+    '- "Stop authentication, then create a deployment task" => action sequence with steps [stop authentication, start a deployment task].',
     '- "what is new today?" with no related task => action converse with empty refs and the brief spoken reply (at most 400 characters) as answer.',
     '- "weather in Ahmedabad" => action lookup with lookup {kind: "weather", location: "Ahmedabad", day: "now"} and no refs.',
     '- "open YouTube" => action open-website with website "YouTube" and no refs.',
@@ -203,12 +212,114 @@ function decodeCirceSequenceSteps(
   if (proposal === undefined) return null;
   try {
     const decoded = decodeCirceSemanticProposal(proposal);
-    const steps = decoded.steps;
+    const steps = decoded.steps ?? undefined;
     if (steps === undefined || steps.length < 2) return null;
     return steps.slice(0, CIRCE_MAX_SEQUENCE_STEPS);
   } catch {
     return null;
   }
+}
+
+/** One executed plan step projected from its ordinary execution result. */
+function planStepEntry(result: CirceExecutionResult): CirceExecutionPlanStep {
+  if (result.status === "started") {
+    return {
+      action: "start",
+      status: "started",
+      message: (result.acknowledgement ?? result.objective).slice(0, 400),
+      threadId: result.threadId,
+      ...(result.projectId === undefined ? {} : { projectId: result.projectId }),
+      ...(result.taskRef === undefined ? {} : { taskRef: result.taskRef }),
+    };
+  }
+  if (result.status === "acknowledged") {
+    return {
+      action: result.action,
+      status: "acknowledged",
+      message: result.message.slice(0, 400),
+      ...("threadId" in result ? { threadId: result.threadId } : {}),
+      ...("projectId" in result && result.projectId !== undefined
+        ? { projectId: result.projectId }
+        : {}),
+      ...("taskRef" in result && result.taskRef !== undefined ? { taskRef: result.taskRef } : {}),
+    };
+  }
+  if (result.status === "needs-input") {
+    return { action: "needs-input", status: "needs-input", message: result.prompt.slice(0, 400) };
+  }
+  if (result.status === "plan") {
+    return { action: "plan", status: "acknowledged", message: result.message.slice(0, 400) };
+  }
+  return {
+    action: "cancel",
+    status: "failed",
+    message: "Cancelled before anything was dispatched.",
+  };
+}
+
+/** One spoken line for a finished plan; never claims a step that did not run. */
+function composePlanMessage(results: ReadonlyArray<CirceExecutionResult>): string {
+  const spoken = results.map((result) => planStepEntry(result).message).filter((line) => line);
+  const text = spoken.join(" ").trim();
+  return (text.length === 0 ? "Done." : text).slice(0, 400);
+}
+
+/** Project one step's typed clarification into the durable plan frame shape. */
+function planNeedsInputFrame(needsInput: CirceCommandNeedsInput): {
+  readonly clarification: "project" | "task" | "model";
+  readonly prompt: string;
+  readonly projectCandidates?: CircePlanClarificationFrame["projectCandidates"];
+  readonly taskCandidates?: CircePlanClarificationFrame["taskCandidates"];
+} {
+  return {
+    clarification:
+      needsInput.projectClarification !== undefined
+        ? "project"
+        : needsInput.taskClarification !== undefined
+          ? "task"
+          : "model",
+    prompt: needsInput.prompt,
+    ...(needsInput.projectClarification === undefined
+      ? {}
+      : { projectCandidates: needsInput.projectClarification.candidates }),
+    ...(needsInput.taskClarification === undefined
+      ? {}
+      : { taskCandidates: needsInput.taskClarification.candidates }),
+  };
+}
+
+/** Name the destructive action a plan must confirm before it runs. */
+function destructivePlanPrompt(
+  commands: ReadonlyArray<import("@circe/core/command").CirceCommand>,
+): string {
+  const destructive = commands.find(circeCommandIsDestructive);
+  const action = destructive?.type === "reroute" ? "moving a task" : "stopping a task";
+  return `This turn includes ${action}. Say "confirm" to run all ${commands.length} steps, or "cancel".`;
+}
+
+/** Node-qualified target of a destructive command, when it resolves to one. */
+function destructiveCommandTaskRef(
+  command: import("@circe/core/command").CirceCommand,
+): CirceTaskRef | undefined {
+  if (command.type === "stop") return command.task.taskRef;
+  if (command.type === "reroute") return command.sourceTask.taskRef;
+  return undefined;
+}
+
+/**
+ * Destructive steps of a validated plan with their resolved node-qualified
+ * targets. Persisting these lets a confirmation authorize the exact tasks that
+ * were presented rather than re-resolving against changed client context.
+ */
+function destructivePlanTargets(
+  commands: ReadonlyArray<import("@circe/core/command").CirceCommand>,
+): ReadonlyArray<{ readonly index: number; readonly taskRef: CirceTaskRef }> {
+  const targets: Array<{ index: number; taskRef: CirceTaskRef }> = [];
+  commands.forEach((command, index) => {
+    const taskRef = destructiveCommandTaskRef(command);
+    if (taskRef !== undefined) targets.push({ index, taskRef });
+  });
+  return targets;
 }
 
 const defaultInterpreterLayer = Layer.effect(
@@ -678,6 +789,198 @@ export const makeCirceControllerLive = <R>(
         return yield* crypto.randomUUIDv4.pipe(Effect.orDie);
       });
 
+      /**
+       * Build the Director context from the already-read desk, shell, and
+       * aliases. Shared by the ordinary execute path and the multi-command
+       * plan validator so both interpret against identical catalogs.
+       */
+      const buildTurnContext = Effect.fn("CirceController.turnContext")(function* (args: {
+        readonly input: CirceControllerExecuteInput;
+        readonly shell: Effect.Success<ReturnType<typeof projections.getShellSnapshot>>;
+        readonly aliases: Effect.Success<ReturnType<typeof projectLexicon.list>>;
+        readonly desk: Effect.Success<ReturnType<typeof taskDesk.get>>;
+        readonly confirmedTaskId: ThreadId | undefined;
+      }) {
+        const { input, shell, aliases, desk, confirmedTaskId } = args;
+        const availableProviders = yield* providers.getProviders;
+        const settings = yield* serverSettings.getSettings;
+
+        // Detail is history-dependent work: pending replies, focused
+        // context, the single selected task at execution, and the recent
+        // tasks the supervisor can actually name. The semantic prompt shows
+        // the supervisor 8 recent tasks, so deterministic confirmation
+        // carries full objectives for exactly that window: title matching
+        // alone cannot confirm an utterance that quotes a task's original
+        // objective after a rename, and loading detail after selection
+        // cannot repair a failed selection. Older recents match by shell
+        // title and reload their detail once selected.
+        const MODEL_VISIBLE_RECENT_TASKS = 8;
+        const requestedThreadIds = [
+          input.contextThreadId,
+          input.referenceThreadId,
+          ...desk.recentTasks.slice(0, MODEL_VISIBLE_RECENT_TASKS).map((task) => task.threadId),
+        ].filter((threadId): threadId is NonNullable<typeof threadId> => threadId !== undefined);
+        const threadDetails = yield* Effect.forEach([...new Set(requestedThreadIds)], (threadId) =>
+          projections
+            .getThreadDetailById(threadId)
+            .pipe(Effect.map((detail) => [threadId, detail] as const)),
+        );
+        const threadDetailById = new Map(threadDetails);
+        // Navigation runs on the shell snapshot already read above.
+        // Hydrating every recent thread before interpreting one instruction
+        // wastes the expensive read on commands that only need the catalog
+        // plus one task. A desk task missing from the shell (evicted,
+        // archived, or snapshot lag) keeps its old bounded fallback read
+        // instead of silently becoming unresolvable.
+        const shellThreadById = new Map(shell.threads.map((thread) => [thread.id, thread]));
+        const shellMissingThreadIds = [
+          ...new Set(
+            desk.recentTasks
+              .slice(MODEL_VISIBLE_RECENT_TASKS)
+              .map((task) => task.threadId)
+              .filter((threadId) => !shellThreadById.has(threadId)),
+          ),
+        ];
+        const fallbackDetails = yield* Effect.forEach(shellMissingThreadIds, (threadId) =>
+          projections
+            .getThreadDetailById(threadId)
+            .pipe(Effect.map((detail) => [threadId, detail] as const)),
+        );
+        const fallbackDetailById = new Map(fallbackDetails);
+        const fallbackDetail = (threadId: ThreadId) => {
+          const detail = fallbackDetailById.get(threadId);
+          return detail !== undefined && Option.isSome(detail) ? detail.value : undefined;
+        };
+        const navigationTasks = desk.recentTasks.flatMap((task) => {
+          const shellThread = shellThreadById.get(task.threadId);
+          const candidate = navigationCandidateFromDesk(
+            task,
+            shellThread ?? fallbackDetail(task.threadId),
+          );
+          return candidate === null ? [] : [candidate];
+        });
+        const contextThread = input.contextThreadId
+          ? (threadDetailById.get(input.contextThreadId) ?? Option.none())
+          : Option.none();
+        const referenceThread = input.referenceThreadId
+          ? (threadDetailById.get(input.referenceThreadId) ?? Option.none())
+          : Option.none();
+
+        const projectTitle = (projectId: ProjectId): string =>
+          shell.projects.find((candidate) => candidate.id === projectId)?.title ?? "its project";
+        const focusedThreadForTurn = Option.isSome(contextThread)
+          ? contextThread.value
+          : Option.isSome(referenceThread)
+            ? referenceThread.value
+            : undefined;
+        const queuedForInterpreter = focusedThreadForTurn
+          ? yield* followUpQueue.pendingCount(focusedThreadForTurn.id)
+          : 0;
+        const commandTask = (thread: OrchestrationThread): CirceCommandTask =>
+          commandTaskFromThread({
+            thread,
+            projectTitle: projectTitle(thread.projectId),
+            ...(input.executionNodeId === undefined
+              ? {}
+              : { executionNodeId: input.executionNodeId }),
+            ...(thread.id === focusedThreadForTurn?.id
+              ? { queuedFollowUps: queuedForInterpreter }
+              : {}),
+          });
+        const contextTask = Option.isSome(contextThread)
+          ? commandTask(contextThread.value)
+          : undefined;
+        const referenceTask = Option.isSome(referenceThread)
+          ? commandTask(referenceThread.value)
+          : undefined;
+        const focusedTask =
+          focusedThreadForTurn === undefined ? undefined : commandTask(focusedThreadForTurn);
+        const recentCommandTasks = desk.recentTasks.flatMap((task) => {
+          const detail = threadDetailById.get(task.threadId);
+          if (detail !== undefined && Option.isSome(detail)) return [commandTask(detail.value)];
+          const thread = shellThreadById.get(task.threadId);
+          if (thread !== undefined) {
+            return [
+              commandTaskFromShell({
+                thread,
+                projectTitle: projectTitle(thread.projectId),
+                taskRef: task.taskRef,
+                ...(input.executionNodeId === undefined
+                  ? {}
+                  : { executionNodeId: input.executionNodeId }),
+              }),
+            ];
+          }
+          const fallback = fallbackDetail(task.threadId);
+          return fallback === undefined ? [] : [commandTask(fallback)];
+        });
+        // Session-wide waiting request: when the focused thread has none and
+        // exactly one recent task does, a spoken answer belongs there.
+        const pendingReplyCandidate = (() => {
+          const waiting: Array<{ thread: OrchestrationThread; task: CirceCommandTask }> = [];
+          for (const task of desk.recentTasks.slice(0, MODEL_VISIBLE_RECENT_TASKS)) {
+            const detail = threadDetailById.get(task.threadId);
+            if (detail === undefined || Option.isNone(detail)) continue;
+            const thread = detail.value;
+            if (getPendingCirceReplyState(thread.activities).status !== "single") continue;
+            waiting.push({ thread, task: commandTask(thread) });
+          }
+          if (waiting.length !== 1) return undefined;
+          const only = waiting[0];
+          if (only === undefined) return undefined;
+          if (
+            only.thread.id === input.contextThreadId ||
+            only.thread.id === input.referenceThreadId
+          ) {
+            return undefined;
+          }
+          return only;
+        })();
+        const interpretationContext: CirceCommandContext = {
+          utterance: input.utterance,
+          currentProjectId: input.projectId,
+          projects: shell.projects,
+          aliases,
+          tasks: navigationTasks,
+          recentCommandTasks,
+          ...(focusedTask === undefined ? {} : { focusedTask }),
+          ...(contextTask === undefined ? {} : { contextTask }),
+          ...(referenceTask === undefined ? {} : { referenceTask }),
+          ...(confirmedTaskId === undefined ? {} : { confirmedTaskId }),
+          ...(Option.isNone(contextThread) ? {} : { contextThread: contextThread.value }),
+          ...(pendingReplyCandidate === undefined
+            ? {}
+            : {
+                pendingReplyThread: pendingReplyCandidate.thread,
+                pendingReplyTask: pendingReplyCandidate.task,
+              }),
+          providers: availableProviders,
+          supervisorModelSelection: settings.circeSupervisorModelSelection,
+          nodeDefaultModelSelection: settings.circeDefaultModelSelection,
+          ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+          ...(input.confirmedProjectId === undefined
+            ? {}
+            : { confirmedProjectId: input.confirmedProjectId }),
+          continueContext: input.continueContext === true,
+          ...(input.requestMetadata?.inputMode === undefined
+            ? {}
+            : { inputMode: input.requestMetadata.inputMode }),
+          ...(input.requestMetadata === undefined
+            ? {}
+            : { requestMetadata: input.requestMetadata }),
+          ...(input.expectedReply === undefined ? {} : { expectedReply: input.expectedReply }),
+        };
+        return {
+          context: interpretationContext,
+          availableProviders,
+          contextThread,
+          referenceThread,
+          commandTask,
+          focusedTask,
+          projectTitle,
+        };
+      });
+
       const executeBody = Effect.fn("CirceController.execute")(function* (
         input: CirceControllerExecuteInput,
         acceptanceKey: string | undefined,
@@ -741,7 +1044,8 @@ export const makeCirceControllerLive = <R>(
         const shell = yield* projections.getShellSnapshot();
         const aliases = yield* projectLexicon.list();
         let executionInput = input;
-        let confirmedTaskId: ThreadId | undefined;
+        // A plan step may carry the exact task a deterministic answer pinned.
+        let confirmedTaskId: ThreadId | undefined = input.confirmedTaskId;
 
         // An answer bound to an exact frame is verified before any pending
         // handling: a missing or replaced frame rejects the answer without
@@ -806,6 +1110,7 @@ export const makeCirceControllerLive = <R>(
             };
           }
           const selected =
+            pending.kind !== "plan" &&
             /^(?:yes|yeah|yep|confirm|correct|that one)$/u.test(answer) &&
             pending.frame.candidates.length === 1
               ? 0
@@ -989,174 +1294,21 @@ export const makeCirceControllerLive = <R>(
           executionInput = { ...executionInput, referenceThreadId: desk.focusedTask.threadId };
         }
         input = executionInput;
-        const availableProviders = yield* providers.getProviders;
-        const settings = yield* serverSettings.getSettings;
-
-        // Detail is history-dependent work: pending replies, focused
-        // context, the single selected task at execution, and the recent
-        // tasks the supervisor can actually name. The semantic prompt shows
-        // the supervisor 8 recent tasks, so deterministic confirmation
-        // carries full objectives for exactly that window: title matching
-        // alone cannot confirm an utterance that quotes a task's original
-        // objective after a rename, and loading detail after selection
-        // cannot repair a failed selection. Older recents match by shell
-        // title and reload their detail once selected.
-        const MODEL_VISIBLE_RECENT_TASKS = 8;
-        const requestedThreadIds = [
-          input.contextThreadId,
-          input.referenceThreadId,
-          ...desk.recentTasks.slice(0, MODEL_VISIBLE_RECENT_TASKS).map((task) => task.threadId),
-        ].filter((threadId): threadId is NonNullable<typeof threadId> => threadId !== undefined);
-        const threadDetails = yield* Effect.forEach([...new Set(requestedThreadIds)], (threadId) =>
-          projections
-            .getThreadDetailById(threadId)
-            .pipe(Effect.map((detail) => [threadId, detail] as const)),
-        );
-        const threadDetailById = new Map(threadDetails);
-        // Navigation runs on the shell snapshot already read above.
-        // Hydrating every recent thread before interpreting one instruction
-        // wastes the expensive read on commands that only need the catalog
-        // plus one task. A desk task missing from the shell (evicted,
-        // archived, or snapshot lag) keeps its old bounded fallback read
-        // instead of silently becoming unresolvable.
-        const shellThreadById = new Map(shell.threads.map((thread) => [thread.id, thread]));
-        const shellMissingThreadIds = [
-          ...new Set(
-            desk.recentTasks
-              .slice(MODEL_VISIBLE_RECENT_TASKS)
-              .map((task) => task.threadId)
-              .filter((threadId) => !shellThreadById.has(threadId)),
-          ),
-        ];
-        const fallbackDetails = yield* Effect.forEach(shellMissingThreadIds, (threadId) =>
-          projections
-            .getThreadDetailById(threadId)
-            .pipe(Effect.map((detail) => [threadId, detail] as const)),
-        );
-        const fallbackDetailById = new Map(fallbackDetails);
-        const fallbackDetail = (threadId: ThreadId) => {
-          const detail = fallbackDetailById.get(threadId);
-          return detail !== undefined && Option.isSome(detail) ? detail.value : undefined;
-        };
-        const navigationTasks = desk.recentTasks.flatMap((task) => {
-          const shellThread = shellThreadById.get(task.threadId);
-          const candidate = navigationCandidateFromDesk(
-            task,
-            shellThread ?? fallbackDetail(task.threadId),
-          );
-          return candidate === null ? [] : [candidate];
-        });
-        const contextThread = input.contextThreadId
-          ? (threadDetailById.get(input.contextThreadId) ?? Option.none())
-          : Option.none();
-        const referenceThread = input.referenceThreadId
-          ? (threadDetailById.get(input.referenceThreadId) ?? Option.none())
-          : Option.none();
-
-        const projectTitle = (projectId: ProjectId): string =>
-          shell.projects.find((candidate) => candidate.id === projectId)?.title ?? "its project";
-        const focusedThreadForTurn = Option.isSome(contextThread)
-          ? contextThread.value
-          : Option.isSome(referenceThread)
-            ? referenceThread.value
-            : undefined;
-        const queuedForInterpreter = focusedThreadForTurn
-          ? yield* followUpQueue.pendingCount(focusedThreadForTurn.id)
-          : 0;
-        const commandTask = (thread: OrchestrationThread): CirceCommandTask =>
-          commandTaskFromThread({
-            thread,
-            projectTitle: projectTitle(thread.projectId),
-            ...(input.executionNodeId === undefined
-              ? {}
-              : { executionNodeId: input.executionNodeId }),
-            ...(thread.id === focusedThreadForTurn?.id
-              ? { queuedFollowUps: queuedForInterpreter }
-              : {}),
-          });
-        const contextTask = Option.isSome(contextThread)
-          ? commandTask(contextThread.value)
-          : undefined;
-        const referenceTask = Option.isSome(referenceThread)
-          ? commandTask(referenceThread.value)
-          : undefined;
-        const focusedTask =
-          focusedThreadForTurn === undefined ? undefined : commandTask(focusedThreadForTurn);
-        const recentCommandTasks = desk.recentTasks.flatMap((task) => {
-          const detail = threadDetailById.get(task.threadId);
-          if (detail !== undefined && Option.isSome(detail)) return [commandTask(detail.value)];
-          const thread = shellThreadById.get(task.threadId);
-          if (thread !== undefined) {
-            return [
-              commandTaskFromShell({
-                thread,
-                projectTitle: projectTitle(thread.projectId),
-                taskRef: task.taskRef,
-                ...(input.executionNodeId === undefined
-                  ? {}
-                  : { executionNodeId: input.executionNodeId }),
-              }),
-            ];
-          }
-          const fallback = fallbackDetail(task.threadId);
-          return fallback === undefined ? [] : [commandTask(fallback)];
-        });
-        // Session-wide waiting request: when the focused thread has none and
-        // exactly one recent task does, a spoken answer belongs there.
-        const pendingReplyCandidate = (() => {
-          const waiting: Array<{ thread: OrchestrationThread; task: CirceCommandTask }> = [];
-          for (const task of desk.recentTasks.slice(0, MODEL_VISIBLE_RECENT_TASKS)) {
-            const detail = threadDetailById.get(task.threadId);
-            if (detail === undefined || Option.isNone(detail)) continue;
-            const thread = detail.value;
-            if (getPendingCirceReplyState(thread.activities).status !== "single") continue;
-            waiting.push({ thread, task: commandTask(thread) });
-          }
-          if (waiting.length !== 1) return undefined;
-          const only = waiting[0];
-          if (only === undefined) return undefined;
-          if (
-            only.thread.id === input.contextThreadId ||
-            only.thread.id === input.referenceThreadId
-          ) {
-            return undefined;
-          }
-          return only;
-        })();
-        const interpretationContext: CirceCommandContext = {
-          utterance: input.utterance,
-          currentProjectId: input.projectId,
-          projects: shell.projects,
+        const {
+          context: interpretationContext,
+          availableProviders,
+          contextThread,
+          referenceThread,
+          commandTask,
+          focusedTask,
+          projectTitle,
+        } = yield* buildTurnContext({
+          input,
+          shell,
           aliases,
-          tasks: navigationTasks,
-          recentCommandTasks,
-          ...(focusedTask === undefined ? {} : { focusedTask }),
-          ...(contextTask === undefined ? {} : { contextTask }),
-          ...(referenceTask === undefined ? {} : { referenceTask }),
-          ...(confirmedTaskId === undefined ? {} : { confirmedTaskId }),
-          ...(Option.isNone(contextThread) ? {} : { contextThread: contextThread.value }),
-          ...(pendingReplyCandidate === undefined
-            ? {}
-            : {
-                pendingReplyThread: pendingReplyCandidate.thread,
-                pendingReplyTask: pendingReplyCandidate.task,
-              }),
-          providers: availableProviders,
-          supervisorModelSelection: settings.circeSupervisorModelSelection,
-          nodeDefaultModelSelection: settings.circeDefaultModelSelection,
-          ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
-          ...(input.confirmedProjectId === undefined
-            ? {}
-            : { confirmedProjectId: input.confirmedProjectId }),
-          continueContext: input.continueContext === true,
-          ...(input.requestMetadata?.inputMode === undefined
-            ? {}
-            : { inputMode: input.requestMetadata.inputMode }),
-          ...(input.requestMetadata === undefined
-            ? {}
-            : { requestMetadata: input.requestMetadata }),
-          ...(input.expectedReply === undefined ? {} : { expectedReply: input.expectedReply }),
-        };
+          desk,
+          confirmedTaskId,
+        });
         // This is deliberately the only semantic interpretation call in a
         // controller turn. The narrow deterministic prepass answers only
         // closed-grammar explicit approval verdicts; everything else falls
@@ -2416,6 +2568,491 @@ export const makeCirceControllerLive = <R>(
           readonly result: Deferred.Deferred<CirceExecutionResult, CirceControllerError>;
         }
       >();
+      /** Project resolved step identities into the durable frame shape. */
+      const stepBindingsForFrame = (
+        bindings: ReadonlyMap<number, CircePlanStepBinding> | undefined,
+        offset = 0,
+      ): CircePlanClarificationFrame["stepBindings"] => {
+        if (bindings === undefined || bindings.size === 0) return undefined;
+        const entries: Array<{
+          index: number;
+          confirmedTaskId?: ThreadId;
+          confirmedProjectId?: ProjectId;
+        }> = [];
+        for (const [index, binding] of bindings) {
+          if (index < offset) continue;
+          entries.push({
+            index: index - offset,
+            ...(binding.confirmedTaskId === undefined
+              ? {}
+              : { confirmedTaskId: binding.confirmedTaskId }),
+            ...(binding.confirmedProjectId === undefined
+              ? {}
+              : { confirmedProjectId: binding.confirmedProjectId }),
+          });
+        }
+        return entries.length === 0 ? undefined : entries;
+      };
+
+      /** Persist the unexecuted steps of a paused plan so the answer resumes it. */
+      const persistPlanFrame = Effect.fn("CirceController.persistPlanFrame")(function* (args: {
+        readonly input: CirceControllerExecuteInput;
+        readonly steps: ReadonlyArray<CirceSemanticStep>;
+        readonly clarification: "project" | "task" | "model" | "confirm";
+        readonly prompt: string;
+        readonly pendingIndex?: number;
+        readonly firstIndex?: number;
+        readonly destructiveTargets?: CircePlanClarificationFrame["destructiveTargets"];
+        readonly stepBindings?: CircePlanClarificationFrame["stepBindings"];
+        readonly projectCandidates?: CircePlanClarificationFrame["projectCandidates"];
+        readonly taskCandidates?: CircePlanClarificationFrame["taskCandidates"];
+      }) {
+        const now = yield* DateTime.now;
+        const frameId = yield* uuid();
+        yield* taskDesk.setPendingInteraction({
+          sessionId: args.input.sessionId,
+          interaction: {
+            kind: "plan",
+            frame: {
+              frameId,
+              originalUtterance: args.input.utterance,
+              ...(args.input.sourceUtterance === undefined
+                ? {}
+                : { sourceUtterance: args.input.sourceUtterance }),
+              originProjectId: args.input.projectId,
+              ...(args.input.executionNodeId === undefined
+                ? {}
+                : { originNodeId: args.input.executionNodeId }),
+              ...(args.input.contextThreadId === undefined
+                ? {}
+                : { contextThreadId: args.input.contextThreadId }),
+              ...(args.input.referenceThreadId === undefined
+                ? {}
+                : { referenceThreadId: args.input.referenceThreadId }),
+              ...(args.input.continueContext === undefined
+                ? {}
+                : { continueContext: args.input.continueContext }),
+              ...(args.input.modelSelection === undefined
+                ? {}
+                : { modelSelection: args.input.modelSelection }),
+              ...(args.input.requestMetadata === undefined
+                ? {}
+                : { requestMetadata: args.input.requestMetadata }),
+              ...(args.input.expectedReply === undefined
+                ? {}
+                : { expectedReply: args.input.expectedReply }),
+              steps: [...args.steps],
+              ...(args.pendingIndex === undefined ? {} : { pendingIndex: args.pendingIndex }),
+              ...(args.firstIndex === undefined ? {} : { firstIndex: args.firstIndex }),
+              ...(args.destructiveTargets === undefined
+                ? {}
+                : { destructiveTargets: args.destructiveTargets }),
+              ...(args.stepBindings === undefined ? {} : { stepBindings: args.stepBindings }),
+              clarification: args.clarification,
+              prompt: args.prompt,
+              ...(args.projectCandidates === undefined
+                ? {}
+                : { projectCandidates: args.projectCandidates }),
+              ...(args.taskCandidates === undefined ? {} : { taskCandidates: args.taskCandidates }),
+              createdAt: now,
+              expiresAt: DateTime.add(now, { minutes: 5 }),
+            },
+          },
+        });
+        return frameId;
+      });
+
+      /** Run the validated commands in order; pause with a durable frame on input. */
+      const dispatchPlanSteps = Effect.fn("CirceController.dispatchPlanSteps")(function* (
+        input: CirceControllerExecuteInput,
+        steps: ReadonlyArray<CirceSemanticStep>,
+        firstIndex: number,
+        bindings?: ReadonlyMap<number, CircePlanStepBinding>,
+      ) {
+        // The plan frame is consumed before its steps run, so a step must not
+        // carry the consumed frame id into its own execute body. Confirmed
+        // identities are applied per step below, never to the whole plan.
+        const {
+          clarificationFrameId: _consumedFrameId,
+          confirmedTaskId: _inputConfirmedTaskId,
+          confirmedProjectId: _inputConfirmedProjectId,
+          ...stepBase
+        } = input;
+        const results: Array<CirceExecutionResult> = [];
+        for (const [offset, step] of steps.entries()) {
+          const index = firstIndex + offset;
+          const binding = bindings?.get(offset);
+          // Each step runs as an ordinary single turn. A step that cites its
+          // own clause carries the clause as its instruction source, so the
+          // objective never becomes the whole compound transcript. Clause
+          // offsets index the same verbatim source the refs and validation use.
+          const clause = scopeCirceStepClause(input.sourceUtterance ?? input.utterance, step);
+          const stepLease = yield* Ref.make<CircePreAcceptLease | undefined>(undefined);
+          const stepInput: CirceControllerExecuteInput = {
+            ...stepBase,
+            semanticProposal:
+              clause === null ? step : { ...step, refs: clause.refs, sourceSpan: undefined },
+            ...(clause === null ? {} : { sourceUtterance: clause.clause }),
+            ...(binding?.confirmedTaskId === undefined
+              ? {}
+              : { confirmedTaskId: binding.confirmedTaskId }),
+            ...(binding?.confirmedProjectId === undefined
+              ? {}
+              : { confirmedProjectId: binding.confirmedProjectId }),
+            ...(stepBase.requestMetadata === undefined
+              ? {}
+              : {
+                  requestMetadata: {
+                    ...stepBase.requestMetadata,
+                    requestId: `${stepBase.requestMetadata.requestId}::step${index}`,
+                  },
+                }),
+          };
+          const result = yield* executeBody(stepInput, undefined, stepLease).pipe(
+            Effect.ensuring(
+              Ref.get(stepLease).pipe(
+                Effect.flatMap((lease) => closeCommit(requestCancellation, lease)),
+              ),
+            ),
+          );
+          results.push(result);
+          if (result.status === "needs-input") {
+            const frameId = yield* persistPlanFrame({
+              input,
+              steps: steps.slice(offset),
+              pendingIndex: 0,
+              firstIndex: index,
+              stepBindings: stepBindingsForFrame(bindings, offset),
+              ...planNeedsInputFrame(result),
+            });
+            // Name what already ran before asking the question, so the user
+            // knows the earlier steps were accepted.
+            const executed = composePlanMessage(results.slice(0, -1));
+            return {
+              ...result,
+              prompt: offset === 0 ? result.prompt : `${executed} ${result.prompt}`.slice(0, 400),
+              clarificationFrameId: frameId,
+            };
+          }
+        }
+        return {
+          status: "plan" as const,
+          message: composePlanMessage(results),
+          steps: results.map(planStepEntry),
+        };
+      });
+
+      /**
+       * Validate every step of a plan against the authoritative catalogs, then
+       * run the validated commands in order. When a step needs an answer, the
+       * full unexecuted plan and the awaiting index are persisted, so the
+       * answer resumes there without dropping a prefix that never dispatched.
+       */
+      const executePlanSteps = Effect.fn("CirceController.executePlanSteps")(function* (args: {
+        readonly input: CirceControllerExecuteInput;
+        readonly steps: ReadonlyArray<CirceSemanticStep>;
+        readonly firstIndex: number;
+        readonly confirmed?: boolean;
+        /** A resumed remainder may hold a single step; a fresh turn may not. */
+        readonly resumed?: boolean;
+        /** Identities a deterministic answer pinned for specific steps. */
+        readonly bindings?: ReadonlyMap<number, CircePlanStepBinding>;
+        /** Destructive targets the confirmation authorized, by step index. */
+        readonly pinnedDestructiveTargets?: CircePlanClarificationFrame["destructiveTargets"];
+      }) {
+        const shell = yield* projections.getShellSnapshot();
+        const aliases = yield* projectLexicon.list();
+        const desk = yield* taskDesk.get(args.input.sessionId);
+        const context = yield* buildTurnContext({
+          input: args.input,
+          shell,
+          aliases,
+          desk,
+          confirmedTaskId: args.input.confirmedTaskId,
+        });
+        // Refs and clause spans index the verbatim source, exactly as the
+        // per-step dispatch below revalidates them. The trimmed utterance stays
+        // on the context for its heuristics only.
+        const planSource = args.input.sourceUtterance ?? args.input.utterance;
+        const prepared = prepareCirceSemanticTurn({ ...context.context, utterance: planSource });
+        if (prepared.status === "needs-input") return prepared;
+        const plan = interpretCircePlan(context.context, prepared, args.steps, {
+          allowSingleStep: args.resumed === true,
+          ...(args.bindings === undefined ? {} : { bindings: args.bindings }),
+        });
+        if (plan.status === "needs-input") {
+          const frameId = yield* persistPlanFrame({
+            input: args.input,
+            steps: args.steps,
+            pendingIndex: plan.index,
+            firstIndex: args.firstIndex,
+            stepBindings: stepBindingsForFrame(args.bindings),
+            ...planNeedsInputFrame(plan.needsInput),
+          });
+          return { ...plan.needsInput, clarificationFrameId: frameId };
+        }
+        // A destructive step inside a multi-command turn is confirmed before
+        // anything runs, so it can never hide inside a longer sentence. A
+        // confirmed resume skips this gate, but its pinned targets must still
+        // match: a plan that changed since the question re-asks.
+        if (
+          args.confirmed !== true &&
+          plan.commands.length >= 2 &&
+          plan.commands.some(circeCommandIsDestructive)
+        ) {
+          const prompt = destructivePlanPrompt(plan.commands);
+          const destructiveTargets = destructivePlanTargets(plan.commands);
+          const frameId = yield* persistPlanFrame({
+            input: args.input,
+            steps: args.steps,
+            pendingIndex: 0,
+            firstIndex: args.firstIndex,
+            clarification: "confirm",
+            prompt,
+            stepBindings: stepBindingsForFrame(args.bindings),
+            ...(destructiveTargets.length === 0 ? {} : { destructiveTargets }),
+          });
+          return {
+            status: "needs-input" as const,
+            reason: "control-target-required" as const,
+            prompt,
+            choices: ["Confirm", "Cancel"],
+            clarificationFrameId: frameId,
+          };
+        }
+        if (args.confirmed === true && args.pinnedDestructiveTargets !== undefined) {
+          const current = destructivePlanTargets(plan.commands);
+          const changed =
+            current.length !== args.pinnedDestructiveTargets.length ||
+            args.pinnedDestructiveTargets.some((pinned) => {
+              const match = current.find((target) => target.index === pinned.index);
+              return match === undefined || match.taskRef.threadId !== pinned.taskRef.threadId;
+            });
+          if (changed) {
+            const prompt = destructivePlanPrompt(plan.commands);
+            const frameId = yield* persistPlanFrame({
+              input: args.input,
+              steps: args.steps,
+              pendingIndex: 0,
+              firstIndex: args.firstIndex,
+              clarification: "confirm",
+              prompt,
+              stepBindings: stepBindingsForFrame(args.bindings),
+              ...(current.length === 0 ? {} : { destructiveTargets: current }),
+            });
+            return {
+              status: "needs-input" as const,
+              reason: "control-target-required" as const,
+              prompt,
+              choices: ["Confirm", "Cancel"],
+              clarificationFrameId: frameId,
+            };
+          }
+        }
+        return yield* dispatchPlanSteps(args.input, args.steps, args.firstIndex, args.bindings);
+      });
+
+      /**
+       * Continue a paused multi-command turn from the step awaiting an answer.
+       * The already-run steps are not in the frame, so they cannot repeat.
+       * Returns null when the answer is really a fresh command, so the caller
+       * falls through to ordinary processing.
+       */
+      const resumePlan = Effect.fn("CirceController.resumePlan")(function* (args: {
+        readonly input: CirceControllerExecuteInput;
+        readonly frame: CircePlanClarificationFrame;
+      }) {
+        const { frame } = args;
+        const now = yield* DateTime.now;
+        const frameId = frame.frameId;
+        const consume = () =>
+          taskDesk.consumePendingInteraction({
+            sessionId: args.input.sessionId,
+            ...(frameId === undefined ? {} : { expectedFrameId: frameId }),
+          });
+        const staleReply = {
+          status: "needs-input" as const,
+          reason: "control-target-required" as const,
+          prompt:
+            "That answer no longer matches the current question. Please answer the current question or restate your request.",
+          choices: [] as ReadonlyArray<string>,
+        };
+        if (
+          args.input.clarificationFrameId !== undefined &&
+          args.input.clarificationFrameId !== frameId
+        ) {
+          return staleReply;
+        }
+        if (DateTime.toEpochMillis(frame.expiresAt) <= DateTime.toEpochMillis(now)) {
+          const expired = yield* consume();
+          if (expired === null) return staleReply;
+          return {
+            status: "needs-input" as const,
+            reason: "control-target-required" as const,
+            prompt: "That selection expired. Please restate the request.",
+            choices: [] as ReadonlyArray<string>,
+          };
+        }
+        const answer = normalizeTaskDeskAnswer(args.input.utterance);
+        if (/^(?:cancel|never mind|none|no)$/u.test(answer)) {
+          const cancelled = yield* consume();
+          if (cancelled === null) return staleReply;
+          return {
+            status: "acknowledged" as const,
+            action: "focused" as const,
+            projectId: args.input.projectId,
+            message: "Cancelled the remaining steps.",
+          };
+        }
+        // The paused plan's saved context is authoritative: the pending answer
+        // never retargets the plan. Only the identity it resolves is applied,
+        // scoped to the step that asked.
+        const pendingIndex = frame.pendingIndex ?? 0;
+        const firstIndex = frame.firstIndex ?? 0;
+        const answerModelSelection =
+          args.input.modelSelection !== undefined
+            ? args.input.modelSelection
+            : frame.modelSelection;
+        const bindings = new Map<number, CircePlanStepBinding>();
+        for (const binding of frame.stepBindings ?? []) {
+          bindings.set(binding.index, {
+            ...(binding.confirmedTaskId === undefined
+              ? {}
+              : { confirmedTaskId: binding.confirmedTaskId }),
+            ...(binding.confirmedProjectId === undefined
+              ? {}
+              : { confirmedProjectId: binding.confirmedProjectId }),
+          });
+        }
+        const resumeInput: CirceControllerExecuteInput = {
+          ...args.input,
+          utterance: frame.originalUtterance,
+          projectId: frame.originProjectId,
+          contextThreadId: frame.contextThreadId,
+          referenceThreadId: frame.referenceThreadId,
+          continueContext: frame.continueContext ?? false,
+          // A plan answer resolves through its per-step binding only; a
+          // global confirmation from the client must never retarget a step.
+          confirmedTaskId: undefined,
+          confirmedProjectId: undefined,
+          ...(frame.sourceUtterance === undefined
+            ? {}
+            : { sourceUtterance: frame.sourceUtterance }),
+          ...(frame.originNodeId === undefined ? {} : { executionNodeId: frame.originNodeId }),
+          ...(answerModelSelection === undefined ? {} : { modelSelection: answerModelSelection }),
+          ...(frame.requestMetadata === undefined
+            ? {}
+            : { requestMetadata: frame.requestMetadata }),
+          ...(frame.expectedReply === undefined ? {} : { expectedReply: frame.expectedReply }),
+          semanticProposal: {
+            action: "sequence",
+            refs: [],
+            model: null,
+            effort: null,
+            answer: null,
+            steps: [...frame.steps],
+          },
+        };
+        const resume = (confirmed: boolean) =>
+          executePlanSteps({
+            input: resumeInput,
+            steps: frame.steps,
+            firstIndex,
+            bindings,
+            resumed: true,
+            ...(confirmed ? { confirmed: true } : {}),
+            ...(frame.destructiveTargets === undefined
+              ? {}
+              : { pinnedDestructiveTargets: frame.destructiveTargets }),
+          });
+        if (frame.clarification === "confirm") {
+          // A destructive step in a compound turn: only an explicit yes runs
+          // it. Anything else re-asks; cancel is handled above.
+          if (!/^(?:yes|yeah|yep|confirm|do it|go ahead|proceed|okay|ok)$/u.test(answer)) {
+            return {
+              status: "needs-input" as const,
+              reason: "control-target-required" as const,
+              prompt: frame.prompt,
+              choices: ["Confirm", "Cancel"] as ReadonlyArray<string>,
+              ...(frameId === undefined ? {} : { clarificationFrameId: frameId }),
+            };
+          }
+          const confirmed = yield* consume();
+          if (confirmed === null) return staleReply;
+          // Execute exactly the tasks the question presented, even if client
+          // context changed while it was pending.
+          for (const target of frame.destructiveTargets ?? []) {
+            bindings.set(target.index, { confirmedTaskId: target.taskRef.threadId });
+          }
+          return yield* resume(true);
+        }
+        if (frame.clarification === "project") {
+          const shell = yield* projections.getShellSnapshot();
+          const aliases = yield* projectLexicon.list();
+          const candidates = frame.projectCandidates ?? [];
+          const resolved = resolveCirceProjectClarificationChoice({
+            answer: args.input.utterance,
+            candidates: candidates.map((candidate) => ({
+              projectId: candidate.projectId,
+              label: candidate.label,
+            })),
+            projects: shell.projects,
+            aliases,
+          });
+          if (resolved === null) {
+            if (
+              looksLikeCirceBoundedCommand({
+                utterance: args.input.utterance,
+                projects: shell.projects,
+                aliases,
+              })
+            ) {
+              const retired = yield* consume();
+              if (retired === null) return staleReply;
+              return null;
+            }
+            return {
+              status: "needs-input" as const,
+              reason: "control-target-required" as const,
+              prompt: frame.prompt,
+              choices: candidates.map((candidate) => candidate.label),
+              ...(frameId === undefined ? {} : { clarificationFrameId: frameId }),
+            };
+          }
+          bindings.set(pendingIndex, { confirmedProjectId: resolved.projectId });
+        } else if (frame.clarification === "task") {
+          const candidates = frame.taskCandidates ?? [];
+          const selected =
+            /^(?:yes|yeah|yep|confirm|correct|that one)$/u.test(answer) && candidates.length === 1
+              ? 0
+              : ordinalTaskChoice(answer);
+          const candidate = selected === undefined ? undefined : candidates[selected];
+          if (candidate === undefined) {
+            return {
+              status: "needs-input" as const,
+              reason: "control-target-required" as const,
+              prompt: frame.prompt,
+              choices: candidates.map((item) => item.label),
+              ...(frameId === undefined ? {} : { clarificationFrameId: frameId }),
+            };
+          }
+          bindings.set(pendingIndex, { confirmedTaskId: candidate.threadId });
+        } else if (args.input.modelSelection === undefined) {
+          // Model clarification: the client resolves it and resends a
+          // selection. Without one there is nothing new to apply.
+          return {
+            status: "needs-input" as const,
+            reason: "selection-unavailable" as const,
+            prompt: frame.prompt,
+            choices: [] as ReadonlyArray<string>,
+            ...(frameId === undefined ? {} : { clarificationFrameId: frameId }),
+          };
+        }
+        const consumed = yield* consume();
+        if (consumed === null) return staleReply;
+        return yield* resume(false);
+      });
+
       return CirceController.of({
         execute: (input: CirceControllerExecuteInput) => {
           // The acceptance key is derived once and captured: the execute
@@ -2426,39 +3063,21 @@ export const makeCirceControllerLive = <R>(
           // remove the owner's commit.
           const acceptanceKey = preAcceptKeyFor(input);
           return Effect.gen(function* () {
-            // Multi-command turn: dispatch each step through the ordinary path
-            // in order, stopping at the first step that needs input. Steps are
-            // already bounded by decode, and each gets a derived request id so
-            // a retry of the whole turn stays idempotent per step.
+            // Durable plan resume: an answer to a paused multi-command turn
+            // continues its remaining steps. Checked only when no new proposal
+            // is supplied, so a fresh command still routes normally.
+            if (input.semanticProposal === undefined) {
+              const resumeDesk = yield* taskDesk.get(input.sessionId);
+              const pendingInteraction = resumeDesk.pendingInteraction;
+              if (pendingInteraction !== null && pendingInteraction.kind === "plan") {
+                const resumed = yield* resumePlan({ input, frame: pendingInteraction.frame });
+                if (resumed !== null) return resumed;
+              }
+            }
+            // Multi-command turn: validate every step then run them in order.
             const sequenceSteps = decodeCirceSequenceSteps(input.semanticProposal);
             if (sequenceSteps !== null) {
-              const results: Array<CirceExecutionResult> = [];
-              for (const [index, step] of sequenceSteps.entries()) {
-                const stepLease = yield* Ref.make<CircePreAcceptLease | undefined>(undefined);
-                const stepInput: CirceControllerExecuteInput = {
-                  ...input,
-                  semanticProposal: step,
-                  ...(input.requestMetadata === undefined
-                    ? {}
-                    : {
-                        requestMetadata: {
-                          ...input.requestMetadata,
-                          requestId: `${input.requestMetadata.requestId}::step${index}`,
-                        },
-                      }),
-                };
-                const result = yield* executeBody(stepInput, undefined, stepLease).pipe(
-                  Effect.ensuring(
-                    Ref.get(stepLease).pipe(
-                      Effect.flatMap((lease) => closeCommit(requestCancellation, lease)),
-                    ),
-                  ),
-                );
-                results.push(result);
-                if (result.status === "needs-input") break;
-              }
-              const firstFailure = results.find((result) => result.status === "needs-input");
-              return firstFailure ?? results[0]!;
+              return yield* executePlanSteps({ input, steps: sequenceSteps, firstIndex: 0 });
             }
             const { sessionId: _sessionId, ...request } = input;
             const payload = canonicalizePayload(request);

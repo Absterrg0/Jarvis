@@ -146,6 +146,14 @@ Use Fable to review this Codex output.
 
 T3 creates a linked review thread, copies the latest final assistant output into an explicitly delimited review prompt, and records the relationship on both threads.
 
+### Two commands in one turn
+
+Join two separate requests with "then", "and", or a comma, for example "Stop the authentication task, then create a deployment task." Circe reads the whole turn once, validates every command against the real projects, tasks, providers, and pending requests, and only then runs them in order. The turn answers as one combined report. A single request that happens to use "and" to describe one task, like "fix auth with retries and backoff", stays one task.
+
+If one command needs a detail, Circe asks and holds the rest of the plan. Answer the question and it continues from that command; the commands that already ran do not repeat. Say "cancel" to drop the remaining commands. Nothing is dispatched until the whole turn validates, so an unknown or ambiguous command never leaves earlier commands half-run.
+
+A turn that includes a destructive command, such as stopping a task, inside a longer sentence is confirmed first. Circe names what it will do and waits for "confirm"; anything other than an explicit yes re-asks, and "cancel" drops the whole turn.
+
 ## Talk and listen
 
 Voice is one full-duplex live conversation. Link the node to Circe Mesh, or add an OpenAI API key under its **Live conversation** settings, then press **Live conversation** in the command row or tap `Ctrl+Shift+J` (`Command+Shift+J` on macOS). The microphone stays open while Circe listens and speaks at the same time, so you can interrupt, correct yourself, and keep talking while work runs. Press **End conversation**, or tap the same shortcut again, to close the session and release the microphone.

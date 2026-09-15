@@ -3,8 +3,13 @@ import {
   lookupCirceQuickAnswer,
   startCirceVoiceLiveSession,
   releaseCirceVoiceLiveSession,
+  renewCirceVoiceLiveSession,
 } from "@circe/client-runtime/operations/circeLiveVoice";
-import type { CirceLiveVoiceCreateInput, CirceLiveVoiceReleaseInput } from "@t3tools/contracts";
+import type {
+  CirceLiveVoiceCreateInput,
+  CirceLiveVoiceReleaseInput,
+  CirceLiveVoiceRenewInput,
+} from "@t3tools/contracts";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 
@@ -17,6 +22,10 @@ export const circeLiveVoiceEnvironment = {
   release: createEnvironmentCommand(connectionAtomRuntime, {
     label: "environment-data:commands:circe:voice-live-release",
     execute: (input: CirceLiveVoiceReleaseInput) => releaseCirceVoiceLiveSession(input),
+  }),
+  renew: createEnvironmentCommand(connectionAtomRuntime, {
+    label: "environment-data:commands:circe:voice-live-renew",
+    execute: (input: CirceLiveVoiceRenewInput) => renewCirceVoiceLiveSession(input),
   }),
   start: createEnvironmentCommand(connectionAtomRuntime, {
     label: "environment-data:commands:circe:voice-live-start",

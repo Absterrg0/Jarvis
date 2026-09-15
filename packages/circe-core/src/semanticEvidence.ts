@@ -114,6 +114,12 @@ export type CirceSemanticStepAction = typeof CirceSemanticStepAction.Type;
 export const CirceSemanticStep = Schema.Struct({
   action: CirceSemanticStepAction,
   refs: Schema.Array(SemanticRef),
+  /**
+   * Exact UTF-16 clause range for this step in the original transcript. The
+   * host derives the step's instruction from this slice, so a compound turn
+   * never runs one step with another step's wording. A single command omits it.
+   */
+  sourceSpan: Schema.optional(Schema.Struct({ start: Schema.Int, end: Schema.Int })),
   model: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
   effort: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
   answer: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(400))),
@@ -160,8 +166,14 @@ export const CirceSemanticProposal = Schema.Struct({
   website: Schema.optional(
     Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048))),
   ),
-  /** Ordered independent commands for `sequence`; bounded and never nested. */
-  steps: Schema.optional(Schema.Array(CirceSemanticStep)),
+  /**
+   * Ordered independent commands for `sequence`; bounded and never nested. A
+   * supervisor that mirrors the documented shape may send an explicit null
+   * for a single-command turn; the host normalizes it to absent.
+   */
+  steps: Schema.optional(
+    Schema.NullOr(Schema.Array(CirceSemanticStep).check(Schema.isMaxLength(4))),
+  ),
 });
 export type CirceSemanticProposal = typeof CirceSemanticProposal.Type;
 

@@ -69,9 +69,30 @@ export type CirceExecutionAcknowledged =
       readonly message: string;
     };
 
+/** One validated, executed step of a multi-command turn. */
+export type CirceExecutionPlanStep = {
+  readonly action: string;
+  readonly status: "started" | "acknowledged" | "needs-input" | "failed";
+  readonly message: string;
+  readonly threadId?: ThreadId;
+  readonly projectId?: ProjectId;
+};
+
+/**
+ * A multi-command turn. Every step was validated before the first dispatch,
+ * so this reports an ordered, already-decided plan; a step that needed input
+ * stops the plan there. Structurally matches the wire contract.
+ */
+export type CirceExecutionPlan = {
+  readonly status: "plan";
+  readonly message: string;
+  readonly steps: ReadonlyArray<CirceExecutionPlanStep>;
+};
+
 export type CirceExecutionResult =
   | CirceExecutionStarted
   | CirceExecutionAcknowledged
+  | CirceExecutionPlan
   | CirceCommandNeedsInput
   | { readonly status: "cancelled"; readonly requestId: string };
 
@@ -155,6 +176,8 @@ export interface CirceControllerExecuteInput {
   readonly modelSelection?: ModelSelection | undefined;
   /** Host-confirmed real project identity used to resume a durable clarification. */
   readonly confirmedProjectId?: ProjectId | undefined;
+  /** Host-confirmed task identity used to resume a durable plan step. Internal only. */
+  readonly confirmedTaskId?: ThreadId | undefined;
   /**
    * Client-pinned pending request this utterance answers, verified against
    * live state. Null pins an explicit snapshot of no unique pending request.

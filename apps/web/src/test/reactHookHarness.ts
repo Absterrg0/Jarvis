@@ -47,6 +47,10 @@ function createReactHookHarness() {
       cursor = 0;
       slots = [];
     },
+    /** Test-only: read persisted hook slot values without consuming a slot. */
+    values(): ReadonlyArray<unknown> {
+      return slots;
+    },
     useCallback<T>(callback: T): T {
       nextIndex();
       return callback;

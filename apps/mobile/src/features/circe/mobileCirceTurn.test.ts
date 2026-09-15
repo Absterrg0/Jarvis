@@ -13,9 +13,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   attachMobileCirceTask,
+  attachMobileCirceTasks,
   buildMobileCirceExecuteInput,
   classifyServerFrameCancel,
   createMobileCirceTurn,
+  mobileTurnTaskRefs,
   resolveMobileFocusContextTask,
   resolveRetainedFrameId,
   restoreMobileFocusFromDesk,
@@ -852,7 +854,37 @@ describe("mobile Circe turn routing", () => {
       threadId: ThreadId.make("thread-b"),
     };
 
-    expect(attachMobileCirceTask(turn, taskRef)).toEqual({ ...turn, taskRef });
+    expect(attachMobileCirceTask(turn, taskRef)).toEqual({
+      ...turn,
+      taskRef,
+      taskRefs: [taskRef],
+    });
+  });
+
+  it("tracks every task a compound turn started until all settle", () => {
+    const draft = createMobileCirceTurn({
+      originInteractionId: "mobile-turn-c",
+      inputMode: "text",
+    });
+    const turn = routeMobileCirceTurn(draft, {
+      nodeId: EnvironmentId.make("desktop"),
+      projectId: ProjectId.make("circe"),
+    });
+    const first = {
+      executionNodeId: EnvironmentId.make("desktop"),
+      threadId: ThreadId.make("thread-1"),
+    };
+    const second = {
+      executionNodeId: EnvironmentId.make("desktop"),
+      threadId: ThreadId.make("thread-2"),
+    };
+
+    const attached = attachMobileCirceTasks(turn, [first, second]);
+    expect(attached.taskRef).toEqual(first);
+    expect(mobileTurnTaskRefs(attached)).toEqual([first, second]);
+    // A legacy single ref still resolves to the same retained set.
+    expect(mobileTurnTaskRefs({ taskRef: first })).toEqual([first]);
+    expect(mobileTurnTaskRefs({})).toEqual([]);
   });
 
   it("bounds the source utterance once for the payload", () => {
