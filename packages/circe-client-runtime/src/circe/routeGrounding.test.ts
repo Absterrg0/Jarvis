@@ -329,6 +329,8 @@ describe("proposal-first execute route grounding", () => {
 
   it("routes a compound turn when every step names the same device", () => {
     const source = "On Laptop stop auth, then start deployment";
+    const clauseEnd = source.indexOf(", then");
+    const secondStart = clauseEnd + ", then ".length;
     expect(
       resolveCirceProposalExecuteRoute(
         catalog,
@@ -342,12 +344,20 @@ describe("proposal-first execute route grounding", () => {
           steps: [
             {
               action: "stop",
-              refs: [nodeRef(source, "on Laptop", "Laptop")],
+              refs: [nodeRef(source, "On Laptop", "Laptop")],
+              sourceSpan: { start: 0, end: clauseEnd },
               model: null,
               effort: null,
               answer: null,
             },
-            { action: "start", refs: [], model: null, effort: null, answer: null },
+            {
+              action: "start",
+              refs: [],
+              sourceSpan: { start: secondStart, end: source.length },
+              model: null,
+              effort: null,
+              answer: null,
+            },
           ],
         },
         ambientDesktop,
@@ -360,8 +370,88 @@ describe("proposal-first execute route grounding", () => {
     });
   });
 
+  it("routes a compound turn to a later step's device past an earlier negated clause", () => {
+    const source = "Don't stop auth; report status, then on Laptop start deployment";
+    const clauseEnd = source.indexOf(", then");
+    const secondStart = clauseEnd + ", then ".length;
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            {
+              action: "status",
+              refs: [],
+              sourceSpan: { start: 0, end: clauseEnd },
+              model: null,
+              effort: null,
+              answer: null,
+            },
+            {
+              action: "start",
+              refs: [nodeRef(source, "on Laptop", "Laptop")],
+              sourceSpan: { start: secondStart, end: source.length },
+              model: null,
+              effort: null,
+              answer: null,
+            },
+          ],
+        },
+        ambientDesktop,
+      ),
+    ).toEqual({
+      status: "routed",
+      project: expect.objectContaining({
+        ref: { nodeId: LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
+      }),
+    });
+  });
+
+  it("refuses a step node ref whose span does not reproduce its text", () => {
+    const source = "Run the deployment on Laptop";
+    const start = source.indexOf("deployment");
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            {
+              action: "start",
+              refs: [
+                {
+                  span: { start, end: start + "deployment".length, text: "on Laptop" },
+                  role: "node",
+                  value: "Laptop",
+                },
+              ],
+              sourceSpan: { start: 0, end: source.length },
+              model: null,
+              effort: null,
+              answer: null,
+            },
+          ],
+        },
+        ambientDesktop,
+      ),
+    ).toEqual({ status: "ambient" });
+  });
+
   it("refuses a compound turn whose steps name different devices", () => {
     const source = "On Laptop stop auth, then on Desktop start deployment";
+    const clauseEnd = source.indexOf(", then");
+    const secondStart = clauseEnd + ", then ".length;
     expect(
       resolveCirceProposalExecuteRoute(
         catalog,
@@ -375,7 +465,8 @@ describe("proposal-first execute route grounding", () => {
           steps: [
             {
               action: "stop",
-              refs: [nodeRef(source, "on Laptop", "Laptop")],
+              refs: [nodeRef(source, "On Laptop", "Laptop")],
+              sourceSpan: { start: 0, end: clauseEnd },
               model: null,
               effort: null,
               answer: null,
@@ -383,6 +474,7 @@ describe("proposal-first execute route grounding", () => {
             {
               action: "start",
               refs: [nodeRef(source, "on Desktop", "Desktop")],
+              sourceSpan: { start: secondStart, end: source.length },
               model: null,
               effort: null,
               answer: null,

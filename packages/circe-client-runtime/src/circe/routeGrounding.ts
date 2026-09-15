@@ -10,6 +10,7 @@ import {
   isCirceNegatedOrContractedSpan,
   sourceSpanOverlapsQuotes,
 } from "@circe/core/destinationSpan";
+import { scopeCirceStepClause } from "@circe/core/command";
 import {
   foldCirceMeshName,
   circeMeshCatalogCoverage,
@@ -166,11 +167,9 @@ export function resolveCirceProposalExecuteRoute(
   const refs = proposal.refs;
   if (refs.length > 8) return { status: "ambient" };
   const steps = proposal.steps ?? [];
-  const stepRefs = steps.flatMap((step) => step.refs);
   const destinations = refs.filter((ref) => ref.role === "destination");
   const corrections = refs.filter((ref) => ref.role === "correction");
   const topNodeRefs = refs.filter((ref) => ref.role === "node");
-  const stepNodeRefs = stepRefs.filter((ref) => ref.role === "node");
   if (
     destinations.length > 1 ||
     corrections.length > 1 ||
@@ -182,8 +181,7 @@ export function resolveCirceProposalExecuteRoute(
     return { status: "ambient" };
   }
   // Structural proof first: every top-level span must reproduce the source
-  // exactly and spans must not overlap. Step refs are validated per step by the
-  // execution node; the client reads only their device refs for routing.
+  // exactly and spans must not overlap.
   const ordered = [...refs].sort((a, b) => a.span.start - b.span.start);
   for (const [index, ref] of ordered.entries()) {
     const prev = ordered[index - 1];
@@ -205,37 +203,68 @@ export function resolveCirceProposalExecuteRoute(
       return { status: "ambient" };
     }
   }
-  // A compound turn carries each step's own refs. A step destination can name
-  // the carrier project when the turn is routed to a step's device.
-  const stepTarget = stepRefs.find(
-    (ref) => ref.role === "destination" || ref.role === "correction",
-  );
-  const deviceTarget = target ?? stepTarget;
-  if (
-    stepTarget !== undefined &&
-    stepTarget.role === "destination" &&
-    !containsFoldedName(stepTarget.span.text, stepTarget.value)
-  ) {
-    return { status: "ambient" };
+
+  // Collect device evidence. A top-level ref is proven against the whole
+  // utterance. A step ref is scoped to its own clause exactly as the execution
+  // node will: its span must reproduce inside that clause before it can route,
+  // and quoting/negation are read within the clause, never the whole turn. A
+  // step with no usable sourceSpan falls back to whole-source proof, matching
+  // the server's scopeCirceStepClause fallback.
+  const nodeValues: Array<string> = [];
+  for (const ref of topNodeRefs) {
+    if (!nodeSpanAuthorizes(source, ref)) return { status: "ambient" };
+    nodeValues.push(ref.value);
+  }
+  let deviceTarget: CirceSemanticRef | undefined = target;
+  for (const step of steps) {
+    const scoped = scopeCirceStepClause(source, step);
+    const clauseSource = scoped?.clause ?? source;
+    const clauseRefs = scoped?.refs ?? step.refs;
+    for (const ref of clauseRefs) {
+      if (
+        ref.span.start < 0 ||
+        ref.span.end > clauseSource.length ||
+        ref.span.end <= ref.span.start ||
+        clauseSource.slice(ref.span.start, ref.span.end) !== ref.span.text
+      ) {
+        return { status: "ambient" };
+      }
+    }
+    if (deviceTarget === undefined) {
+      // A step destination can name the carrier project when the turn routes
+      // to a step's device.
+      const stepDestination = clauseRefs.find(
+        (ref) => ref.role === "destination" || ref.role === "correction",
+      );
+      if (stepDestination !== undefined) {
+        if (
+          stepDestination.role === "destination" &&
+          !containsFoldedName(stepDestination.span.text, stepDestination.value)
+        ) {
+          return { status: "ambient" };
+        }
+        deviceTarget = stepDestination;
+      }
+    }
+    for (const ref of clauseRefs) {
+      if (ref.role !== "node") continue;
+      if (!nodeSpanAuthorizes(clauseSource, ref)) return { status: "ambient" };
+      nodeValues.push(ref.value);
+    }
   }
   const matches = matchProjects(catalog, target?.value ?? "");
-  const nodeRefs = [...topNodeRefs, ...stepNodeRefs];
-  if (nodeRefs.length > 0) {
-    // Every cited device must be real routing evidence: value spoken in the
-    // span, not quoted, not negated. Otherwise the turn stays ambient for the
-    // execution node to clarify.
-    if (nodeRefs.some((ref) => !nodeSpanAuthorizes(source, ref))) return { status: "ambient" };
-    const resolvedNodes: Array<CirceMeshNode> = [];
-    for (const ref of nodeRefs) {
-      const nodes = matchNodes(catalog, ref.value);
+  const resolvedNodes: Array<CirceMeshNode> = [];
+  if (nodeValues.length > 0) {
+    for (const value of nodeValues) {
+      const nodes = matchNodes(catalog, value);
       if (nodes.length === 0) {
         // A named device is a hard constraint: never silently run elsewhere.
-        return { status: "device-unknown", nodeLabel: ref.value };
+        return { status: "device-unknown", nodeLabel: value };
       }
       if (nodes.length > 1) {
         return {
           status: "needs-device",
-          nodeQuery: ref.value,
+          nodeQuery: value,
           candidates: nodes.map((candidate) => ({
             nodeId: candidate.nodeId,
             label: candidate.label,
