@@ -120,7 +120,7 @@ export function DevicePanel({
             const Icon = PROVIDER_ICON_BY_PROVIDER[row.driver] ?? BotIcon;
             return (
               <li
-                className="flex items-center gap-3 border-t border-border/70 px-4 py-2 first:border-t-0"
+                className="flex items-center gap-3 border-t border-border/70 px-5 py-2.5 first:border-t-0"
                 key={row.key}
               >
                 <span className="grid size-7 shrink-0 place-items-center rounded-lg border border-border text-muted-foreground">
@@ -148,7 +148,7 @@ export function DevicePanel({
         <ul className="flex flex-col">
           {providerRows.map((row) => (
             <li
-              className="flex items-center gap-3 border-t border-border/70 px-4 py-2 first:border-t-0"
+              className="flex items-center gap-3 border-t border-border/70 px-5 py-2.5 first:border-t-0"
               key={row.key}
             >
               <span className="grid size-7 shrink-0 place-items-center rounded-lg border border-border text-muted-foreground">
@@ -175,7 +175,7 @@ export function DevicePanel({
       );
   } else if (tab === "permissions") {
     body = (
-      <div className="px-4 py-3">
+      <div className="px-5 py-4">
         <ul className="flex flex-wrap gap-1.5">
           {capabilities.map((capability) => (
             <li
@@ -209,17 +209,19 @@ export function DevicePanel({
     );
   } else {
     body = (
-      <div className="flex flex-col gap-3 px-4 py-3">
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+      <div className="flex flex-col gap-5 px-5 py-4">
+        {/* Metrics form their own zone: hairline-divided cells on a recessed
+            surface so the values read as data, not as another list. */}
+        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border/70 text-xs">
           {stats.map((stat) => (
-            <div className="flex min-w-0 flex-col gap-0.5" key={stat.label}>
+            <div className="flex min-w-0 flex-col gap-1 bg-card px-3.5 py-3" key={stat.label}>
               <dt className="text-muted-foreground">{stat.label}</dt>
-              <dd className="truncate font-medium text-foreground">{stat.value}</dd>
+              <dd className="truncate text-sm font-medium text-foreground">{stat.value}</dd>
             </div>
           ))}
         </dl>
         <div>
-          <div className="circe-section-label mb-2">Quick controls</div>
+          <div className="circe-section-label mb-2.5">Quick controls</div>
           <div className="flex flex-wrap gap-2">
             <Button onClick={onRefresh} size="xs" variant="secondary">
               <RefreshCwIcon className="size-3.5" /> Refresh
@@ -237,35 +239,43 @@ export function DevicePanel({
   }
 
   return (
-    <Panel
-      action={
-        <span className="flex items-center gap-2 text-xs text-muted-foreground">
+    <section
+      aria-label={`Device ${label}`}
+      className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card"
+      role="group"
+    >
+      <header className="flex items-center gap-2 border-b border-border px-5 py-3">
+        <h2 className="text-sm font-semibold tracking-tight text-foreground">
+          {`Device: ${label}`}
+        </h2>
+        <span className="ms-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
           <span
             aria-hidden
             className={cn("size-2 rounded-full", online ? "bg-success" : "bg-muted-foreground/50")}
           />
           {online ? "Online" : "Offline"}
         </span>
-      }
-      title={`Device: ${label}`}
-    >
-      <div className="flex items-center gap-3 px-4 py-3">
-        <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-border bg-muted text-muted-foreground">
-          <MonitorSmartphoneIcon className="size-5" />
+      </header>
+
+      {/* Identity zone: bigger mark, roomier type, the primary device action. */}
+      <div className="flex items-center gap-3.5 px-5 py-4">
+        <span className="grid size-12 shrink-0 place-items-center rounded-xl border border-border bg-muted text-muted-foreground">
+          <MonitorSmartphoneIcon className="size-6" />
         </span>
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-foreground">{label}</div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-base font-semibold text-foreground">{label}</div>
           <div className="truncate text-xs text-muted-foreground">{presetLabel}</div>
         </div>
-        <Button className="ms-auto shrink-0" onClick={onOpenConsole} size="xs" variant="secondary">
+        <Button className="shrink-0" onClick={onOpenConsole} size="xs" variant="secondary">
           Open console
         </Button>
       </div>
+
       <div className="px-4">
         <TabStrip label={`Device ${label} sections`} onTab={onTab} tab={tab} />
       </div>
       {body}
-    </Panel>
+    </section>
   );
 }
 

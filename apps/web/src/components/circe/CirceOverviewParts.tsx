@@ -59,57 +59,110 @@ export function PanelViewLink({
   );
 }
 
-/** The card number sits inside a thin progress ring, matching the control center reference. */
-function Ring({ value, max, children }: { value: number; max: number; children: ReactNode }) {
+/** Overall health of a stat card, driving the numeral and the ring's lighting. */
+export type StatTone = "healthy" | "mixed" | "warning" | "neutral";
+
+const RING_LIT_FILTER =
+  "drop-shadow(0 0 5px rgba(224,138,99,0.30)) drop-shadow(0 0 14px rgba(205,104,67,0.14))";
+
+/**
+ * Segmented progress ring: each contributing group gets its own arc and its own
+ * status colour, so a card reads "mostly healthy" or "partly limited" at a
+ * glance instead of showing one undifferentiated arc. The track stays neutral
+ * and the ring only lights up when the card is not degraded.
+ */
+function Ring({
+  segments,
+  tone,
+  children,
+}: {
+  readonly segments: ReadonlyArray<{ readonly value: number; readonly className: string }>;
+  readonly tone: StatTone;
+  readonly children: ReactNode;
+}) {
   const radius = 25;
   const circumference = 2 * Math.PI * radius;
-  const ratio = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
+  const total = segments.reduce((sum, segment) => sum + segment.value, 0);
+  const drawn = segments.filter((segment) => segment.value > 0);
+  const gap = drawn.length > 1 ? 3 : 0;
+  let consumed = 0;
   return (
     <span className="relative grid size-14 shrink-0 place-items-center">
-      <svg aria-hidden className="absolute inset-0 size-14 -rotate-90" viewBox="0 0 56 56">
-        <circle className="stroke-border" cx="28" cy="28" fill="none" r={radius} strokeWidth={2} />
+      <svg
+        aria-hidden
+        className="absolute inset-0 size-14 -rotate-90"
+        style={tone === "healthy" || tone === "mixed" ? { filter: RING_LIT_FILTER } : undefined}
+        viewBox="0 0 56 56"
+      >
         <circle
-          className="stroke-accent-ink transition-[stroke-dashoffset]"
+          className="stroke-border"
           cx="28"
           cy="28"
           fill="none"
           r={radius}
-          strokeDasharray={circumference}
-          strokeDashoffset={circumference * (1 - ratio)}
-          strokeLinecap="round"
-          strokeWidth={2}
+          strokeWidth={2.5}
         />
+        {segments.map((segment, index) => {
+          const length = total > 0 ? (segment.value / total) * circumference : 0;
+          const arc = Math.max(0, length - gap);
+          const node =
+            arc > 0 ? (
+              <circle
+                className={segment.className}
+                cx="28"
+                cy="28"
+                fill="none"
+                key={index}
+                r={radius}
+                strokeDasharray={`${arc} ${circumference - arc}`}
+                strokeDashoffset={-consumed}
+                strokeLinecap="round"
+                strokeWidth={2.5}
+              />
+            ) : null;
+          consumed += length;
+          return node;
+        })}
       </svg>
-      <span className="text-2xl font-semibold tabular-nums text-foreground">{children}</span>
+      <span
+        className={cn(
+          "relative text-[26px] leading-none font-semibold tabular-nums",
+          tone === "warning" ? "text-warning" : "text-foreground",
+        )}
+      >
+        {children}
+      </span>
     </span>
   );
 }
 
 export function StatCard({
   value,
-  max,
   label,
+  tone,
+  segments,
   breakdown,
   onClick,
 }: {
   readonly value: number;
-  readonly max: number;
   readonly label: string;
+  readonly tone: StatTone;
+  readonly segments: ReadonlyArray<{ readonly value: number; readonly className: string }>;
   readonly breakdown: ReadonlyArray<{ readonly label: string; readonly dot: string }>;
   readonly onClick: () => void;
 }) {
   return (
     <button
-      className="group flex min-w-0 items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none"
+      className="group flex min-w-0 items-center gap-3.5 rounded-xl border border-border bg-card px-4 py-3.5 text-left transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none"
       onClick={onClick}
       type="button"
     >
-      <Ring max={max} value={value}>
+      <Ring segments={segments} tone={tone}>
         {value}
       </Ring>
       <span className="flex min-w-0 flex-col">
-        <span className="circe-section-label">{label}</span>
-        <span className="mt-1 flex flex-col gap-0.5">
+        <span className="text-[13px] font-semibold tracking-[0.02em] text-foreground">{label}</span>
+        <span className="mt-1.5 flex flex-col gap-1">
           {breakdown.map((entry) => (
             <span
               className="flex items-center gap-1.5 text-xs text-muted-foreground"

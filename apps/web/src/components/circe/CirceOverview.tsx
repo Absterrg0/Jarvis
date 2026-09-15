@@ -47,9 +47,11 @@ import {
   RecentTasks,
   ScopeToolbar,
   StatCard,
+  type StatTone,
   type Tone,
 } from "./CirceOverviewParts";
 import { SystemMap } from "./CirceSystemMap";
+import "./CirceOverview.css";
 
 const EMPTY_CATALOG: CirceMeshCatalog = { nodes: [], projects: [], providers: [] };
 
@@ -76,6 +78,12 @@ const PROVIDER_LABEL: Readonly<Record<string, string>> = {
   grok: "Grok",
   antigravity: "Antigravity",
 };
+
+/** All-nominal reads healthy; a partial shortfall reads mixed; none reads as the degradation tone. */
+function statTone(healthy: number, total: number, degraded: StatTone = "neutral"): StatTone {
+  if (total === 0 || healthy === total) return total === 0 ? "neutral" : "healthy";
+  return healthy === 0 ? degraded : "mixed";
+}
 
 function runBucket(state: CirceTaskState): "active" | "queued" | "completed" | "failed" {
   if (state === "running") return "active";
@@ -413,12 +421,13 @@ export function CirceOverview() {
           id: String(agent.driver),
           label: agent.label,
           driver: agent.driver,
+          ready: agent.ready,
         }))}
         deviceCount={devices}
         devices={view.devices.map((device) => ({
           id: device.node.nodeId,
           label: device.node.label,
-          online: device.node.reachability === "online",
+          ready: device.node.reachability === "online",
         }))}
         providerCount={providers}
         providers={(catalog?.providers ?? []).map((provider) => ({
@@ -428,6 +437,7 @@ export function CirceOverview() {
             PROVIDER_LABEL[provider.snapshot.driver] ??
             provider.snapshot.driver,
           driver: provider.snapshot.driver,
+          ready: provider.available,
         }))}
       />
     </Panel>
@@ -508,7 +518,7 @@ export function CirceOverview() {
   const hasRight = showDevice || (showAgents && selectedDevice !== null);
 
   return (
-    <div className="flex h-dvh min-h-0 w-full overflow-hidden bg-background text-foreground">
+    <div className="circe-control-center-route flex h-dvh min-h-0 w-full overflow-hidden bg-background text-foreground">
       <nav
         aria-label="Control center"
         className="hidden w-60 shrink-0 flex-col border-e border-border bg-sidebar lg:flex"
@@ -678,8 +688,12 @@ export function CirceOverview() {
                     { label: `${devices - onlineDevices} offline`, dot: "bg-muted-foreground/50" },
                   ]}
                   label="Devices"
-                  max={devices}
                   onClick={goDevices}
+                  segments={[
+                    { value: onlineDevices, className: "stroke-success" },
+                    { value: devices - onlineDevices, className: "stroke-muted-foreground/45" },
+                  ]}
+                  tone={statTone(onlineDevices, devices)}
                   value={devices}
                 />
                 <StatCard
@@ -688,8 +702,15 @@ export function CirceOverview() {
                     { label: `${agentGroups.length - agentsReady} limited`, dot: "bg-warning" },
                   ]}
                   label="Agents"
-                  max={agentGroups.length}
                   onClick={goProviders}
+                  segments={[
+                    { value: agentsReady, className: "stroke-success" },
+                    {
+                      value: agentGroups.length - agentsReady,
+                      className: "stroke-warning",
+                    },
+                  ]}
+                  tone={statTone(agentsReady, agentGroups.length, "warning")}
                   value={agentGroups.length}
                 />
                 <StatCard
@@ -701,20 +722,25 @@ export function CirceOverview() {
                     },
                   ]}
                   label="Providers"
-                  max={providers}
                   onClick={goProviders}
+                  segments={[
+                    { value: readyProviders, className: "stroke-success" },
+                    { value: providers - readyProviders, className: "stroke-muted-foreground/45" },
+                  ]}
+                  tone={statTone(readyProviders, providers)}
                   value={providers}
                 />
                 <StatCard
                   breakdown={[{ label: `${projects} across devices`, dot: "bg-primary" }]}
                   label="Projects"
-                  max={projects}
                   onClick={() =>
                     void navigate({
                       to: "/settings/projects",
                       search: { project: undefined, machine: undefined },
                     })
                   }
+                  segments={[{ value: projects, className: "stroke-accent-ink" }]}
+                  tone={projects > 0 ? "healthy" : "neutral"}
                   value={projects}
                 />
               </div>
