@@ -51,8 +51,8 @@ export function OrbGlow({
   );
   const shellGlowColors = useMemo(
     () => [
-      alphaColor(ORB_PALETTE.warmCopper, 0),
-      alphaColor(ORB_PALETTE.warmCopper, peak * 0.24),
+      alphaColor(ORB_PALETTE.copper, 0),
+      alphaColor(ORB_PALETTE.copper, peak * 0.24),
       alphaColor(ORB_PALETTE.peach, 0),
     ],
     [peak],
@@ -64,8 +64,8 @@ export function OrbGlow({
     return 0.5 + 0.5 * Math.sin((2 * Math.PI * t) / (ORB_MOTION.bloomPeriodMs / 1000));
   }, [clock, reducedMotion]);
 
-  const atmosphereR = useDerivedValue(() => radius * (1.28 + swell.value * 0.04), [radius, swell]);
-  const shellGlowR = useDerivedValue(() => radius * (1.1 + swell.value * 0.02), [radius, swell]);
+  const atmosphereR = useDerivedValue(() => radius * (1.4 + swell.value * 0.05), [radius, swell]);
+  const shellGlowR = useDerivedValue(() => radius * (1.14 + swell.value * 0.02), [radius, swell]);
 
   return (
     <Group>

@@ -7,21 +7,30 @@
  * regardless of how good the shell looks.
  */
 export const ORB_PALETTE = {
-  /** Absorbs light. The middle of the sphere stays in this family. */
-  core: "#090605",
-  coreWarm: "#120907",
-  ember: "#1D0D08",
+  /**
+   * Absorbs light. Design system v1 places the dark body over the first ~70% of
+   * the sphere radius, so the middle stays in this family and only the shell
+   * carries color.
+   */
+  core: "#100E0D",
+  coreWarm: "#151211",
+  ember: "#1A100C",
 
-  /** Shell and fiber colors. */
-  copper: "#C97857",
-  warmCopper: "#E99676",
-  peach: "#F6C9B8",
-  /** Only ever a thin lip or a subsurface accent, never a fill. */
-  hot: "#FFE1D2",
+  /** Shell ramp, read outward: deep copper, accent copper, peach, hot lip. */
+  deep: "#6D3526",
+  copper: "#E18A62",
+  peach: "#FFD8BD",
+  /** Only ever the thin lip or the right-edge specular flare. */
+  hot: "#FFF4E9",
+
+  /** Brand accent copper, for chrome that is not the orb. */
+  accent: "#E08A63",
+  accentBright: "#F0A078",
+  accentDeep: "#A5482C",
 
   /** Surfaces the orb composites against. */
-  midnight: "#0B0B0C",
-  ivory: "#FAF7F3",
+  midnight: "#0C0D0E",
+  ivory: "#FCF9F4",
 } as const;
 
 export type OrbAppearance = "light" | "dark";

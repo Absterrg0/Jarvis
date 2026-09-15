@@ -5,10 +5,11 @@
  * fibers, which is what makes them read as being inside glass rather than as
  * lines printed on a surface.
  *
- * The hull light is uneven by construction. Three angular harmonics plus a
- * travelling phase mean the circumference is never uniformly bright, because a
- * uniformly bright ring reads as a neon tube. There is no separate circular
- * stroke anywhere in the composition; this pass is the ring.
+ * Design system v1 specifies the lighting explicitly: the strongest warm region
+ * sits upper-left and lower-left, with a small brilliant specular flare on the
+ * right edge, and a thin incandescent lip at the hull. That is expressed here as
+ * three angular lobes rather than a sum of harmonics, because the reference
+ * lighting is art-directed rather than a standing wave.
  *
  * Alpha is returned premultiplied.
  */
@@ -18,9 +19,22 @@ uniform float radius;
 uniform float shellPhase;
 uniform float shellIntensity;
 uniform float energy;
+uniform float4 deepColor;
 uniform float4 copperColor;
 uniform float4 peachColor;
 uniform float4 hotColor;
+
+// Wrapped angular distance to a target angle, in radians.
+float angleDistance(float angle, float target) {
+  float d = angle - target;
+  return atan(sin(d), cos(d));
+}
+
+// Gaussian falloff around a target direction.
+float lobe(float angle, float target, float width) {
+  float d = angleDistance(angle, target) / width;
+  return exp(-d * d);
+}
 
 half4 main(float2 xy) {
   float2 uv = (xy - center) / radius;
@@ -32,27 +46,35 @@ half4 main(float2 xy) {
   float clampedR = min(r, 1.0);
   float z = sqrt(max(0.0, 1.0 - clampedR * clampedR));
 
-  float fresnel = pow(1.0 - z, 3.6);
+  // Design system v1 puts copper from ~81% of the radius outward, so the
+  // falloff is deliberately broad rather than a hairline.
+  float fresnel = pow(1.0 - z, 2.4);
   float angle = atan(uv.y, uv.x);
 
-  // Deliberately uneven. The dominant lobe sits where the light is, and the
-  // smaller harmonics keep the rest of the circumference from going flat.
-  float uneven = 0.46
-    + 0.30 * sin(angle - shellPhase)
-    + 0.16 * sin(2.0 * angle + shellPhase * 0.7)
-    + 0.10 * sin(3.0 * angle - 1.1);
-  uneven = clamp(uneven, 0.08, 1.0);
+  // The two broad warm regions travel slowly, so the object is never static
+  // without ever reading as animated.
+  float drift = sin(shellPhase) * 0.16;
+  float upperLeft = lobe(angle, 2.356 + drift, 0.95);
+  float lowerLeft = lobe(angle, 3.927 - drift, 0.95);
+  // A narrow, brilliant flare on the right edge.
+  float specular = lobe(angle, 0.0 + drift * 0.5, 0.30);
 
-  float3 color = mix(copperColor.rgb, peachColor.rgb, pow(fresnel, 1.8));
-  color += hotColor.rgb * pow(fresnel, 5.0) * 0.5;
+  float uneven = 0.20 + 0.46 * upperLeft + 0.42 * lowerLeft + 0.70 * specular;
+  uneven = clamp(uneven, 0.0, 1.0);
+
+  // Read outward through the ramp so the dark body meets the shell through
+  // deep copper instead of jumping straight to a bright edge.
+  float3 color = mix(deepColor.rgb, copperColor.rgb, smoothstep(0.0, 0.55, fresnel));
+  color = mix(color, peachColor.rgb, smoothstep(0.45, 0.9, fresnel));
+  color += hotColor.rgb * pow(fresnel, 6.0) * 0.55 * (0.35 + specular);
 
   float alpha = fresnel * uneven * shellIntensity * (1.0 + energy * 0.35);
 
-  // A razor-thin lip exactly at the hull. This is the only place 'hot' is
-  // allowed to approach full strength, and it is about a pixel wide.
-  float lip = smoothstep(0.972, 0.997, r) * (1.0 - smoothstep(0.997, 1.002, r));
-  alpha += lip * uneven * 0.45 * shellIntensity;
-  color += hotColor.rgb * lip * 0.4;
+  // The thin incandescent lip at the hull. Design system v1 gives this as a
+  // ~3px near-white ring at full opacity; at orb scale that is about one point.
+  float lip = smoothstep(0.968, 0.996, r) * (1.0 - smoothstep(0.996, 1.002, r));
+  alpha += lip * (0.35 + 0.65 * uneven) * 0.6 * shellIntensity;
+  color += hotColor.rgb * lip * 0.5;
 
   float clamped = clamp(alpha, 0.0, 1.0);
   return half4(color * clamped, clamped);

@@ -18,13 +18,19 @@ import {
   ShieldMark,
 } from "./welcomeMarks";
 
-const IVORY = "#FAF7F3";
-const INK = "#241D18";
-const MUTED = "#8A7F78";
-const FAINT = "#C9BFB6";
-const COPPER = "#C97857";
-const DARK_PILL = "#26262B";
-const CARD = "#FFFFFF";
+// Design system v1, light onboarding treatment. Warm ivory paper, near-black
+// editorial ink, one burnt-copper phrase, and a near-black primary CTA whose
+// only brand cue is a restrained copper hairline border.
+const IVORY = "#FCF9F4";
+const INK = "#151311";
+const MUTED = "#707177";
+const FAINT = "#96918D";
+const COPPER_TEXT = "#A5482C";
+const COPPER = "#E08A63";
+const DARK_PILL = "#171513";
+const DARK_PILL_BORDER = "rgba(224, 138, 99, 0.38)";
+const CARD = "#FFFDFA";
+const CARD_BORDER = "rgba(56, 43, 35, 0.13)";
 
 void WebBrowser.maybeCompleteAuthSession();
 
@@ -129,7 +135,7 @@ function ConfiguredWelcome() {
         className="font-circe-serif"
         style={{ color: INK, fontSize: 34, lineHeight: 40, textAlign: "center", marginTop: 18 }}
       >
-        Direct work across every machine.
+        Direct work across <Text style={{ color: COPPER_TEXT }}>every machine.</Text>
       </Text>
       <Text
         style={{ color: MUTED, fontSize: 15, lineHeight: 22, textAlign: "center", marginTop: 10 }}
@@ -169,6 +175,8 @@ function ConfiguredWelcome() {
           flexDirection: "row",
           alignItems: "center",
           backgroundColor: DARK_PILL,
+          borderColor: DARK_PILL_BORDER,
+          borderWidth: 1,
           borderRadius: 999,
           paddingVertical: 15,
           paddingHorizontal: 20,
@@ -198,7 +206,7 @@ function ConfiguredWelcome() {
           flexDirection: "row",
           alignItems: "center",
           backgroundColor: CARD,
-          borderColor: "#E4DCD4",
+          borderColor: CARD_BORDER,
           borderWidth: 1,
           borderRadius: 999,
           paddingVertical: 15,
@@ -214,9 +222,9 @@ function ConfiguredWelcome() {
       </Pressable>
 
       <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginVertical: 14 }}>
-        <View style={{ flex: 1, height: 1, backgroundColor: "#E7DFD6" }} />
+        <View style={{ flex: 1, height: 1, backgroundColor: CARD_BORDER }} />
         <Text style={{ color: FAINT, fontSize: 11, letterSpacing: 2 }}>OR</Text>
-        <View style={{ flex: 1, height: 1, backgroundColor: "#E7DFD6" }} />
+        <View style={{ flex: 1, height: 1, backgroundColor: CARD_BORDER }} />
       </View>
 
       <Pressable
@@ -225,7 +233,7 @@ function ConfiguredWelcome() {
         onPress={openEmailAuth}
       >
         <Text style={{ color: INK, fontSize: 14, fontWeight: "600", textAlign: "center" }}>
-          I already have an account <Text style={{ color: COPPER }}>›</Text>
+          I already have an account <Text style={{ color: COPPER_TEXT }}>›</Text>
         </Text>
       </Pressable>
 

@@ -101,11 +101,9 @@ function buildSpecs(plane: StrandPlane, radius: number): StrandSpec[] {
       yOffset: (hash01(index, 4) - 0.5) * 2 * radius * shape.spread,
       width: shape.widthMin + hash01(index, 5) * (shape.widthMax - shape.widthMin),
       alpha: hero ? alpha * 1.7 : alpha,
-      color: hero
-        ? ORB_PALETTE.peach
-        : index % 2 === 0
-          ? ORB_PALETTE.copper
-          : ORB_PALETTE.warmCopper,
+      // Only heroes get peach. Everything else stays on copper, which keeps
+      // the field quiet without making it disappear.
+      color: hero ? ORB_PALETTE.peach : ORB_PALETTE.copper,
       speedScale: 0.55 + hash01(index, 7) * 0.9,
     });
   }

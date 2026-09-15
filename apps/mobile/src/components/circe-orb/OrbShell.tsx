@@ -42,6 +42,7 @@ export function OrbShell({
 
   const colors = useMemo(
     () => ({
+      deep: rgbaOf(ORB_PALETTE.deep),
       copper: rgbaOf(ORB_PALETTE.copper),
       peach: rgbaOf(ORB_PALETTE.peach),
       hot: rgbaOf(ORB_PALETTE.hot),
@@ -59,6 +60,7 @@ export function OrbShell({
       shellPhase: phase,
       shellIntensity,
       energy: energySV.value,
+      deepColor: colors.deep,
       copperColor: colors.copper,
       peachColor: colors.peach,
       hotColor: colors.hot,
