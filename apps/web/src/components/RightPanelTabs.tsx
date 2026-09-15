@@ -23,6 +23,7 @@ import {
   GitPullRequest,
   GitPullRequestArrow,
   Globe2,
+  Info,
   Plus,
   TerminalSquare,
   Volume2,
@@ -114,6 +115,7 @@ interface RightPanelTabsProps {
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
   onAddAgents: () => void;
+  onAddContext?: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -121,6 +123,7 @@ interface RightPanelTabsProps {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   agentsAvailable: boolean;
+  contextAvailable?: boolean;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
@@ -312,6 +315,7 @@ function RightPanelEmptyState(props: {
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
   onAddAgents: () => void;
+  onAddContext?: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -319,6 +323,7 @@ function RightPanelEmptyState(props: {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   agentsAvailable: boolean;
+  contextAvailable?: boolean;
   liveAgentCount: number;
 }) {
   // -1 means no highlight: it only appears on hover or arrow use.
@@ -395,6 +400,22 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddAgents,
       badgeCount: props.liveAgentCount,
     },
+    // Threads alone offer the context stack; the pull-request list's shared
+    // panel has no thread to read project, device, or plan state from.
+    ...(props.onAddContext
+      ? [
+          {
+            label: "Context",
+            description: "Project, device, model, tools, and task status.",
+            icon: Info,
+            shortcut: "C",
+            available: props.contextAvailable ?? false,
+            disabledReason: "Available from a thread.",
+            onClick: props.onAddContext,
+            badgeCount: 0,
+          },
+        ]
+      : []),
   ] as const;
 
   type SurfaceAction = (typeof actions)[number];
@@ -630,6 +651,8 @@ function surfaceTitle(
       return "Pull requests";
     case "agents":
       return "Agents";
+    case "context":
+      return "Context";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -713,6 +736,8 @@ function SurfaceIcon({
       return <GitPullRequestArrow className="size-3 shrink-0" />;
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "context":
+      return <Info className="size-3 shrink-0" />;
   }
 }
 
@@ -906,6 +931,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: SURFACE_DISABLED_REASONS.agents,
       onClick: props.onAddAgents,
     },
+    ...(props.onAddContext
+      ? [
+          {
+            label: "Context",
+            icon: Info,
+            shortcut: "C",
+            available: props.contextAvailable ?? false,
+            disabledReason: "Context is only available from a thread.",
+            onClick: props.onAddContext,
+          },
+        ]
+      : []),
   ] as const;
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1344,6 +1381,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}
             onAddAgents={props.onAddAgents}
+            {...(props.onAddContext ? { onAddContext: props.onAddContext } : {})}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
@@ -1351,6 +1389,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             pullRequestAvailable={props.pullRequestAvailable}
             pullRequestsAvailable={props.pullRequestsAvailable}
             agentsAvailable={props.agentsAvailable}
+            {...(props.contextAvailable !== undefined
+              ? { contextAvailable: props.contextAvailable }
+              : {})}
             liveAgentCount={props.liveAgentCount}
           />
         ) : (

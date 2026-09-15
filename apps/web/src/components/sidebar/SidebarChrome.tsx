@@ -29,6 +29,8 @@ import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPr
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { CIRCE_MARK_SRC } from "../circe/CirceBrand";
+import { CirceHorizontalLogo } from "../circe/CirceLogo";
+import { MonitorSmartphoneIcon } from "lucide-react";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -70,10 +72,7 @@ function SidebarBrand() {
       className="relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center gap-2 overflow-hidden rounded-[var(--control-radius)] text-foreground outline-hidden ring-ring focus-visible:ring-2 md:flex"
       to="/"
     >
-      <img alt="" className="size-4 shrink-0 rounded-[2px]" src={CIRCE_MARK_SRC} />
-      <span className="truncate font-mono text-[11px] font-bold uppercase tracking-[0.12em] text-foreground">
-        Circe
-      </span>
+      <CirceHorizontalLogo alt="Circe" className="h-5" />
     </Link>
   );
 }
@@ -149,6 +148,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/circe" });
   }, [closeMobileSidebar, navigate]);
 
+  const handleDevicesClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/devices" });
+  }, [closeMobileSidebar, navigate]);
+
   const handleUsageClick = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -182,6 +186,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             onClick={handleCirceClick}
           />
           <SidebarUtilityItem
+            icon={<MonitorSmartphoneIcon />}
+            label="Devices"
+            onClick={handleDevicesClick}
+          />
+          <SidebarUtilityItem
             icon={<SettingsIcon />}
             label="Settings"
             onClick={handleSettingsClick}
@@ -211,6 +220,9 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />
+      <p className="px-2 pt-1 text-[10px] font-semibold tracking-[0.22em] text-sidebar-muted-foreground">
+        YOUR WORK. EVERYWHERE.
+      </p>
     </SidebarFooter>
   );
 });

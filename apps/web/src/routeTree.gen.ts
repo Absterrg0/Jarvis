@@ -13,6 +13,7 @@ import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
+import { Route as DevicesRouteImport } from './routes/devices'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as CirceRouteImport } from './routes/circe'
 import { Route as ChatRouteImport } from './routes/_chat'
@@ -52,6 +53,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const PairRoute = PairRouteImport.update({
   id: '/pair',
   path: '/pair',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DevicesRoute = DevicesRouteImport.update({
+  id: '/devices',
+  path: '/devices',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConnectRoute = ConnectRouteImport.update({
@@ -159,6 +165,7 @@ export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/circe': typeof CirceRoute
   '/connect': typeof ConnectRoute
+  '/devices': typeof DevicesRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -183,6 +190,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/circe': typeof CirceRoute
   '/connect': typeof ConnectRoute
+  '/devices': typeof DevicesRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -210,6 +218,7 @@ export interface FileRoutesById {
   '/_chat': typeof ChatRouteWithChildren
   '/circe': typeof CirceRoute
   '/connect': typeof ConnectRoute
+  '/devices': typeof DevicesRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -238,6 +247,7 @@ export interface FileRouteTypes {
     | '/'
     | '/circe'
     | '/connect'
+    | '/devices'
     | '/pair'
     | '/settings'
     | '/usage'
@@ -262,6 +272,7 @@ export interface FileRouteTypes {
   to:
     | '/circe'
     | '/connect'
+    | '/devices'
     | '/pair'
     | '/settings'
     | '/usage'
@@ -288,6 +299,7 @@ export interface FileRouteTypes {
     | '/_chat'
     | '/circe'
     | '/connect'
+    | '/devices'
     | '/pair'
     | '/settings'
     | '/usage'
@@ -315,6 +327,7 @@ export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
   CirceRoute: typeof CirceRoute
   ConnectRoute: typeof ConnectRoute
+  DevicesRoute: typeof DevicesRoute
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
@@ -351,6 +364,13 @@ declare module '@tanstack/react-router' {
       path: '/pair'
       fullPath: '/pair'
       preLoaderRoute: typeof PairRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/devices': {
+      id: '/devices'
+      path: '/devices'
+      fullPath: '/devices'
+      preLoaderRoute: typeof DevicesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/connect': {
@@ -548,6 +568,7 @@ const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
   CirceRoute: CirceRoute,
   ConnectRoute: ConnectRoute,
+  DevicesRoute: DevicesRoute,
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,

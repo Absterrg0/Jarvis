@@ -5,8 +5,8 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#161616",
-  "theme_color": "#161616",
+  "background_color": "#0c0d0e",
+  "theme_color": "#0c0d0e",
   "icons": [
     {
       "src": "/favicon-32x32.png",
@@ -16,6 +16,11 @@
     {
       "src": "/apple-touch-icon.png",
       "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "/brand/circe-app-icon-light.png",
+      "sizes": "512x512",
       "type": "image/png"
     }
   ]

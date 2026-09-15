@@ -1,15 +1,15 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { lazy, Suspense } from "react";
 
-const CirceControlCenter = lazy(async () => {
-  const module = await import("../components/circe/CirceControlCenter");
-  return { default: module.CirceControlCenter };
+const CirceOverview = lazy(async () => {
+  const module = await import("../components/circe/CirceOverview");
+  return { default: module.CirceOverview };
 });
 
-function CirceControlCenterRoute() {
+function CirceOverviewRoute() {
   return (
     <Suspense fallback={null}>
-      <CirceControlCenter />
+      <CirceOverview />
     </Suspense>
   );
 }
@@ -23,5 +23,5 @@ export const Route = createFileRoute("/circe")({
       throw redirect({ to: "/pair", replace: true });
     }
   },
-  component: CirceControlCenterRoute,
+  component: CirceOverviewRoute,
 });

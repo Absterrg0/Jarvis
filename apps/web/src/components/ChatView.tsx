@@ -43,7 +43,10 @@ import {
   RuntimeMode,
   TerminalOpenInput,
 } from "@t3tools/contracts";
-import { type EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
+import {
+  type EnvironmentConnectionPresentation,
+  connectionStatusText,
+} from "@t3tools/client-runtime/connection";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import { type CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
@@ -235,6 +238,16 @@ import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { useBrowserHistoryStore } from "~/browserHistoryStore";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities } from "../providerModels";
+import { getDisplayModelName, PROVIDER_ICON_BY_PROVIDER } from "./chat/providerIconUtils";
+import {
+  ContextPanel,
+  describeContextModel,
+  selectContextModel,
+  type ContextPanelAgent,
+  type ContextPanelDevice,
+  type ContextPanelPlan,
+  type ContextPanelProject,
+} from "./chat/ContextPanel";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
@@ -4129,6 +4142,10 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
   }, [activeThreadRef]);
+  const addContextSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "context");
+  }, [activeThreadRef]);
   const supportsThreadPullRequests =
     serverConfig?.environment.capabilities.threadPullRequests === true;
   const addPullRequestsSurface = useCallback(() => {
@@ -4447,6 +4464,16 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef) return;
     if (rightPanelOpen) {
       closePreviewPanel();
+      return;
+    }
+    // Opening the panel with nothing selected lands on the context stack
+    // instead of an empty launcher; any existing choice is left alone.
+    const threadState = selectThreadRightPanelState(
+      useRightPanelStore.getState().byThreadKey,
+      activeThreadRef,
+    );
+    if (threadState.surfaces.length === 0) {
+      useRightPanelStore.getState().open(activeThreadRef, "context");
       return;
     }
     useRightPanelStore.getState().toggleVisibility(activeThreadRef);
@@ -5428,6 +5455,30 @@ export default function ChatView(props: ChatViewProps) {
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const supportsPinning = serverConfig?.environment.capabilities.threadPinning === true;
   const activeThreadPinned = supportsPinning && activeThreadShell?.pinnedAt != null;
+  const togglePinActiveThread = useCallback(() => {
+    if (!isServerThread || !activeThreadRef || !supportsPinning) return;
+    const pinned = activeThreadPinned;
+    void (pinned ? confirmAndUnpinThread(activeThreadRef) : pinThread(activeThreadRef)).then(
+      (result) => {
+        if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: pinned ? "Failed to unpin thread" : "Failed to pin thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      },
+    );
+  }, [
+    activeThreadPinned,
+    activeThreadRef,
+    confirmAndUnpinThread,
+    isServerThread,
+    pinThread,
+    supportsPinning,
+  ]);
   const nowMinute = useNowMinute();
   const snoozeNow = new Date().toISOString();
   const activeThreadSnoozed =
@@ -7949,6 +8000,72 @@ export default function ChatView(props: ChatViewProps) {
     return <NoActiveThreadState />;
   }
 
+  const contextProject: ContextPanelProject | null = activeProject
+    ? {
+        title: activeProject.title,
+        subtitle: activeProject.repositoryIdentity?.displayName ?? activeProject.workspaceRoot,
+      }
+    : null;
+  const openActiveProjectSettings = activeProject
+    ? () => {
+        // Resolved on click so the grouping map is not rebuilt every render.
+        const logicalKeyByPhysicalKey = buildPhysicalToLogicalProjectKeyMap({
+          projects: allProjects,
+          settings: projectGroupingSettings,
+          primaryEnvironmentId,
+        });
+        const projectKey =
+          logicalKeyByPhysicalKey.get(derivePhysicalProjectKey(activeProject)) ??
+          deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings);
+        void navigate({
+          to: "/projects/$projectKey",
+          params: { projectKey },
+        });
+      }
+    : null;
+  const openIntegrationsSettings = () => {
+    void navigate({ to: "/settings/integrations" });
+  };
+  const contextDevice: ContextPanelDevice | null = activeEnvironment
+    ? (() => {
+        const descriptor = activeEnvironment.serverConfig?.environment ?? null;
+        const phase = activeEnvironment.connection.phase;
+        return {
+          label: activeEnvironment.label,
+          machineKind: resolveEnvironmentMachineKind(activeEnvironment.serverConfig),
+          detail: descriptor
+            ? `${descriptor.platform.os} · ${descriptor.platform.arch} · ${descriptor.serverVersion}`
+            : null,
+          phase,
+          statusText:
+            phase === "connected" ? "Online" : connectionStatusText(activeEnvironment.connection),
+        };
+      })()
+    : null;
+  const contextAgent: ContextPanelAgent | null = (() => {
+    if (!selectedProviderEntry) return null;
+    const model = selectContextModel(selectedProviderEntry.snapshot.models);
+    if (!model) return null;
+    return {
+      providerLabel: selectedProviderEntry.displayName,
+      modelName: getDisplayModelName(model),
+      subtitle: describeContextModel(model),
+      Icon: PROVIDER_ICON_BY_PROVIDER[selectedProviderEntry.driverKind] ?? null,
+    };
+  })();
+  const contextPlan: ContextPanelPlan | null = activePlan
+    ? {
+        completed: activePlan.steps.filter((step) => step.status === "completed").length,
+        total: activePlan.steps.length,
+        currentStep:
+          (
+            activePlan.steps.find((step) => step.status === "inProgress") ??
+            activePlan.steps.find((step) => step.status === "pending") ??
+            null
+          )?.step ?? null,
+      }
+    : null;
+
   const panelToggleControls = (
     <PanelLayoutControls
       terminalAvailable={activeProject !== null}
@@ -8101,6 +8218,15 @@ export default function ChatView(props: ChatViewProps) {
         environmentId={activeThreadRef?.environmentId ?? null}
         threadId={activeThreadRef?.threadId ?? null}
       />
+    ) : renderedRightPanelSurface?.kind === "context" ? (
+      <ContextPanel
+        project={contextProject}
+        onAddToProject={openActiveProjectSettings}
+        device={contextDevice}
+        agent={contextAgent}
+        plan={contextPlan}
+        onAddTools={openIntegrationsSettings}
+      />
     ) : (renderedRightPanelSurface?.kind === "files" ||
         renderedRightPanelSurface?.kind === "file") &&
       ((activeProject && activeWorkspaceRoot) ||
@@ -8197,6 +8323,11 @@ export default function ChatView(props: ChatViewProps) {
             availableEditors={availableEditors}
             rightPanelOpen={rightPanelOpen}
             gitCwd={gitCwd}
+            threadBranch={activeThreadBranch}
+            pinState={supportsPinning && isServerThread ? { pinned: activeThreadPinned } : null}
+            onTogglePin={togglePinActiveThread}
+            copyAvailable={activeThreadReferenceCopyTarget !== null}
+            onCopyReference={copyActiveThreadReference}
             onNewThreadInProject={handleNewThreadInActiveProject}
             {...(activeDraftLogicalProjectKey
               ? { onOpenProjectSettings: handleOpenDraftProjectSettings }
@@ -8655,6 +8786,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequest={addPullRequestSurface}
           onAddPullRequests={addPullRequestsSurface}
           onAddAgents={addAgentsSurface}
+          onAddContext={addContextSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
@@ -8662,6 +8794,7 @@ export default function ChatView(props: ChatViewProps) {
           pullRequestAvailable={pullRequestSurfaceAvailable}
           pullRequestsAvailable={isServerThread && supportsThreadPullRequests}
           agentsAvailable
+          contextAvailable
           liveAgentCount={agentPanelModel.liveCount}
         >
           {rightPanelContent}
@@ -8707,6 +8840,7 @@ export default function ChatView(props: ChatViewProps) {
             onAddPullRequest={addPullRequestSurface}
             onAddPullRequests={addPullRequestsSurface}
             onAddAgents={addAgentsSurface}
+            onAddContext={addContextSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
@@ -8714,6 +8848,7 @@ export default function ChatView(props: ChatViewProps) {
             pullRequestAvailable={pullRequestSurfaceAvailable}
             pullRequestsAvailable={isServerThread && supportsThreadPullRequests}
             agentsAvailable
+            contextAvailable
             liveAgentCount={agentPanelModel.liveCount}
           >
             {rightPanelContent}

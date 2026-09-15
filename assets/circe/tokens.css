@@ -1,0 +1,82 @@
+/* Circe Design System v1 — reference tokens.
+   Runtime source of truth: apps/web/src/index.css. */
+:root {
+  --brand-50: #fff8f3;
+  --brand-100: #fcebdf;
+  --brand-200: #f7cfb8;
+  --brand-300: #f0ae8b;
+  --brand-400: #e6946d;
+  --brand-500: #d9825d;
+  --brand-600: #c46d4a;
+  --brand-700: #a95134;
+  --brand-800: #7e3c29;
+  --brand-900: #51281e;
+
+  --accent: #e08a63;
+  --accent-bright: #f0a078;
+  --accent-deep: #a5482c;
+
+  --success: #83d7a3;
+  --warning: #e6a066;
+  --danger: #f0646e;
+  --neutral-status: #a1a7af;
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  --ease-circe: cubic-bezier(0.22, 0.8, 0.3, 1);
+
+  --font-ui: "Inter", "SF Pro Text", system-ui, sans-serif;
+  --font-display: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+}
+
+.dark {
+  --canvas: #0c0d0e;
+  --sidebar: #0e0f10;
+  --surface-1: #121415;
+  --surface-2: #151719;
+  --surface-3: #191b1d;
+  --surface-hover: #1e2022;
+
+  --fg: #f4f1ed;
+  --fg-2: #b1afad;
+  --fg-3: #7d7d7d;
+  --fg-disabled: #55575a;
+
+  --border-1: rgba(255, 255, 255, 0.065);
+  --border-2: rgba(255, 255, 255, 0.1);
+  --border-3: rgba(255, 255, 255, 0.16);
+}
+
+.light {
+  --canvas: #fcf9f4;
+  --sidebar: #f8f4ee;
+  --surface-1: #fffdfa;
+  --surface-2: #f6f0e9;
+  --surface-3: #ffffff;
+  --surface-hover: #f2ebe4;
+
+  --fg: #151311;
+  --fg-2: #696b70;
+  --fg-3: #96918d;
+  --fg-disabled: #b7b1ac;
+
+  --border-1: rgba(56, 43, 35, 0.07);
+  --border-2: rgba(56, 43, 35, 0.13);
+  --border-3: rgba(56, 43, 35, 0.2);
+}
