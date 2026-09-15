@@ -2623,7 +2623,11 @@ export function CirceVoiceRuntime({
                 }),
               );
               setTargetVersion((version) => version + 1);
-              await onThreadStarted(outcome.projectRef.nodeId, outcome.threadId);
+              // Navigation is best-effort: a rejected subscription must not
+              // abort the plan before its terminal feedback is emitted.
+              await Promise.resolve(
+                onThreadStarted(outcome.projectRef.nodeId, outcome.threadId),
+              ).catch(() => undefined);
               continue;
             }
             userClearedTargetRef.current = false;

@@ -39,6 +39,8 @@ const LIVE_SESSION_END_TIMEOUT = "10 seconds";
 const LIVE_SESSION_LEASE_MILLIS = 45_000;
 /** Absolute server-side ceiling, above the client's own 10-minute cap. */
 const LIVE_SESSION_MAX_MILLIS = 12 * 60_000;
+/** First retry delay after a failed close; doubles up to the session ceiling. */
+const LIVE_SESSION_RETRY_BASE_MILLIS = 30_000;
 /** How often the node closes sessions whose lease lapsed. */
 const LIVE_SESSION_SWEEP_INTERVAL = "15 seconds";
 /**
@@ -316,11 +318,32 @@ export const layer = Layer.effect(
       readonly route: RelayConfig | null;
       lastRenewedAt: number;
       readonly deadlineAt: number;
+      /** Earliest time the sweeper may retry a close that has not succeeded. */
+      nextAttemptAt: number;
+      /** Consecutive failed close attempts, for exponential backoff. */
+      failedAttempts: number;
     }
     // One lease per live session. The route pins the authenticated cloud path
     // so a release after unlink still reaches the right relay; a local-key
     // session keeps a null route and closes through the node's own key.
     const leases = new Map<string, LiveSessionLease>();
+    // A close that fails (no key, unconfirmed hangup, relay error) is retried
+    // with backoff so an unclosable session cannot hammer the provider every
+    // sweep. Past the ceiling plus one full session, retries stop: the durable
+    // record remains for operator recovery instead of looping forever.
+    const backOff = (lease: LiveSessionLease, now: number) => {
+      lease.failedAttempts += 1;
+      if (now > lease.deadlineAt + LIVE_SESSION_MAX_MILLIS) {
+        lease.nextAttemptAt = Number.POSITIVE_INFINITY;
+        return;
+      }
+      lease.nextAttemptAt =
+        now +
+        Math.min(
+          LIVE_SESSION_MAX_MILLIS,
+          LIVE_SESSION_RETRY_BASE_MILLIS * 2 ** (lease.failedAttempts - 1),
+        );
+    };
     const executeRelay = (request: HttpClientRequest.HttpClientRequest) =>
       client.execute(request).pipe(
         Effect.flatMap(checkRelayResponse),
@@ -382,8 +405,11 @@ export const layer = Layer.effect(
             ),
           ).pipe(
             Effect.tapError(() =>
-              // The slot may still be held: retry on the next cloud create.
-              Effect.sync(() => releasesToRetry.add(sessionId)),
+              Effect.gen(function* () {
+                // The slot may still be held: retry on the next cloud create.
+                releasesToRetry.add(sessionId);
+                if (known !== undefined) backOff(known, yield* Clock.currentTimeMillis);
+              }),
             ),
           );
           releasesToRetry.delete(sessionId);
@@ -396,6 +422,7 @@ export const layer = Layer.effect(
         const settings = yield* settingsService.getSettings.pipe(Effect.orElseSucceed(() => null));
         const apiKey = settings?.circeLiveVoice.apiKey.trim() ?? "";
         if (apiKey.length === 0) {
+          if (known !== undefined) backOff(known, yield* Clock.currentTimeMillis);
           yield* Effect.logWarning(
             "Local live voice session retained: no API key is available to close it",
             { sessionId },
@@ -407,6 +434,7 @@ export const layer = Layer.effect(
           Effect.catch(() => Effect.succeed(false)),
         );
         if (!closed) {
+          if (known !== undefined) backOff(known, yield* Clock.currentTimeMillis);
           yield* Effect.logWarning("Local live voice session close was not confirmed", {
             sessionId,
           });
@@ -435,7 +463,8 @@ export const layer = Layer.effect(
         // iterating the live map would skip sessions or miss deletions.
         const lapsed = Array.from(leases.entries()).filter(
           ([, lease]) =>
-            now - lease.lastRenewedAt > LIVE_SESSION_LEASE_MILLIS || now >= lease.deadlineAt,
+            (now - lease.lastRenewedAt > LIVE_SESSION_LEASE_MILLIS || now >= lease.deadlineAt) &&
+            now >= lease.nextAttemptAt,
         );
         for (const [sessionId] of lapsed) {
           yield* releaseSession({ sessionId }).pipe(Effect.catch(() => Effect.void));
@@ -478,6 +507,8 @@ export const layer = Layer.effect(
               route: relayConfig,
               lastRenewedAt: startedAt,
               deadlineAt: startedAt + LIVE_SESSION_MAX_MILLIS,
+              nextAttemptAt: startedAt,
+              failedAttempts: 0,
             });
             return { ...session, releaseRequired: true };
           }
@@ -525,6 +556,10 @@ export const layer = Layer.effect(
                       route: null,
                       lastRenewedAt: startedAt,
                       deadlineAt,
+                      // The compensating hangup already failed once: back off
+                      // before the sweeper retries it.
+                      nextAttemptAt: startedAt + LIVE_SESSION_RETRY_BASE_MILLIS,
+                      failedAttempts: 1,
                     });
                     yield* Effect.logError(
                       "Local live voice session closure is unconfirmed; retrying from the sweeper",
@@ -537,7 +572,13 @@ export const layer = Layer.effect(
                 }),
               ),
             );
-          leases.set(created.sessionId, { route: null, lastRenewedAt: startedAt, deadlineAt });
+          leases.set(created.sessionId, {
+            route: null,
+            lastRenewedAt: startedAt,
+            deadlineAt,
+            nextAttemptAt: startedAt,
+            failedAttempts: 0,
+          });
           return created;
         }),
       releaseSession,
@@ -561,6 +602,8 @@ export const layer = Layer.effect(
             route: null,
             lastRenewedAt: recoveredAt,
             deadlineAt: row.deadlineAt,
+            nextAttemptAt: recoveredAt,
+            failedAttempts: 0,
           });
         }
       }

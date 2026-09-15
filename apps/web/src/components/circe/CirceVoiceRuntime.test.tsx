@@ -470,6 +470,36 @@ describe("Circe voice runtime", () => {
     expect(started).toHaveBeenCalledWith(nodeId, startedThread);
     expect(consume).toHaveBeenCalled();
   });
+  it("completes a plan even when thread navigation rejects", async () => {
+    const startedThread = ThreadId.make("plan-task");
+    started.mockRejectedValueOnce(new Error("navigation failed"));
+    state.execute.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        status: "plan",
+        message: "Started the task.",
+        steps: [
+          {
+            action: "start",
+            status: "started",
+            message: "Started the task.",
+            threadId: startedThread,
+            projectId,
+            taskRef: { executionNodeId: nodeId, threadId: startedThread },
+          },
+        ],
+      },
+    });
+    await ready();
+    transcript("start the task", { captureId: "capture", purpose: "command" });
+    await state.drain?.();
+    // A rejected subscription must not swallow the plan's terminal feedback.
+    await vi.waitFor(() =>
+      expect(events.some((entry) => entry === "speech:Started the task.")).toBe(true),
+    );
+    expect(started).toHaveBeenCalledWith(nodeId, startedThread);
+    expect(consume).toHaveBeenCalled();
+  });
   it("preserves the original instruction and sends a typed provider/model answer", async () => {
     const modelCatalog: CirceMeshCatalog = {
       ...catalog,

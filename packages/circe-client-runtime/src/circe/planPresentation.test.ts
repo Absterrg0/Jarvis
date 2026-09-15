@@ -140,4 +140,26 @@ describe("circe plan target outcomes", () => {
       },
     ]);
   });
+
+  it("ignores a focused step that never acknowledged", () => {
+    expect(
+      circePlanTargetOutcomes(
+        [
+          {
+            action: "focused",
+            status: "failed",
+            message: "Focus failed.",
+            projectId: ProjectId.make("project-2"),
+          },
+          {
+            action: "focused",
+            status: "needs-input",
+            message: "Which task?",
+            projectId: ProjectId.make("project-2"),
+          },
+        ],
+        fallbackProjectRef,
+      ),
+    ).toEqual([]);
+  });
 });

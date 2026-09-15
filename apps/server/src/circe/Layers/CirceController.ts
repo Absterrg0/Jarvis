@@ -2725,7 +2725,14 @@ export const makeCirceControllerLive = <R>(
               stepBindings: stepBindingsForFrame(bindings, offset),
               ...planNeedsInputFrame(result),
             });
-            return { ...result, clarificationFrameId: frameId };
+            // Name what already ran before asking the question, so the user
+            // knows the earlier steps were accepted.
+            const executed = composePlanMessage(results.slice(0, -1));
+            return {
+              ...result,
+              prompt: offset === 0 ? result.prompt : `${executed} ${result.prompt}`.slice(0, 400),
+              clarificationFrameId: frameId,
+            };
           }
         }
         return {

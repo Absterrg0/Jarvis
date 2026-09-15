@@ -152,18 +152,17 @@ function makeFakeDb(
               },
             ]);
           }
-          return {
-            limit: () =>
-              Effect.sync(() =>
-                [...sessions.values()]
-                  .filter((row) => matchesSession(sql, row))
-                  .map((row) => ({
-                    userId: row.userId,
-                    sessionId: row.sessionId,
-                    reservationId: row.reservationId,
-                  })),
-              ),
-          };
+          const limited = () =>
+            Effect.sync(() =>
+              [...sessions.values()]
+                .filter((row) => matchesSession(sql, row))
+                .map((row) => ({
+                  userId: row.userId,
+                  sessionId: row.sessionId,
+                  reservationId: row.reservationId,
+                })),
+            );
+          return { orderBy: () => ({ limit: limited }), limit: limited };
         },
       }),
     }),
@@ -491,6 +490,47 @@ describe("LiveVoiceSessions", () => {
         makeLayer({
           db,
           links: makeLinks(["user-1", "user-2", "user-3", "user-4"]),
+          upstream: service,
+          apiKey: "sk-test",
+        }),
+      ),
+    );
+  });
+
+  it.effect("defers an unclosable reservation instead of monopolizing the sweep", () => {
+    const { db, sessions } = makeFakeDb([
+      {
+        userId: "user-null",
+        reservationId: "r-null",
+        sessionId: null,
+        environmentId: "env",
+        expiresAt: "1969-01-01T00:00:00.000Z",
+        createdAt: "1999-01-01T00:00:00.000Z",
+      },
+      {
+        userId: "user-fail",
+        reservationId: "r-fail",
+        sessionId: "sess_fail",
+        environmentId: "env",
+        expiresAt: "1969-01-01T00:00:00.000Z",
+        createdAt: "1999-01-01T00:00:00.000Z",
+      },
+    ]);
+    const { service } = makeUpstream({ failEnd: true });
+    return Effect.gen(function* () {
+      const voice = yield* LiveVoiceSessions.LiveVoiceSessions;
+      yield* voice.sweepExpired();
+      // Both rows are kept (never freed by a guess) but deferred to a later
+      // retry, so the next batch can reach other expired reservations.
+      expect(sessions.get("user-null")?.expiresAt).not.toBe("1969-01-01T00:00:00.000Z");
+      expect(sessions.get("user-fail")?.expiresAt).not.toBe("1969-01-01T00:00:00.000Z");
+      expect(sessions.has("user-null")).toBe(true);
+      expect(sessions.has("user-fail")).toBe(true);
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          db,
+          links: makeLinks(["user-null", "user-fail"]),
           upstream: service,
           apiKey: "sk-test",
         }),

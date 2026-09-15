@@ -52,7 +52,11 @@ export function circePlanTargetOutcomes(
       });
       continue;
     }
-    if (step.action === "focused" && step.projectId !== undefined) {
+    if (
+      step.action === "focused" &&
+      step.status === "acknowledged" &&
+      step.projectId !== undefined
+    ) {
       const projectRef: CirceProjectRef = {
         nodeId: step.taskRef?.executionNodeId ?? fallbackProjectRef.nodeId,
         projectId: step.projectId,

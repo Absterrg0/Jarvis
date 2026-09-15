@@ -668,4 +668,27 @@ describe("local live voice durability", () => {
       expect(calls.filter(isHangup).length).toBeGreaterThanOrEqual(2);
     }).pipe(Effect.provide(serviceLayer));
   });
+
+  it.effect("backs off a failed close instead of retrying every sweep", () => {
+    const { serviceLayer, calls } = localFixture(
+      (request) =>
+        request.url.endsWith("/hangup")
+          ? new Response("nope", { status: 500 })
+          : localAnswer("live_local"),
+      { failPut: true },
+    );
+    return Effect.gen(function* () {
+      const service = yield* CirceLiveVoice;
+      yield* service.createSession(input).pipe(Effect.flip);
+      // Let the lease lapse so the sweeper attempts a close; the attempt fails
+      // and records a backoff.
+      yield* TestClock.adjust("60 seconds");
+      yield* service.sweepExpired();
+      const afterLapsed = calls.filter(isHangup).length;
+      expect(afterLapsed).toBeGreaterThan(1);
+      // A sweep at the same instant is inside the backoff window: no retry.
+      yield* service.sweepExpired();
+      expect(calls.filter(isHangup)).toHaveLength(afterLapsed);
+    }).pipe(Effect.provide(serviceLayer));
+  });
 });

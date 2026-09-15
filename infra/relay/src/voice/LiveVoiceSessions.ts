@@ -1,4 +1,4 @@
-import { and, count, eq, gte, lt, lte } from "drizzle-orm";
+import { and, asc, count, eq, gte, lt, lte } from "drizzle-orm";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -18,6 +18,12 @@ import { LiveVoiceUpstream } from "./LiveVoiceUpstream.ts";
 const LIVE_VOICE_SESSION_TTL_MILLIS = 10 * 60_000;
 /** Expired reservations closed per sweep pass, so one pass never monopolizes a request. */
 const LIVE_VOICE_SWEEP_BATCH = 50;
+/**
+ * How long an expired reservation that cannot be closed (unknown upstream id,
+ * or an unconfirmed hangup) is deferred before the sweep retries it. Deferring
+ * keeps a batch of unclosable rows from starving the other expired sessions.
+ */
+const LIVE_VOICE_SWEEP_RETRY_BACKOFF_MILLIS = 5 * 60_000;
 /** Sessions one account may start in the rolling usage window. */
 export const DEFAULT_LIVE_VOICE_SESSION_LIMIT = 60;
 const LIVE_VOICE_USAGE_WINDOW_MILLIS = 24 * 60 * 60_000;
@@ -398,7 +404,17 @@ export const make = Effect.gen(function* () {
       // Without a deployment key no cloud session can exist; the sweep has
       // nothing to close.
       if (publicKey === null) return;
-      const nowIso = DateTime.formatIso(yield* DateTime.now);
+      const now = yield* DateTime.now;
+      const nowIso = DateTime.formatIso(now);
+      const deferredIso = DateTime.formatIso(
+        DateTime.add(now, { milliseconds: LIVE_VOICE_SWEEP_RETRY_BACKOFF_MILLIS }),
+      );
+      const defer = (userId: string, reservationId: string) =>
+        db
+          .update(relayLiveVoiceSessions)
+          .set({ expiresAt: deferredIso })
+          .where(reservationIdentity(userId, reservationId))
+          .pipe(Effect.mapError(persistence("defer-reservation")));
       const rows = yield* db
         .select({
           userId: relayLiveVoiceSessions.userId,
@@ -407,17 +423,21 @@ export const make = Effect.gen(function* () {
         })
         .from(relayLiveVoiceSessions)
         .where(lte(relayLiveVoiceSessions.expiresAt, nowIso))
+        // Oldest attempt first, so deferring an unclosable row lets the rest of
+        // the expired set into the next batch instead of blocking it.
+        .orderBy(asc(relayLiveVoiceSessions.expiresAt))
         .limit(LIVE_VOICE_SWEEP_BATCH)
         .pipe(Effect.mapError(persistence("sweep-expired")));
       for (const row of rows) {
         // A null id is uncertainty, never proof that nothing was created. The
-        // sweep cannot close it and must not free the slot; surface it for the
-        // operator recovery procedure instead.
+        // sweep cannot close it and must not free the slot; defer it and surface
+        // it for the operator recovery procedure instead.
         if (!row.sessionId) {
           yield* Effect.logWarning("Cloud voice expired reservation has no upstream id", {
             userId: row.userId,
             reservationId: row.reservationId,
           });
+          yield* defer(row.userId, row.reservationId).pipe(Effect.catch(() => Effect.void));
           continue;
         }
         const ended = yield* upstream.end({ apiKey: publicKey, sessionId: row.sessionId }).pipe(
@@ -435,6 +455,7 @@ export const make = Effect.gen(function* () {
             reservationId: row.reservationId,
             sessionId: row.sessionId,
           });
+          yield* defer(row.userId, row.reservationId).pipe(Effect.catch(() => Effect.void));
         }
       }
     }),

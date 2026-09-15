@@ -990,7 +990,9 @@ export function createCirceLiveVoiceController(
           ...(context === undefined || context.length === 0 ? {} : { context }),
         })
         .then((result) => {
-          liveSessionId = result.sessionId;
+          // A late answer from a torn-down session must not overwrite the
+          // active session's renewal target.
+          if (gen === generation && peer === nextPeer) liveSessionId = result.sessionId;
           if (result.releaseRequired) {
             if (gen !== generation || peer !== nextPeer) void releaseSession(result.sessionId);
             else cloudSessionId = result.sessionId;
