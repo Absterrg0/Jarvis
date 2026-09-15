@@ -443,16 +443,15 @@ export function buildCirceInterpretInput(
   // Devices are routing targets the supervisor may cite. Labels only, never
   // IDs: the client grounds the label to its owning node. Deduplicated by
   // folded label so a repeated name does not imply a choice it cannot make.
-  const nodes = [
-    ...new Set(
-      catalog.nodes
-        .map((node) => node.label.trim())
-        .filter((label) => label.length > 0)
-        .map((label) => label.slice(0, 120)),
-    ),
-  ]
-    .slice(0, 16)
-    .map((label) => ({ label }));
+  const nodeLabels = new Map<string, string>();
+  for (const node of catalog.nodes) {
+    const label = node.label.trim().slice(0, 120);
+    if (label.length === 0) continue;
+    const key = label.toLocaleLowerCase("en-US");
+    if (!nodeLabels.has(key)) nodeLabels.set(key, label);
+    if (nodeLabels.size >= 16) break;
+  }
+  const nodes = [...nodeLabels.values()].map((label) => ({ label }));
   const tasks = (options.tasks ?? []).slice(0, 8).map((task) => ({
     title: task.title.slice(0, 240),
     ...(task.project === undefined ? {} : { project: task.project.slice(0, 240) }),

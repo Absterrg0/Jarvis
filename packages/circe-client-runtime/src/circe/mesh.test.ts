@@ -944,6 +944,19 @@ describe("Circe mesh", () => {
     expect(input).not.toHaveProperty("contextThreadId");
   });
 
+  it("deduplicates device labels by folded name", () => {
+    const catalog = {
+      nodes: [
+        { nodeId: NODE_LAPTOP, label: "  Laptop ", reachability: "online" as const },
+        { nodeId: NODE_DESKTOP, label: "laptop", reachability: "online" as const },
+      ],
+      projects: [],
+      providers: [],
+    };
+    const input = buildCirceInterpretInput(catalog, "Check PRs", { inputMode: "text" });
+    expect(input.nodes).toEqual([{ label: "Laptop" }]);
+  });
+
   it("carries bounded tasks plus request identity without pins", () => {
     const catalog = {
       nodes: [],

@@ -208,6 +208,88 @@ describe("proposal-first execute route grounding", () => {
     ).toMatchObject({ status: "device-not-ready", nodeLabel: "VPS" });
   });
 
+  it("refuses to route a device-only turn to an offline pinned device", () => {
+    const source = "Do the thing on VPS";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        proposal("start", [nodeRef(source, "on VPS", "VPS")]),
+        { projectRef: { nodeId: VPS, projectId: ProjectId.make("zivil-vps") } },
+      ),
+    ).toEqual({
+      status: "unavailable",
+      project: expect.objectContaining({
+        ref: { nodeId: VPS, projectId: ProjectId.make("zivil-vps") },
+      }),
+      nodeLabel: "VPS",
+    });
+  });
+
+  it("does not fall back to a device's only project when the named project is unknown", () => {
+    const source = "Open Nonesuch on Laptop";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        proposal("start", [
+          destinationRef(source, "Nonesuch", "Nonesuch"),
+          nodeRef(source, "on Laptop", "Laptop"),
+        ]),
+        ambientDesktop,
+      ),
+    ).toEqual({ status: "ambient" });
+  });
+
+  it("refuses a step correction whose span does not echo its value", () => {
+    const source = "Stop auth, then no I meant Zivil";
+    const clauseEnd = source.indexOf(", then");
+    const secondStart = clauseEnd + ", then ".length;
+    const correction = "no I meant Zivil";
+    expect(
+      resolveCirceProposalExecuteRoute(
+        catalog,
+        source,
+        {
+          action: "sequence",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+          steps: [
+            {
+              action: "stop",
+              refs: [],
+              sourceSpan: { start: 0, end: clauseEnd },
+              model: null,
+              effort: null,
+              answer: null,
+            },
+            {
+              action: "start",
+              refs: [
+                {
+                  span: {
+                    start: secondStart,
+                    end: secondStart + correction.length,
+                    text: correction,
+                  },
+                  role: "correction",
+                  value: "Nonesuch",
+                },
+              ],
+              sourceSpan: { start: secondStart, end: source.length },
+              model: null,
+              effort: null,
+              answer: null,
+            },
+          ],
+        },
+        ambientDesktop,
+      ),
+    ).toEqual({ status: "ambient" });
+  });
+
   it("does not assert a project is missing from a device with an unread catalog", () => {
     const unread: CirceMeshCatalog = {
       ...catalog,

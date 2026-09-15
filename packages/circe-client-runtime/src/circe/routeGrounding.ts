@@ -243,6 +243,12 @@ export function resolveCirceProposalExecuteRoute(
         ) {
           return { status: "ambient" };
         }
+        if (stepDestination.role === "correction") {
+          const heard = foldCirceMeshName(stepDestination.span.text);
+          if (heard.length === 0 || heard !== foldCirceMeshName(stepDestination.value)) {
+            return { status: "ambient" };
+          }
+        }
         deviceTarget = stepDestination;
       }
     }
@@ -295,9 +301,10 @@ export function resolveCirceProposalExecuteRoute(
     // its absence of a project proves nothing.
     const readiness = circeMeshNodeReadiness(node);
     if (readiness.status !== "ready") {
-      // A device-only turn on the current project there is still safe.
+      // A device-only turn on the current project there is still safe, but the
+      // owner node must still be online to run it.
       if (deviceTarget === undefined && currentOnNode !== undefined) {
-        return { status: "routed", project: currentOnNode };
+        return routeToProject(catalog, currentOnNode);
       }
       return {
         status: "device-not-ready",
@@ -324,6 +331,11 @@ export function resolveCirceProposalExecuteRoute(
       // hold it, so this is a conflict rather than an invitation to abandon
       // the device the user named.
       return { status: "device-conflict", projects: offNode, nodeLabel: nodeLabelOf(node) };
+    }
+    // A named project the catalog cannot resolve is unresolved, never the
+    // device's only project. The execution node clarifies authoritatively.
+    if (deviceTarget !== undefined && deviceMatches.length === 0) {
+      return { status: "ambient" };
     }
     // Device named with no named project: prefer the current project there,
     // else the device's only project, else ask within the device.

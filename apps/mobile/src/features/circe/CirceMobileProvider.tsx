@@ -1718,7 +1718,10 @@ export function CirceMobileProvider(props: { readonly children: ReactNode }) {
           // project name sound under partial coverage.
           deviceGrounded:
             executeRoute.status === "routed" &&
-            executionProposal.refs.some((ref) => ref.role === "node"),
+            [
+              ...executionProposal.refs,
+              ...(executionProposal.steps ?? []).flatMap((step) => step.refs),
+            ].some((ref) => ref.role === "node"),
         });
         if (coverageConfirm.status === "confirm") {
           const label = `${coverageConfirm.project.title} — ${coverageConfirm.project.nodeLabel}`;

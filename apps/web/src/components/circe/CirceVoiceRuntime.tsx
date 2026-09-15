@@ -2243,7 +2243,10 @@ export function CirceVoiceRuntime({
           // Only a device that actually grounded (unique + ready) makes the
           // project name sound under partial coverage.
           deviceGrounded:
-            meshRoutedProject !== undefined && meshProposal.refs.some((ref) => ref.role === "node"),
+            meshRoutedProject !== undefined &&
+            [...meshProposal.refs, ...(meshProposal.steps ?? []).flatMap((step) => step.refs)].some(
+              (ref) => ref.role === "node",
+            ),
         });
         if (coverageConfirm.status === "confirm") {
           const requestId = voiceSubmission.requestId ?? voiceSnapshot?.requestId ?? randomUUID();
