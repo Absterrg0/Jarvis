@@ -8,17 +8,19 @@ import {
   useClock,
   vec,
 } from "@shopify/react-native-skia";
-import { useDerivedValue } from "react-native-reanimated";
+import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
 import { HeroBackgroundArcs } from "./HeroBackgroundArcs";
-import { HeroOrbCore } from "./HeroOrbCore";
+import { HeroInternalMotes } from "./HeroInternalMotes";
+import { HeroOrbBody } from "./HeroOrbBody";
+import { HeroOrbGlass } from "./HeroOrbGlass";
 import { HeroParticles } from "./HeroParticles";
 import { HeroRibbonField } from "./HeroRibbonField";
 import {
   HERO_APPEARANCE,
   HERO_METRICS,
+  HERO_MOTION,
   HERO_PALETTE,
-  HERO_RIBBON_CYCLE_SECONDS,
   heroAlpha,
   type HeroAppearance,
 } from "./heroTokens";
@@ -28,28 +30,31 @@ import {
  *
  * This is a brand illustration, not a product orb. It exists only on the
  * welcome and auth screens, it has no voice states, and it is deliberately a
- * wide piece of artwork rather than a widget: the orb is the focal point of a
- * scene that also contains halo arcs, atmosphere, a ribbon fan and dust.
+ * wide piece of artwork rather than a widget. It is a separate component from
+ * `CirceOrb` on purpose: one shared component cannot be both a small stateful
+ * product indicator and a large editorial hero without compromising both.
  *
- * It is a separate component from `CirceOrb` on purpose. Trying to make one
- * shared component satisfy both a small stateful product indicator and a large
- * editorial hero produced compromises in both directions.
+ * The layer order is load-bearing and is why this is composed in one place
+ * rather than hidden behind an "orb" component:
  *
- * One canvas, one composition, and this layer order:
- *
- *   1. broad atmospheric bloom
+ *   1. atmosphere
  *   2. halo arcs
- *   3. rear ribbon fan
- *   4. orb group
- *        a. luminous orb core
- *        b. interior ribbon, clipped and refracted through the glass
- *   5. front ribbon filaments
- *   6. dust motes
+ *   3. rear ribbon          (rigid drift)
+ *   4. orb body
+ *   5. internal motes       (inside the body)
+ *   6. interior ribbon      (clipped and refracted, rigid drift)
+ *   7. orb glass            (shell over the interior ribbon)
+ *   8. front ribbon         (one or two strands over the shell)
+ *   9. external motes
  *
- * The interior ribbon must sit over the core but inside the composition, which
- * is what makes the strands look like they pass through the object.
+ * The glass must be painted after the interior ribbon, otherwise the strands
+ * appear to sit on top of the sphere rather than inside it.
  *
- * Motion is slow and continuous. Nothing here is driven by app state.
+ * Motion is intentionally minimal. The ribbon geometry is frozen and moves only
+ * as a rigid drift of a few dp; the visible life comes from a highlight
+ * travelling along the ribbon and from the atmosphere breathing. Both use slow
+ * out-and-back ramps rather than a repeating cycle, so no loop boundary exists
+ * that could produce a seam.
  */
 export function CirceWelcomeHero({
   width,
@@ -71,13 +76,23 @@ export function CirceWelcomeHero({
     Math.max(HERO_METRICS.radiusMin, width * HERO_METRICS.radiusFraction),
   );
 
-  // One shared driver for the entire ribbon fan, advanced by wall-clock time so
-  // the drift is identical on every refresh rate.
-  const ribbonPhase = useDerivedValue(() => {
-    if (reducedMotion) return 0;
+  // Rigid drift of the whole woven surface. Out-and-back, so its velocity is
+  // zero at the extremes and there is nothing to seam.
+  const ribbonDrift = useDerivedValue(() => {
+    if (reducedMotion) return [{ translateY: 0 }];
     const t = clock.value / 1000;
-    return ((t / HERO_RIBBON_CYCLE_SECONDS) * Math.PI * 2) % (Math.PI * 2);
+    const phase = (2 * Math.PI * t) / HERO_MOTION.ribbonDriftSeconds;
+    return [{ translateY: Math.sin(phase) * HERO_MOTION.ribbonDriftDp }];
   }, [clock, reducedMotion]);
+
+  // Highlight travel. Also out-and-back, and symmetric, so the bright band never
+  // jumps and never has to wrap.
+  const highlightCenterX = useDerivedValue(() => {
+    if (reducedMotion) return width * 0.5;
+    const t = clock.value / 1000;
+    const phase = (2 * Math.PI * t) / HERO_MOTION.highlightPeriodSeconds;
+    return width * (0.5 - 0.5 * Math.cos(phase));
+  }, [clock, reducedMotion, width]);
 
   const sphereClip = useMemo(
     () => Skia.Path.Circle(centerX, centerY, radius),
@@ -88,8 +103,8 @@ export function CirceWelcomeHero({
   // gradient is cut off and leaves a faint horizontal seam across the page.
   const atmosphereColors = useMemo(
     () => [
-      heroAlpha(HERO_PALETTE.peach, 0.17 * tuning.glowScale),
-      heroAlpha(HERO_PALETTE.ribbonCopper, 0.1 * tuning.glowScale),
+      heroAlpha(HERO_PALETTE.peach, 0.16 * tuning.glowScale),
+      heroAlpha(HERO_PALETTE.ribbonCopper, 0.09 * tuning.glowScale),
       heroAlpha(HERO_PALETTE.ribbonCopper, 0),
     ],
     [tuning.glowScale],
@@ -98,7 +113,7 @@ export function CirceWelcomeHero({
   return (
     <Canvas style={{ width, height }}>
       <Group>
-        {/* 1. Broad atmosphere, so the page around the hero picks up warmth. */}
+        {/* 1. Atmosphere, so the page around the hero picks up warmth. */}
         <Circle cx={centerX} cy={centerY} r={radius * 2.1}>
           <RadialGradient
             c={vec(centerX, centerY - radius * 0.1)}
@@ -116,50 +131,58 @@ export function CirceWelcomeHero({
           reducedMotion={reducedMotion}
         />
 
-        {/* 3. Rear ribbon fan. */}
-        <HeroRibbonField
-          plane="rear"
-          width={width}
-          centerX={centerX}
-          centerY={centerY}
-          radius={radius}
-          ribbonPhase={ribbonPhase}
-          appearance={appearance}
-          reducedMotion={reducedMotion}
-        />
+        {/* 3. Rear ribbon, behind the body. */}
+        <Group transform={ribbonDrift}>
+          <HeroRibbonField
+            plane="rear"
+            width={width}
+            centerX={centerX}
+            centerY={centerY}
+            radius={radius}
+            appearance={appearance}
+            highlightCenterX={highlightCenterX}
+          />
+        </Group>
 
-        {/* 4. The orb, with the refracted ribbon inside it. */}
-        <HeroOrbCore
-          centerX={centerX}
-          centerY={centerY}
-          radius={radius}
-          reducedMotion={reducedMotion}
-        />
-        <HeroRibbonField
-          plane="interior"
-          width={width}
-          centerX={centerX}
-          centerY={centerY}
-          radius={radius}
-          clip={sphereClip}
-          ribbonPhase={ribbonPhase}
-          appearance={appearance}
-          reducedMotion={reducedMotion}
-        />
+        {/* 4. The body. */}
+        <HeroOrbBody centerX={centerX} centerY={centerY} radius={radius} />
 
-        {/* 5. One or two filaments crossing in front. */}
-        <HeroRibbonField
-          plane="front"
-          width={width}
-          centerX={centerX}
-          centerY={centerY}
-          radius={radius}
-          ribbonPhase={ribbonPhase}
-          appearance={appearance}
-          reducedMotion={reducedMotion}
-        />
+        {/* 5. Motes suspended inside the body. */}
+        <Group clip={sphereClip}>
+          <HeroInternalMotes centerX={centerX} centerY={centerY} radius={radius} />
+        </Group>
 
-        {/* 6. Dust. */}
+        {/* 6. The same ribbon, refracted through the glass. */}
+        <Group transform={ribbonDrift}>
+          <HeroRibbonField
+            plane="interior"
+            width={width}
+            centerX={centerX}
+            centerY={centerY}
+            radius={radius}
+            clip={sphereClip}
+            appearance={appearance}
+            highlightCenterX={highlightCenterX}
+          />
+        </Group>
+
+        {/* 7. The shell, over the interior ribbon. */}
+        <HeroOrbGlass centerX={centerX} centerY={centerY} radius={radius} />
+
+        {/* 8. A couple of strands crossing over the shell. */}
+        <Group transform={ribbonDrift}>
+          <HeroRibbonField
+            plane="front"
+            width={width}
+            centerX={centerX}
+            centerY={centerY}
+            radius={radius}
+            appearance={appearance}
+            highlightCenterX={highlightCenterX}
+          />
+        </Group>
+
+        {/* 9. Dust in the air around the hero. */}
         <HeroParticles
           centerX={centerX}
           centerY={centerY}

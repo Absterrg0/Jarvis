@@ -1,43 +1,53 @@
 import { useMemo } from "react";
-import { Group, Path, Skia, usePathInterpolation, type SkPath } from "@shopify/react-native-skia";
+import { Group, LinearGradient, Path, Skia, type SkPath } from "@shopify/react-native-skia";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
 import {
   HERO_APPEARANCE,
+  HERO_CENTRELINE,
   HERO_METRICS,
   HERO_PALETTE,
-  HERO_RIBBON_CYCLE_SECONDS,
   heroAlpha,
   heroHash,
   type HeroAppearance,
 } from "./heroTokens";
+import {
+  buildFilamentPoints,
+  bundleHalfWidth,
+  lensWarp,
+  sampleCenterline,
+  type RibbonPoint,
+  type RibbonSample,
+} from "./heroRibbonGeometry";
 
 /**
- * The ribbon fan.
+ * The woven ribbon surface.
  *
- * Not independent sine waves. There is ONE master spline across the hero, and
- * every filament is an offset from that single curve, so the group reads as one
- * piece of silk rather than as spaghetti. The bundle is tight where it passes
- * the orb and fans out toward both edges, which is what creates the left and
- * right fans from a single construction.
- *
- * Rendered in three planes: behind the orb, refracted through it, and one or
- * two filaments crossing in front. That is what sells the depth.
+ * One art-directed centreline carries every filament, offset along the curve's
+ * own perpendicular so the strands stay locally parallel. Geometry is built
+ * once and never re-interpolated: the only motion is a rigid vertical drift of
+ * the whole surface plus a highlight travelling along it. That is a deliberate
+ * correction of an earlier revision which morphed the whole spline once per
+ * loop. Geometric morphing both required a phase to wrap exactly, which it did
+ * not, and turned a brand mark into an audio waveform.
  */
 
-const OVERSCAN = 80;
-const SEGMENTS = 160;
-const MORPH_STEPS = 3;
+/** Filaments drawn with the brighter highlight treatment. */
+const HERO_FILAMENT_INDICES: ReadonlySet<number> = new Set([3, 8, 14, 19]);
+
+const STEPS_PER_SEGMENT = 26;
+
+/** Glow is a narrow halo, not a smear. */
+const GLOW_WIDTH_RATIO = 2.8;
+const GLOW_ALPHA_RATIO = 0.16;
 
 interface Filament {
   readonly index: number;
   /** Position across the bundle, -1..1. */
   readonly offset: number;
-  readonly alpha: number;
   readonly width: number;
+  readonly alpha: number;
   readonly color: string;
-  readonly jitterPhase: number;
-  readonly jitterAmount: number;
   readonly hero: boolean;
 }
 
@@ -46,175 +56,185 @@ function buildFilaments(): Filament[] {
   const filaments: Filament[] = [];
   for (let index = 0; index < count; index += 1) {
     const offset = (index / (count - 1)) * 2 - 1;
-    // Brightest at the centre of the bundle, softening toward its edges.
-    const centrality = 1 - Math.abs(offset);
-    const hero = index === 4 || index === 7 || index === 11;
+    const hero = HERO_FILAMENT_INDICES.has(index);
     filaments.push({
       index,
       offset,
-      alpha: hero ? 0.46 + heroHash(index, 41) * 0.16 : 0.16 + centrality * 0.17,
-      width: hero ? 1.6 + heroHash(index, 42) * 0.4 : 1 + heroHash(index, 42) * 0.4,
+      // Ordinary strands are hairline; hero strands are just heavy enough to
+      // catch the light without reading as a separate mark.
+      width: hero ? 0.9 + heroHash(index, 42) * 0.25 : 0.55 + heroHash(index, 42) * 0.25,
+      alpha: hero ? 0.52 + heroHash(index, 41) * 0.14 : 0.3 + (1 - Math.abs(offset)) * 0.22,
       color: hero
         ? HERO_PALETTE.ribbonPeach
-        : index % 3 === 0
+        : index % 4 === 0
           ? HERO_PALETTE.ribbonAmber
           : HERO_PALETTE.ribbonCopper,
-      jitterPhase: heroHash(index, 43) * Math.PI * 2,
-      jitterAmount: 0.8 + heroHash(index, 44) * 1.6,
       hero,
     });
   }
   return filaments;
 }
 
-/**
- * The single master spline.
- *
- * Both harmonics carry an integer coefficient on the phase, so the curve
- * returns to its exact starting shape after one phase revolution and the
- * keyframe interpolation stays seamless.
- */
-function masterCurve(x: number, centerX: number, centerY: number, phase: number): number {
-  const t = (x - centerX) / 260;
-  return (
-    centerY +
-    Math.sin(t * 1.35 + phase) * 22 +
-    Math.sin(t * 0.62 - phase) * 12 +
-    Math.sin(t * 2.4 + phase * 0.5) * 4
-  );
+function pointsToPath(points: ReadonlyArray<RibbonPoint>): SkPath {
+  const builder = Skia.PathBuilder.Make();
+  points.forEach((point, index) => {
+    if (index === 0) builder.moveTo(point.x, point.y);
+    else builder.lineTo(point.x, point.y);
+  });
+  return builder.detach();
+}
+
+interface FilamentGeometry {
+  readonly rear: SkPath;
+  readonly interior: SkPath;
+  readonly front: SkPath;
 }
 
 /**
- * Bundle half-width. Tight at the orb, wide at the edges, which is what turns
- * one curve into a fan that converges visually on the object.
+ * The ribbon looks and behaves identically in every appearance; only its alpha
+ * changes. Geometry therefore depends only on size, not on theme or time.
  */
-function bundleHalfWidth(x: number, centerX: number, radius: number): number {
-  // Tight at the orb, wide at the edges. The divisor sets how quickly the fan
-  // opens; the earlier value opened too slowly, so the strands stayed bunched
-  // and read as one flat smudge rather than a fan.
-  // Dense near the orb, looser at the edges, but never a bowtie. An earlier
-  // value opened from 8% to 123% of the radius within half a screen, which read
-  // as a starburst rather than a ribbon.
-  const t = Math.min(1, Math.abs(x - centerX) / (radius * 2.8));
-  return radius * (0.32 + 0.5 * t);
-}
-
-function buildFilamentPath(
-  filament: Filament,
-  phase: number,
-  width: number,
-  centerX: number,
-  centerY: number,
-  radius: number,
-  plane: "rear" | "interior" | "front",
-): SkPath {
-  const path = Skia.PathBuilder.Make();
-  const span = width + OVERSCAN * 2;
-  const refracting = plane === "interior";
-
-  for (let s = 0; s <= SEGMENTS; s += 1) {
-    const t = s / SEGMENTS;
-    const x = t * span - OVERSCAN;
-    const nx = Math.max(-1, Math.min(1, (x - centerX) / radius));
-    const z = Math.sqrt(Math.max(0, 1 - nx * nx));
-
-    // Inside the glass the shared curve is delayed and amplified, so the whole
-    // bundle bends rather than merely being clipped.
-    const lensPhase = refracting ? phase + z * 1.15 : phase;
-    const lensScale = refracting ? 1 + z * 0.4 : 1;
-    const base = centerY + (masterCurve(x, centerX, centerY, lensPhase) - centerY) * lensScale;
-
-    const jitter = Math.sin(x * 0.013 + phase * 0.5 + filament.jitterPhase) * filament.jitterAmount;
-    let y = base + filament.offset * bundleHalfWidth(x, centerX, radius) + jitter;
-
-    if (refracting) {
-      // Lens pinch toward the optical axis, strongest through the middle, so
-      // the fan visibly narrows as it passes through the glass.
-      y = centerY + (y - centerY) * (1 - 0.4 * z);
-    }
-
-    if (s === 0) path.moveTo(x, y);
-    else path.lineTo(x, y);
-  }
-  return path.detach();
-}
-
-function FilamentPath({
-  filament,
+function useFilamentGeometry({
   width,
   centerX,
   centerY,
   radius,
-  plane,
-  ribbonPhase,
-  appearance,
-  reducedMotion,
 }: {
-  readonly filament: Filament;
   readonly width: number;
   readonly centerX: number;
   readonly centerY: number;
   readonly radius: number;
-  readonly plane: "rear" | "interior" | "front";
-  readonly ribbonPhase: SharedValue<number>;
-  readonly appearance: HeroAppearance;
-  readonly reducedMotion: boolean;
-}) {
-  const frames = useMemo(() => {
-    const step = (Math.PI * 2) / MORPH_STEPS;
-    return Array.from({ length: MORPH_STEPS + 1 }, (_, index) =>
-      buildFilamentPath(filament, index * step, width, centerX, centerY, radius, plane),
+}): ReadonlyArray<FilamentGeometry> {
+  return useMemo(() => {
+    const samples: RibbonSample[] = sampleCenterline(
+      HERO_CENTRELINE,
+      width,
+      HERO_METRICS.height,
+      STEPS_PER_SEGMENT,
     );
-  }, [filament, width, centerX, centerY, radius, plane]);
 
-  const localPhase = useDerivedValue(() => ribbonPhase.value, [ribbonPhase]);
-  const morphed = usePathInterpolation(
-    localPhase,
-    Array.from({ length: MORPH_STEPS + 1 }, (_, index) => index),
-    frames,
-  );
+    // Interior geometry only needs to cover the sphere plus a margin, since it
+    // is clipped to the sphere. Building it across the full hero width would
+    // nearly triple the stroked segment count for no visible gain.
+    const interiorSamples = samples.filter(
+      (sample) => Math.abs(sample.x - centerX) <= radius * 1.2,
+    );
 
-  const scale = HERO_APPEARANCE[appearance].ribbonScale;
-  // Interior strands are brighter so the crossing reads as light coupling into
-  // the object rather than as lines passing behind it.
-  const planeBoost = plane === "interior" ? 1.5 : 1;
+    const minHalfWidth = radius * 0.16;
+    const maxHalfWidth = radius * 0.74;
+    const halfWidthAt = (x: number) =>
+      bundleHalfWidth(x, centerX, radius, minHalfWidth, maxHalfWidth);
 
-  const glowColor = useDerivedValue(
-    () => heroAlpha(filament.color, filament.alpha * scale * planeBoost * 0.12),
-    [appearance, filament.alpha, filament.color, planeBoost, scale],
+    const warp = (point: RibbonPoint) => lensWarp(point.x, point.y, centerX, centerY, radius, 0.4);
+
+    const filaments = buildFilaments();
+    return filaments.map((filament) => ({
+      rear: pointsToPath(buildFilamentPoints(samples, filament.offset, halfWidthAt)),
+      interior: pointsToPath(
+        buildFilamentPoints(interiorSamples, filament.offset, halfWidthAt, warp),
+      ),
+      front: pointsToPath(buildFilamentPoints(samples, filament.offset, halfWidthAt)),
+    }));
+  }, [width, centerX, centerY, radius]);
+}
+
+function FilamentPath({
+  path,
+  filament,
+  plane,
+  scale,
+  highlightCenterX,
+  highlightHalfWidth,
+}: {
+  readonly path: SkPath;
+  readonly filament: Filament;
+  readonly plane: "rear" | "interior" | "front";
+  readonly scale: number;
+  readonly highlightCenterX: SharedValue<number>;
+  readonly highlightHalfWidth: number;
+}) {
+  // Inside the glass the strands have to read against a lit copper body rather
+  // than against the page, and at the same copper they simply disappear into
+  // it. They are therefore shifted hot and lifted, which is also physically
+  // sensible: light coupling into the material is brighter, not dimmer.
+  const interior = plane === "interior";
+  const color = interior ? (filament.hero ? HERO_PALETTE.hot : HERO_PALETTE.peach) : filament.color;
+  // Modest lift only: a large boost makes the ribbon look switched on inside the
+  // sphere and dead outside it, instead of like one surface passing through.
+  const baseAlpha = filament.alpha * scale * (interior ? 1.45 : 1);
+  const glowColor = heroAlpha(color, baseAlpha * GLOW_ALPHA_RATIO);
+  const coreColor = heroAlpha(color, baseAlpha);
+
+  // The highlight is a symmetric gradient travelling along x, driven by moving
+  // the gradient's endpoints rather than its stop positions: stop positions are
+  // a plain array in this API, while start and end accept shared values. A
+  // symmetric ramp also means there is no bright edge to pop when it wraps,
+  // and because the travel is a slow out-and-back there is no wrap at all.
+  const start = useDerivedValue(
+    () => ({ x: highlightCenterX.value - highlightHalfWidth, y: 0 }),
+    [highlightCenterX, highlightHalfWidth],
   );
-  const coreColor = useDerivedValue(
-    () => heroAlpha(filament.color, filament.alpha * scale * planeBoost),
-    [appearance, filament.alpha, filament.color, planeBoost, scale],
+  const end = useDerivedValue(
+    () => ({ x: highlightCenterX.value + highlightHalfWidth, y: 0 }),
+    [highlightCenterX, highlightHalfWidth],
   );
-  const stretch = useDerivedValue(() => [{ scaleY: reducedMotion ? 1 : 1 }], [reducedMotion]);
+  const highlightAlpha = Math.min(1, baseAlpha * 1.9);
+  const colors = useMemo(
+    () => [
+      coreColor,
+      heroAlpha(filament.color, highlightAlpha),
+      heroAlpha(HERO_PALETTE.hot, highlightAlpha * 0.85),
+      heroAlpha(color, highlightAlpha),
+      coreColor,
+    ],
+    [coreColor, color, highlightAlpha],
+  );
 
   return (
-    <Group origin={{ x: centerX, y: centerY }} transform={stretch}>
+    <Group>
       <Path
-        path={morphed}
+        path={path}
         style="stroke"
-        strokeWidth={filament.width * 6}
+        strokeWidth={filament.width * GLOW_WIDTH_RATIO}
         strokeCap="round"
+        strokeJoin="round"
         color={glowColor}
       />
-      <Path
-        path={morphed}
-        style="stroke"
-        strokeWidth={filament.width}
-        strokeCap="round"
-        color={coreColor}
-      />
+      {filament.hero ? (
+        <Path
+          path={path}
+          style="stroke"
+          strokeWidth={filament.width}
+          strokeCap="round"
+          strokeJoin="round"
+        >
+          <LinearGradient
+            start={start}
+            end={end}
+            colors={colors}
+            positions={[0, 0.36, 0.5, 0.64, 1]}
+          />
+        </Path>
+      ) : (
+        <Path
+          path={path}
+          style="stroke"
+          strokeWidth={filament.width}
+          strokeCap="round"
+          strokeJoin="round"
+          color={coreColor}
+        />
+      )}
     </Group>
   );
 }
 
 /**
- * One plane of the ribbon fan.
+ * One depth plane of the woven surface.
  *
- * `rear` sits behind the orb, `interior` is clipped and refracted through it,
- * and `front` carries only the hero filaments so the crossing reads as one or
- * two strands rather than a second full field.
+ * `rear` sits behind the body, `interior` is clipped and refracted through the
+ * glass, and `front` carries only the hero filaments so the crossing reads as
+ * light catching a couple of strands rather than as a second full field.
  */
 export function HeroRibbonField({
   plane,
@@ -223,9 +243,8 @@ export function HeroRibbonField({
   centerY,
   radius,
   clip,
-  ribbonPhase,
   appearance,
-  reducedMotion,
+  highlightCenterX,
 }: {
   readonly plane: "rear" | "interior" | "front";
   readonly width: number;
@@ -233,30 +252,39 @@ export function HeroRibbonField({
   readonly centerY: number;
   readonly radius: number;
   readonly clip?: SkPath;
-  readonly ribbonPhase: SharedValue<number>;
   readonly appearance: HeroAppearance;
-  readonly reducedMotion: boolean;
+  readonly highlightCenterX: SharedValue<number>;
 }) {
+  const geometry = useFilamentGeometry({ width, centerX, centerY, radius });
   const filaments = useMemo(() => buildFilaments(), []);
-  const visible = useMemo(() => {
-    if (plane !== "front") return filaments;
-    return filaments.filter((f) => f.hero).slice(0, HERO_METRICS.frontRibbonCount);
-  }, [filaments, plane]);
+  const scale = HERO_APPEARANCE[appearance].ribbonScale;
 
-  const paths = visible.map((filament) => (
-    <FilamentPath
-      key={filament.index}
-      filament={filament}
-      width={width}
-      centerX={centerX}
-      centerY={centerY}
-      radius={radius}
-      plane={plane}
-      ribbonPhase={ribbonPhase}
-      appearance={appearance}
-      reducedMotion={reducedMotion}
-    />
-  ));
+  // The travelling highlight spans roughly a third of the hero.
+  const highlightHalfWidth = Math.max(radius * 1.4, width * 0.16);
+
+  // Front is a highlight pass, not a second field: only the first couple of
+  // hero strands cross over the shell.
+  let frontBudget = HERO_METRICS.frontRibbonCount;
+
+  const paths = filaments.map((filament, index) => {
+    if (plane === "front") {
+      if (!filament.hero || frontBudget <= 0) return null;
+      frontBudget -= 1;
+    }
+    const set = geometry[index];
+    if (set === undefined) return null;
+    return (
+      <FilamentPath
+        key={filament.index}
+        path={set[plane]}
+        filament={filament}
+        plane={plane}
+        scale={scale}
+        highlightCenterX={highlightCenterX}
+        highlightHalfWidth={highlightHalfWidth}
+      />
+    );
+  });
 
   if (clip === undefined) return <Group>{paths}</Group>;
   return <Group clip={clip}>{paths}</Group>;
