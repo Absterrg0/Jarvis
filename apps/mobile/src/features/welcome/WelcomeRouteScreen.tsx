@@ -6,7 +6,7 @@ import { Pressable, ScrollView, StatusBar, useWindowDimensions, View } from "rea
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/AppText";
-import { CirceOrb } from "../../components/circe-orb/CirceOrb";
+import { CirceWelcomeHero } from "../../components/circe-welcome-hero/CirceWelcomeHero";
 import { useSystemReducedMotion } from "../circe/useVoiceOrbLevel";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import {
@@ -131,34 +131,24 @@ function ConfiguredWelcome() {
         <Text style={{ color: INK, fontSize: 17, fontWeight: "700", letterSpacing: 5 }}>CIRCE</Text>
       </View>
 
+      {/* The hero sits above the headline. It is a full-bleed illustration, so
+          it cancels the screen's horizontal padding rather than being inset
+          like the copy. */}
+      <View style={{ marginHorizontal: -28, marginTop: 16 }}>
+        <CirceWelcomeHero width={width} appearance="light" reducedMotion={reducedMotion} />
+      </View>
+
       <Text
         className="font-circe-serif"
-        style={{ color: INK, fontSize: 34, lineHeight: 40, textAlign: "center", marginTop: 18 }}
+        style={{ color: INK, fontSize: 34, lineHeight: 40, textAlign: "center", marginTop: 14 }}
       >
         Direct work across <Text style={{ color: COPPER_TEXT }}>every machine.</Text>
       </Text>
       <Text
-        style={{ color: MUTED, fontSize: 15, lineHeight: 22, textAlign: "center", marginTop: 10 }}
+        style={{ color: MUTED, fontSize: 15, lineHeight: 22, textAlign: "center", marginTop: 12 }}
       >
         Talk, plan and get things done across your projects and machines. Naturally.
       </Text>
-
-      <View
-        style={{
-          marginHorizontal: -28,
-          marginTop: 6,
-          marginBottom: -24,
-          alignItems: "center",
-        }}
-      >
-        <CirceOrb
-          state="idle"
-          size={168}
-          appearance="light"
-          width={width}
-          reducedMotion={reducedMotion}
-        />
-      </View>
 
       {errorMessage !== null ? (
         <Text style={{ color: "#B3402E", fontSize: 13, textAlign: "center", marginBottom: 8 }}>
@@ -211,7 +201,7 @@ function ConfiguredWelcome() {
           borderRadius: 999,
           paddingVertical: 15,
           paddingHorizontal: 20,
-          marginTop: 10,
+          marginTop: 12,
         }}
       >
         <EnvelopeMark />

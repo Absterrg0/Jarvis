@@ -5,6 +5,7 @@ import { useSharedValue } from "react-native-reanimated";
 
 import { AppText as Text } from "../../components/AppText";
 import { CirceOrb } from "../../components/circe-orb/CirceOrb";
+import { CirceWelcomeHero } from "../../components/circe-welcome-hero/CirceWelcomeHero";
 import type { CirceOrbState } from "../../components/circe-orb/types";
 import type { OrbAppearance } from "../../components/circe-orb/orbTokens";
 
@@ -102,6 +103,17 @@ export function OrbGalleryRouteScreen() {
           />
         ))}
       </Row>
+
+      {/* The welcome hero is a different visual system from the product orb
+          (see docs/internals/architecture). It is surfaced here so a static
+          frame can be judged without needing a signed-out session, since the
+          welcome route redirects as soon as a session exists. */}
+      <View style={{ gap: 6 }}>
+        <Text style={{ color: text, fontSize: 12, fontWeight: "600", paddingHorizontal: 20 }}>
+          Welcome hero (brand illustration)
+        </Text>
+        <CirceWelcomeHero width={width} appearance={appearance} />
+      </View>
 
       {STATES.map((state) => (
         <View key={state} style={{ alignItems: "center", gap: 6 }}>
