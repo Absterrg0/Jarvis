@@ -7,7 +7,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/AppText";
 import { CirceWelcomeHero } from "../../components/circe-welcome-hero/CirceWelcomeHero";
-import { useSystemReducedMotion } from "../circe/useVoiceOrbLevel";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import {
   ArrowMark,
@@ -87,7 +86,6 @@ function ConfiguredWelcome() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const reducedMotion = useSystemReducedMotion();
   useWarmUpBrowser();
   const { startOAuthFlow } = useOAuth({ strategy: "oauth_google" });
   const [googleBusy, setGoogleBusy] = useState(false);
@@ -131,16 +129,9 @@ function ConfiguredWelcome() {
         <Text style={{ color: INK, fontSize: 17, fontWeight: "700", letterSpacing: 5 }}>CIRCE</Text>
       </View>
 
-      {/* The hero sits above the headline. It is a full-bleed illustration, so
-          it cancels the screen's horizontal padding rather than being inset
-          like the copy. */}
-      <View style={{ marginHorizontal: -28, marginTop: 16 }}>
-        <CirceWelcomeHero width={width} appearance="light" reducedMotion={reducedMotion} />
-      </View>
-
       <Text
         className="font-circe-serif"
-        style={{ color: INK, fontSize: 34, lineHeight: 40, textAlign: "center", marginTop: 14 }}
+        style={{ color: INK, fontSize: 34, lineHeight: 40, textAlign: "center", marginTop: 18 }}
       >
         Direct work across <Text style={{ color: COPPER_TEXT }}>every machine.</Text>
       </Text>
@@ -149,6 +140,13 @@ function ConfiguredWelcome() {
       >
         Talk, plan and get things done across your projects and machines. Naturally.
       </Text>
+
+      {/* The hero sits below the copy, matching the approved reference. It is a
+          full-bleed illustration, so it cancels the screen's horizontal padding
+          rather than being inset like the text. */}
+      <View style={{ marginHorizontal: -28, marginTop: 16 }}>
+        <CirceWelcomeHero width={width} />
+      </View>
 
       {errorMessage !== null ? (
         <Text style={{ color: "#B3402E", fontSize: 13, textAlign: "center", marginBottom: 8 }}>

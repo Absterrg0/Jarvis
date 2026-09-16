@@ -46,7 +46,6 @@ export function OrbGalleryRouteScreen() {
   const [appearance, setAppearance] = useState<OrbAppearance>("light");
   const [levelValue, setLevelValue] = useState(0.75);
   const [size, setSize] = useState(168);
-  const [frozen, setFrozen] = useState(true);
   const level = useSharedValue(0.75);
 
   const background = appearance === "light" ? "#FAF7F3" : "#0B0B0C";
@@ -105,31 +104,15 @@ export function OrbGalleryRouteScreen() {
         ))}
       </Row>
 
-      {/* The welcome hero is a different visual system from the product orb.
-          It is surfaced here so a static frame can be judged without needing a
-          signed-out session, since the welcome route redirects as soon as a
-          session exists.
-          Quality is judged frozen first. Motion is only allowed to justify
-          itself once the still frame is right, so the default here is frozen. */}
+      {/* The welcome hero is a different visual system from the product orb: a
+          single static illustration rather than a stateful widget. It is
+          surfaced here so it can be inspected without needing a signed-out
+          session, since the welcome route redirects as soon as one exists. */}
       <View style={{ gap: 6 }}>
         <Text style={{ color: text, fontSize: 12, fontWeight: "600", paddingHorizontal: 20 }}>
           Welcome hero (brand illustration)
         </Text>
-        <Row label="Motion" text={text}>
-          {[
-            { label: "Frozen", value: true },
-            { label: "Live", value: false },
-          ].map((entry) => (
-            <Chip
-              key={entry.label}
-              label={entry.label}
-              active={frozen === entry.value}
-              text={text}
-              onPress={() => setFrozen(entry.value)}
-            />
-          ))}
-        </Row>
-        <CirceWelcomeHero width={width} appearance={appearance} reducedMotion={frozen} />
+        <CirceWelcomeHero width={width} />
       </View>
 
       {STATES.map((state) => (
