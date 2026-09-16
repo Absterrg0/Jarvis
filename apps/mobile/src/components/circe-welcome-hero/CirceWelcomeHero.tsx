@@ -1,4 +1,4 @@
-import { Image } from "react-native";
+import { Image, View } from "react-native";
 
 /**
  * The Circe welcome hero.
@@ -13,28 +13,66 @@ import { Image } from "react-native";
  * produced a bent sheet of parallel strands around a lit ball: the parts were
  * present and the design was not.
  *
- * It is welcome and auth only, has no voice states, and is deliberately static.
- * An earlier revision drifted the mesh and swept a highlight along it; for a
- * brand illustration, movement should come from light rather than geometry, and
- * only after the still frame matches the reference.
+ * Presentation is a deliberate overflow, not a contain. The plate is drawn wider
+ * than the viewport and clipped, so the sphere lands about 18% larger than a
+ * full-width contain would give and the mesh tails run off both edges the way
+ * they do in the reference. A contained plate leaves the tails visibly stopping
+ * short of the screen edge, which reads as a pasted image rather than as a
+ * full-bleed illustration.
  *
- * A plain React Native image rather than a Skia canvas, because there is no
- * longer any Skia content to compose with.
+ * It is welcome and auth only, has no voice states, and is static by design.
  */
 export function CirceWelcomeHero({ width }: { readonly width: number }) {
+  const imageWidth = Math.min(width * HERO_SCALE, HERO_MAX_IMAGE_WIDTH);
+  const imageHeight = imageWidth / WELCOME_HERO_ASPECT;
+  const viewportHeight = Math.min(
+    VIEWPORT_MAX_HEIGHT,
+    Math.max(VIEWPORT_MIN_HEIGHT, Math.round(imageHeight * VIEWPORT_RATIO)),
+  );
+
   return (
-    <Image
-      source={require("../../../assets/circe/welcome-hero-base.png")}
-      // Native plate aspect. Rendering at the plate's own ratio keeps the
-      // composition exactly as drawn, with no crop and no distortion.
-      style={{ width, height: width / WELCOME_HERO_ASPECT }}
-      resizeMode="contain"
-      // The wordmark above already announces the brand; this is decoration.
-      accessible={false}
-      importantForAccessibility="no"
-    />
+    <View
+      style={{
+        width,
+        height: viewportHeight,
+        overflow: "hidden",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Image
+        source={require("../../../assets/circe/welcome-hero-base.webp")}
+        style={{ width: imageWidth, height: imageHeight }}
+        resizeMode="contain"
+        // The wordmark above already announces the brand; this is decoration.
+        accessible={false}
+        importantForAccessibility="no"
+      />
+    </View>
   );
 }
 
-/** Source plate is 1536x1024. */
-export const WELCOME_HERO_ASPECT = 1536 / 1024;
+/**
+ * Source plate is 1536x800 after cropping the empty margins. The supplied art
+ * carried roughly 250px of fully transparent space above and below the mesh,
+ * which at hero scale became ~60dp of dead height and pushed the whole sign-up
+ * screen into a scroll. The crop is the margins only; no artwork is removed.
+ */
+export const WELCOME_HERO_ASPECT = 1536 / 800;
+
+/** Drawn wider than the viewport so the tails crop off both edges. */
+const HERO_SCALE = 1.18;
+
+/** Stops the overflow turning into an oversized orb on wide screens. */
+const HERO_MAX_IMAGE_WIDTH = 500;
+
+/** Visible band, in dp. */
+const VIEWPORT_MIN_HEIGHT = 190;
+const VIEWPORT_MAX_HEIGHT = 250;
+
+/**
+ * Viewport height as a fraction of the scaled plate height. Now that the plate
+ * is cropped to its content there is almost nothing left to trim, so this only
+ * shaves the last few dp of soft margin.
+ */
+const VIEWPORT_RATIO = 0.96;

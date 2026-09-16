@@ -1,49 +1,46 @@
-import Svg, { Circle, Defs, LinearGradient, Path, Stop } from "react-native-svg";
+import { Image } from "react-native";
+import Svg, { Path } from "react-native-svg";
 
-const COPPER = "#C97857";
-const PEACH = "#E8AE93";
+/** Near-black used as the default mark colour. */
 const INK = "#2A2320";
-const MUTED = "#8A7F78";
 
-/** Small copper ring mark used on the welcome screen. */
-export function CirceRingMark({ size = 30 }: { readonly size?: number }) {
+/**
+ * The Circe brand mark.
+ *
+ * Rendered from the approved brand asset rather than redrawn, so the identity
+ * stays consistent with every other surface. The source is 220x250, so height
+ * drives the size and width follows the asset's own ratio.
+ */
+export function CirceMark({ height = 30 }: { readonly height?: number }) {
   return (
-    <Svg width={size} height={size} viewBox="0 0 32 32" accessibilityLabel="Circe mark">
-      <Defs>
-        <LinearGradient id="circe-ring" x1="0" y1="32" x2="32" y2="0">
-          <Stop offset="0" stopColor={PEACH} />
-          <Stop offset="0.55" stopColor={COPPER} />
-          <Stop offset="1" stopColor={COPPER} />
-        </LinearGradient>
-      </Defs>
-      <Circle cx="16" cy="16" r="11.5" fill="none" stroke="url(#circe-ring)" strokeWidth="5" />
-    </Svg>
+    <Image
+      source={require("../../../assets/circe/circe-mark.png")}
+      style={{ height, width: (height * 220) / 250 }}
+      resizeMode="contain"
+      accessibilityLabel="Circe"
+    />
   );
 }
 
-/** Multicolor Google "G" for the sign-in button. */
+/** Google's four-colour "G", in the brand's own proportions. */
 export function GoogleMark({ size = 18 }: { readonly size?: number }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 48 48" accessibilityLabel="Google">
       <Path
-        fill="#EA4335"
-        d="M43.611 20.083H42V20H24v8h11.303c-.792 2.237-2.231 4.166-4.087 5.571l6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"
-      />
-      <Path
         fill="#4285F4"
-        d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"
-      />
-      <Path
-        fill="#FBBC05"
-        d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"
+        d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"
       />
       <Path
         fill="#34A853"
-        d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"
+        d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"
       />
       <Path
-        fill="#4285F4"
-        d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"
+        fill="#FBBC05"
+        d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24s.85 6.91 2.34 9.88l7.35-5.7z"
+      />
+      <Path
+        fill="#EA4335"
+        d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"
       />
     </Svg>
   );
@@ -92,49 +89,3 @@ export function EnvelopeMark({
     </Svg>
   );
 }
-
-/** Shield check for the trust row. */
-export function ShieldMark({
-  size = 20,
-  color = COPPER,
-}: {
-  readonly size?: number;
-  readonly color?: string;
-}) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 20 20" accessibilityLabel="Private by design">
-      <Path
-        d="M10 1.8 16.5 4v5.2c0 4-2.8 6.9-6.5 8.3-3.7-1.4-6.5-4.3-6.5-8.3V4z M7 9.8l2.2 2.2L13.2 8"
-        fill="none"
-        stroke={color}
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </Svg>
-  );
-}
-
-/** Stacked server for the trust row. */
-export function ServerMark({
-  size = 20,
-  color = COPPER,
-}: {
-  readonly size?: number;
-  readonly color?: string;
-}) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 20 20" accessibilityLabel="Across your machines">
-      <Path
-        d="M3 4.5h14v4H3z M3 11.5h14v4H3z M5.5 6.5h.01M5.5 13.5h.01"
-        fill="none"
-        stroke={color}
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </Svg>
-  );
-}
-
-export { MUTED };

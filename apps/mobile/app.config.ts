@@ -150,6 +150,14 @@ const interFonts = {
   bold: "@expo-google-fonts/inter/700Bold/Inter_700Bold.ttf",
 } as const;
 
+// Circe display serif. Editorial high-contrast serif for identity moments only
+// (welcome hero statements); never inside dense product UI. Registered natively
+// so release builds pay no runtime cost, and also loaded at runtime in App.tsx
+// because a dev client built before this change does not carry the native font.
+const circeDisplayFonts = {
+  regular: "@expo-google-fonts/instrument-serif/400Regular/InstrumentSerif_400Regular.ttf",
+} as const;
+
 const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
   "expo-widgets",
   {
@@ -305,7 +313,12 @@ const config: ExpoConfig = {
       "expo-font",
       {
         ios: {
-          fonts: [interFonts.regular, interFonts.medium, interFonts.bold],
+          fonts: [
+            interFonts.regular,
+            interFonts.medium,
+            interFonts.bold,
+            circeDisplayFonts.regular,
+          ],
         },
         android: {
           fonts: [
@@ -320,6 +333,10 @@ const config: ExpoConfig = {
             {
               fontFamily: "Inter-Bold",
               fontDefinitions: [{ path: interFonts.bold, weight: 700 }],
+            },
+            {
+              fontFamily: "InstrumentSerif-Regular",
+              fontDefinitions: [{ path: circeDisplayFonts.regular, weight: 400 }],
             },
           ],
         },
