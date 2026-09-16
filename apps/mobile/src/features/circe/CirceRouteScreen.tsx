@@ -14,18 +14,71 @@ import type { CircePresentationEvent, CirceTaskDeskView } from "@t3tools/contrac
 
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
+import type { AppSymbolName } from "../../components/AppSymbol";
 import { ControlPill } from "../../components/ControlPill";
+import { CirceOrb } from "../../components/circe-orb/CirceOrb";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { CirceNavigation } from "./CirceNavigation";
+import { CirceTabBar } from "./CirceTabBar";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useCirceController } from "./CirceMobileProvider";
 import { selectCurrentPresentations } from "./mobilePresentations";
 import { describeCirceRouteNodeIssues } from "./mobileNodeReadiness";
 
-const CIRCE_GRAPHITE = "#191a1d";
-const CIRCE_GRAPHITE_DEEP = "#111214";
-const CIRCE_WARM = "#f4f0e8";
-const CIRCE_MUTED = "#92969f";
-const CIRCE_STATUS_GREEN = "#90b78a";
+function greetingForHour(hour: number): string {
+  if (hour < 12) return "Good morning,";
+  if (hour < 18) return "Good afternoon,";
+  return "Good evening,";
+}
+
+function AssistantGreeting() {
+  const greeting = useMemo(() => greetingForHour(new Date().getHours()), []);
+  return (
+    <View className="gap-1 px-1 pt-2">
+      <Text className="font-circe-serif text-3xl leading-tight text-foreground">{greeting}</Text>
+      <Text className="text-base text-foreground-muted">What shall we do today?</Text>
+    </View>
+  );
+}
+
+/**
+ * Home presence orb: the shared CirceOrb in idle, tappable to enter the
+ * full-screen voice experience. The mini waveform glyph stays crisp RN views
+ * above the Skia canvas.
+ */
+function VoiceOrb({ onOpenVoice }: { readonly onOpenVoice: () => void }) {
+  // The orb's treatment follows the app theme: the geometry is identical and
+  // only luminosity changes, so a dark surface leans on the rim instead of a
+  // large bloom.
+  const { themeAppearance } = useAppearancePreferences();
+  return (
+    <View className="items-center justify-center py-2">
+      <CirceOrb
+        state="idle"
+        size={168}
+        interactive
+        appearance={themeAppearance}
+        onPress={onOpenVoice}
+        accessibilityLabel="Talk to Circe"
+        glyph={
+          <View className="flex-row items-center gap-1">
+            <View className="h-3 w-1 rounded-full bg-[#FFF6EF]" />
+            <View className="h-5 w-1 rounded-full bg-[#FFF6EF]" />
+            <View className="h-3.5 w-1 rounded-full bg-[#FFF6EF]" />
+            <View className="h-5 w-1 rounded-full bg-[#FFF6EF]" />
+            <View className="h-3 w-1 rounded-full bg-[#FFF6EF]" />
+          </View>
+        }
+      />
+    </View>
+  );
+}
+
+const QUICK_ACTIONS: ReadonlyArray<{ label: string; prompt: string; icon: AppSymbolName }> = [
+  { label: "Summarise my work", prompt: "Summarise my work across all machines", icon: "doc.text" },
+  { label: "Draft something", prompt: "Draft something for me: ", icon: "square.and.pencil" },
+  { label: "Find anything", prompt: "Find ", icon: "magnifyingglass" },
+  { label: "Plan my day", prompt: "Plan my day", icon: "clock" },
+];
 
 export function CirceRouteScreen() {
   const navigation = useNavigation();
@@ -149,78 +202,84 @@ export function CirceRouteScreen() {
         keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
       >
-        <CirceNavigation selected="assistant" />
-
-        <View
-          className="gap-4 overflow-hidden rounded-2xl border p-5"
-          style={{
-            backgroundColor: CIRCE_GRAPHITE,
-            borderColor: "#34363b",
-          }}
-        >
-          <View className="flex-row items-center justify-between gap-3">
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Choose working project"
-              onPress={() => setChoosingProject(true)}
-              className="min-w-0 flex-1 gap-1"
-            >
-              <Text className="text-xs" style={{ color: CIRCE_STATUS_GREEN }}>
-                Working project
-              </Text>
-              <Text
-                numberOfLines={1}
-                className="mt-1 text-xl font-t3-bold"
-                style={{ color: CIRCE_WARM }}
-              >
-                {controller.selectedProject?.title ?? "Choose a project"}
-              </Text>
-              {controller.selectedProject ? (
-                <Text numberOfLines={1} className="text-xs" style={{ color: CIRCE_MUTED }}>
-                  {controller.selectedProject.nodeLabel}
-                </Text>
-              ) : null}
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open connections"
-              onPress={openConnections}
-              className="min-h-11 justify-center px-2"
-            >
-              <Text
-                className="text-xs font-t3-bold"
-                style={{ color: hasOnlineNode ? CIRCE_STATUS_GREEN : CIRCE_MUTED }}
-              >
-                {hasOnlineNode ? "Connected" : "Offline"}
-              </Text>
-            </Pressable>
+        <AssistantGreeting />
+        <VoiceOrb onOpenVoice={() => navigation.navigate("Voice")} />
+        <View className="items-center">
+          <View className="flex-row items-center gap-2 rounded-full border border-border-subtle bg-card px-4 py-2">
+            <View
+              className={`h-2 w-2 rounded-full ${hasOnlineNode ? "bg-circe-success" : "bg-foreground-muted"}`}
+            />
+            <Text className="text-xs text-foreground-muted">
+              {hasOnlineNode
+                ? "Ready · Across all your machines"
+                : "Offline · Reconnect to continue"}
+            </Text>
           </View>
+        </View>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Choose working project"
+          onPress={() => setChoosingProject(true)}
+          className="flex-row items-center justify-center gap-1.5 active:opacity-70"
+        >
+          <Text className="text-xs text-foreground-muted">
+            {controller.selectedProject?.title ?? "Choose a project"}
+          </Text>
+          {controller.selectedProject ? (
+            <Text className="text-xs text-foreground-tertiary">
+              · {controller.selectedProject.nodeLabel}
+            </Text>
+          ) : null}
+          <SymbolView name="chevron.down" size={12} tintColorClassName="accent-icon-subtle" />
+        </Pressable>
+
+        <View className="flex-row items-center gap-2 rounded-2xl border border-border-subtle bg-card py-2 pl-4 pr-2">
           <TextInput
             accessibilityLabel="Circe command"
-            className="max-h-36 min-h-24 rounded-xl border px-3.5 py-3 text-base"
-            style={{
-              backgroundColor: CIRCE_GRAPHITE_DEEP,
-              borderColor: "rgba(255, 255, 255, 0.12)",
-              color: CIRCE_WARM,
-            }}
-            multiline
+            className="min-h-11 flex-1 text-base text-foreground"
             onChangeText={setUtterance}
-            placeholder="Tell Circe what needs doing…"
+            onSubmitEditing={() => void submit()}
+            placeholder="Message Circe…"
             placeholderTextColorClassName="accent-placeholder"
-            textAlignVertical="top"
+            returnKeyType="send"
             value={utterance}
           />
-          <View className="flex-row items-center justify-between gap-3">
-            <ControlPill
-              accessibilityLabel={
-                controller.submitting ? "Cancel in-flight request" : "Send Circe command"
-              }
-              icon={controller.submitting ? "stop.fill" : "arrow.up"}
-              variant="primary"
-              onPress={() => void submit()}
-              disabled={utterance.trim() === "" && !controller.submitting}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              controller.submitting ? "Cancel in-flight request" : "Send Circe command"
+            }
+            onPress={() => void submit()}
+            disabled={utterance.trim() === "" && !controller.submitting}
+            className={`h-11 w-11 items-center justify-center rounded-full active:opacity-70 ${
+              utterance.trim() === "" && !controller.submitting ? "bg-subtle" : "bg-circe-copper"
+            }`}
+          >
+            <SymbolView
+              name={controller.submitting ? "stop.fill" : "arrow.up"}
+              size={18}
+              tintColor="#FFFDF9"
+              type="monochrome"
             />
-          </View>
+          </Pressable>
+        </View>
+
+        <View className="flex-row gap-2">
+          {QUICK_ACTIONS.map((action) => (
+            <Pressable
+              key={action.label}
+              accessibilityRole="button"
+              accessibilityLabel={action.label}
+              onPress={() => setUtterance(action.prompt)}
+              className="flex-1 items-center gap-2 rounded-2xl border border-border-subtle bg-card px-1 py-3.5 active:opacity-70"
+            >
+              <SymbolView name={action.icon} size={20} tintColorClassName="accent-icon" />
+              <Text className="text-center text-3xs font-t3-bold leading-tight text-foreground-muted">
+                {action.label}
+              </Text>
+            </Pressable>
+          ))}
         </View>
 
         {controller.unavailableProjectKey !== null ? (
@@ -438,6 +497,7 @@ export function CirceRouteScreen() {
           </View>
         ) : null}
       </ScrollView>
+      <CirceTabBar selected="home" />
     </KeyboardAvoidingView>
   );
 }

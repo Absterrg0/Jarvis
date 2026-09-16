@@ -1,4 +1,5 @@
 import { BlurTargetView } from "expo-blur";
+import * as Font from "expo-font";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
@@ -30,6 +31,17 @@ import "../global.css";
 if (process.env.EXPO_PUBLIC_SHOWCASE === "1") {
   prepareNativeShowcaseCapture();
 }
+
+// The Circe display serif is also registered natively in app.config.ts, which
+// is what release builds use. Loading it here as well keeps the font available
+// in a dev client that was built before the native registration existed, so the
+// welcome hero can be judged without a full native rebuild. Loading an already
+// registered family is a no-op.
+void Font.loadAsync({
+  "InstrumentSerif-Regular": require("@expo-google-fonts/instrument-serif/400Regular/InstrumentSerif_400Regular.ttf"),
+}).catch(() => {
+  // Falls back to the stack in --font-circe-serif.
+});
 
 void SplashScreen.preventAutoHideAsync().catch(() => {
   // The native module can be unavailable in non-native test environments.

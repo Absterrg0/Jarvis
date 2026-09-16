@@ -36,12 +36,17 @@ const pngOutputs = [
 ] as const;
 
 describe("Circe asset family", () => {
-  it("keeps the source flat, geometric, and free of glossy effects", () => {
+  it("keeps the approved rose-gold mark as the vector source", () => {
     const source = NodeFS.readFileSync(sourcePath, "utf8");
-    expect(source).toContain('fill="#0D1217"');
-    expect(source).toContain('fill="#F3F0E8"');
-    expect(source).toContain('stroke="#43D6D3"');
-    expect(source).not.toMatch(/gradient|filter|feGaussianBlur|purple|star|orb/iu);
+    // The approved mark embeds its raster artwork so the gradient matches the
+    // brand board exactly instead of approximating it with an auto-trace.
+    expect(source).toContain("data:image/png;base64,");
+    expect(source).toContain('aria-label="Circe logo"');
+    // The retired teal-signal mark must not come back. Strip the embedded
+    // base64 payload first so random encoded bytes cannot trip the matcher.
+    const markup = source.replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/gu, "");
+    expect(markup).not.toContain("#43D6D3");
+    expect(markup).not.toMatch(/purple|star|orb/iu);
   });
 
   itWithMagick("keeps every tracked raster rendition at its contract size", () => {

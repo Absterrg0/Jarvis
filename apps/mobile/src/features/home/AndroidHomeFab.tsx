@@ -33,7 +33,8 @@ function AndroidHomeFab(props: {
         onPress={props.onStartNewTask}
         className="absolute right-5 size-14 items-center justify-center rounded-full bg-primary shadow-lg"
         style={{
-          bottom: Math.max(insets.bottom, 16) + 16,
+          // Clears the Circe bottom tab bar (~76pt) plus comfortable spacing.
+          bottom: Math.max(insets.bottom, 16) + 92,
         }}
       >
         <SymbolView

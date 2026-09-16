@@ -15,16 +15,16 @@
 
     @variant light {
       /* Page backgrounds */
-      --color-screen: #faf7f1;
-      --color-sheet: #faf7f1;
-      --color-sheet-solid: #faf7f1;
+      --color-screen: #fcf9f4;
+      --color-sheet: #fcf9f4;
+      --color-sheet-solid: #fcf9f4;
 
       /* Card / surface */
-      --color-card: #fffdf8;
-      --color-card-alt: #f1ebe0;
-      --color-card-translucent: #fffdf8;
-      --color-thread-canvas: #f5f5f5;
-      --color-thread-selected: #ffffff;
+      --color-card: #fffdfa;
+      --color-card-alt: #f6f0e9;
+      --color-card-translucent: #fffdfa;
+      --color-thread-canvas: #f6f0e9;
+      --color-thread-selected: #fffdfa;
       --color-thread-selected-foreground: #262626;
       --color-thread-selected-foreground-muted: #737373;
       --color-composer-panel: rgba(245, 245, 245, 0.88);
@@ -32,34 +32,34 @@
       --color-composer-border: rgba(0, 0, 0, 0.1);
 
       /* Text */
-      --color-foreground: #1d1a15;
-      --color-foreground-secondary: #6f665a;
-      --color-foreground-muted: #6f665a;
-      --color-foreground-tertiary: #97897a;
+      --color-foreground: #151311;
+      --color-foreground-secondary: #696b70;
+      --color-foreground-muted: #696b70;
+      --color-foreground-tertiary: #96918d;
 
       /* Borders & separators */
-      --color-border: #e0d7c3;
-      --color-border-subtle: #eae2d1;
-      --color-separator: #e9e1cf;
+      --color-border: rgba(56, 43, 35, 0.13);
+      --color-border-subtle: rgba(56, 43, 35, 0.07);
+      --color-separator: rgba(56, 43, 35, 0.07);
 
       /* Subtle backgrounds (badges, pills, overlays) */
-      --color-subtle: #eae2d1;
-      --color-subtle-strong: #e8dfcc;
+      --color-subtle: #f6f0e9;
+      --color-subtle-strong: #f2ebe4;
       --color-inline-skill-background: rgba(150, 96, 10, 0.12);
       --color-inline-skill-border: rgba(150, 96, 10, 0.35);
       --color-inline-skill-foreground: #6b530e;
 
       /* Primary action */
-      --color-primary: #96600a;
-      --color-primary-foreground: #fffdf6;
+      --color-primary: #a5482c;
+      --color-primary-foreground: #fffdfa;
       --color-primary-shadow: #000000;
 
       /* Secondary action */
-      --color-secondary: #f1ebe0;
-      --color-secondary-foreground: #1d1a15;
-      --color-secondary-border: #e0d7c3;
-      --color-switch-active-track: #96600a;
-      --color-switch-active-thumb: #fffdf6;
+      --color-secondary: #f6f0e9;
+      --color-secondary-foreground: #151311;
+      --color-secondary-border: rgba(56, 43, 35, 0.13);
+      --color-switch-active-track: #a5482c;
+      --color-switch-active-thumb: #fffdfa;
       --color-switch-inactive-track: #e0d7c3;
       --color-switch-inactive-thumb: #8e8e93;
 
@@ -74,68 +74,92 @@
       --color-danger-foreground: #dc2626;
 
       /* Inputs */
-      --color-input: #fffdf8;
-      --color-input-border: #cfc4ab;
-      --color-sidebar-search: #e8dfcc;
-      --color-placeholder: #6f665a;
+      --color-input: #fffdfa;
+      --color-input-border: rgba(56, 43, 35, 0.2);
+      --color-sidebar-search: #f2ebe4;
+      --color-placeholder: #96918d;
 
       /* Icons */
-      --color-icon: #1d1a15;
-      --color-icon-muted: #6f665a;
-      --color-icon-subtle: #97897a;
+      --color-icon: #24211f;
+      --color-icon-muted: #77736f;
+      --color-icon-subtle: #96918d;
 
       /* Header / chrome (solid, no frosted glass) */
-      --color-header: #faf7f1;
-      --color-header-border: #e0d7c3;
-      --color-glass-surface: #fffdf8;
-      --color-glass-tint: #faf7f1;
+      --color-header: #fcf9f4;
+      --color-header-border: rgba(56, 43, 35, 0.13);
+      --color-glass-surface: #fffdfa;
+      --color-glass-tint: #fcf9f4;
 
       /* StatusBar */
-      --color-status-bar: #faf7f1;
+      --color-status-bar: #fcf9f4;
 
       /* Markdown */
-      --color-md-body: #1d1a15;
-      --color-md-strong: #1d1a15;
-      --color-md-link: #7a5b0a;
-      --color-md-blockquote-border: #e0d7c3;
-      --color-md-blockquote-bg: #f1ebe0;
-      --color-md-code-bg: #f4eee1;
-      --color-md-code-text: #1d1a15;
+      --color-md-body: #151311;
+      --color-md-strong: #151311;
+      --color-md-link: #a5482c;
+      --color-md-blockquote-border: rgba(56, 43, 35, 0.13);
+      --color-md-blockquote-bg: #f6f0e9;
+      --color-md-code-bg: #f6f0e9;
+      --color-md-code-text: #151311;
       --color-md-user-code-bg: rgba(250, 247, 241, 0.22);
       --color-md-user-code-text: #faf7f1;
       --color-md-user-fence-bg: rgba(0, 0, 0, 0.16);
       --color-md-user-fence-text: #faf7f1;
-      --color-md-hr: #e0d7c3;
+      --color-md-hr: rgba(56, 43, 35, 0.13);
 
       /* Graphite user bubble (amber stays on actions, not bubbles) */
-      --color-user-bubble: #1d1a15;
-      --color-user-bubble-foreground: #faf7f1;
+      --color-user-bubble: #151311;
+      --color-user-bubble-foreground: #fcf9f4;
       --color-user-bubble-foreground-muted: rgba(250, 247, 241, 0.78);
       --color-user-bubble-skill-foreground: #e9c46a;
 
       /* Drawer / modal backdrop */
       --color-backdrop: rgba(0, 0, 0, 0.22);
-      --color-drawer: #fffdf8;
+      --color-drawer: #fffdfa;
       --color-drawer-shadow: rgba(0, 0, 0, 0.12);
 
       /* Misc */
       --color-dot-separator: rgba(29, 26, 21, 0.35);
-      --color-wordmark: #1d1a15;
+      --color-wordmark: #151311;
       --color-chevron: rgba(29, 26, 21, 0.3);
+
+      /* Circe design system v1 (static, not derived from the shared palette).
+         Instrument Serif was replaced by the bundled display serif; the copper
+         ramp runs from the shell tones through the deep text accent. Success,
+         warning, danger and neutral are semantic only and never decorative.
+         Values must match createMobileThemeVariables. */
+      --color-circe-copper: #e08a63;
+      --color-circe-copper-deep: #a5482c;
+      --color-circe-copper-bright: #f0a078;
+      --color-circe-peach: #ffd8bd;
+      --color-circe-blush: #f7cfb8;
+      --color-circe-stone: #f2e8de;
+      --color-circe-success: #3f8f63;
+      --color-circe-warning: #b4703a;
+      --color-circe-danger: #c2454f;
+      --color-circe-neutral: #77736f;
+      --color-circe-canvas: #fcf9f4;
+      --color-circe-surface: #fffdfa;
+      --color-circe-surface-raised: #f6f0e9;
+      --color-circe-card: #fffdfa;
+      --color-circe-ink: #151311;
+      --color-circe-copy: #696b70;
+      --color-circe-tabbar: #fffdfa;
+      --color-circe-tabbar-border: rgba(56, 43, 35, 0.07);
     }
 
     @variant dark {
       /* Page backgrounds */
-      --color-screen: #16181b;
-      --color-sheet: #16181b;
-      --color-sheet-solid: #16181b;
+      --color-screen: #0c0d0e;
+      --color-sheet: #0c0d0e;
+      --color-sheet-solid: #0c0d0e;
 
       /* Card / surface */
-      --color-card: #1d2024;
-      --color-card-alt: #1e2126;
-      --color-card-translucent: #1d2024;
-      --color-thread-canvas: #1c1c1c;
-      --color-thread-selected: #171717;
+      --color-card: #121415;
+      --color-card-alt: #151719;
+      --color-card-translucent: #121415;
+      --color-thread-canvas: #121415;
+      --color-thread-selected: #191b1d;
       --color-thread-selected-foreground: #f5f5f5;
       --color-thread-selected-foreground-muted: #8e8e93;
       --color-composer-panel: rgba(28, 28, 28, 0.92);
@@ -143,34 +167,34 @@
       --color-composer-border: rgba(255, 255, 255, 0.08);
 
       /* Text */
-      --color-foreground: #e9e6df;
-      --color-foreground-secondary: #a39b8d;
-      --color-foreground-muted: #a39b8d;
-      --color-foreground-tertiary: #636366;
+      --color-foreground: #f4f1ed;
+      --color-foreground-secondary: #b1afad;
+      --color-foreground-muted: #b1afad;
+      --color-foreground-tertiary: #7d7d7d;
 
       /* Borders & separators */
       --color-border: rgba(255, 255, 255, 0.1);
       --color-border-subtle: rgba(255, 255, 255, 0.07);
-      --color-separator: rgba(255, 255, 255, 0.06);
+      --color-separator: rgba(255, 255, 255, 0.065);
 
       /* Subtle backgrounds (badges, pills, overlays) */
       --color-subtle: rgba(255, 255, 255, 0.06);
-      --color-subtle-strong: #262b31;
+      --color-subtle-strong: #1e2022;
       --color-inline-skill-background: rgba(201, 154, 46, 0.16);
       --color-inline-skill-border: rgba(201, 154, 46, 0.4);
       --color-inline-skill-foreground: #e9c46a;
 
       /* Primary action */
-      --color-primary: #c99a2e;
-      --color-primary-foreground: #1b1503;
+      --color-primary: #e08a63;
+      --color-primary-foreground: #20120d;
       --color-primary-shadow: #000000;
 
       /* Secondary action */
-      --color-secondary: #23272c;
-      --color-secondary-foreground: #e9e6df;
+      --color-secondary: #191b1d;
+      --color-secondary-foreground: #f4f1ed;
       --color-secondary-border: rgba(255, 255, 255, 0.1);
-      --color-switch-active-track: #c99a2e;
-      --color-switch-active-thumb: #1b1503;
+      --color-switch-active-track: #e08a63;
+      --color-switch-active-thumb: #20120d;
       --color-switch-inactive-track: rgba(255, 255, 255, 0.14);
       --color-switch-inactive-thumb: #8e8e93;
 
@@ -185,33 +209,33 @@
       --color-danger-foreground: #fca5a5;
 
       /* Inputs */
-      --color-input: #23272c;
+      --color-input: #151719;
       --color-input-border: rgba(255, 255, 255, 0.14);
-      --color-sidebar-search: #1d2024;
-      --color-placeholder: #a39b8d;
+      --color-sidebar-search: #121415;
+      --color-placeholder: #7d7d7d;
 
       /* Icons */
-      --color-icon: #e9e6df;
-      --color-icon-muted: #a39b8d;
+      --color-icon: #e7e5e2;
+      --color-icon-muted: #949597;
       --color-icon-subtle: #8e8e93;
 
       /* Header / chrome (solid, no frosted glass) */
-      --color-header: #101214;
+      --color-header: #0e0f10;
       --color-header-border: rgba(255, 255, 255, 0.08);
-      --color-glass-surface: #1d2024;
-      --color-glass-tint: #16181b;
+      --color-glass-surface: #121415;
+      --color-glass-tint: #0c0d0e;
 
       /* StatusBar */
-      --color-status-bar: #16181b;
+      --color-status-bar: #0c0d0e;
 
       /* Markdown */
-      --color-md-body: #e9e6df;
-      --color-md-strong: #e9e6df;
-      --color-md-link: #d9a93f;
+      --color-md-body: #f4f1ed;
+      --color-md-strong: #f4f1ed;
+      --color-md-link: #f0a078;
       --color-md-blockquote-border: rgba(255, 255, 255, 0.12);
       --color-md-blockquote-bg: rgba(255, 255, 255, 0.04);
-      --color-md-code-bg: #101214;
-      --color-md-code-text: #e9e6df;
+      --color-md-code-bg: #0e0f10;
+      --color-md-code-text: #f4f1ed;
       --color-md-user-code-bg: rgba(27, 21, 3, 0.16);
       --color-md-user-code-text: #1b1503;
       --color-md-user-fence-bg: rgba(0, 0, 0, 0.16);
@@ -226,13 +250,35 @@
 
       /* Drawer / modal backdrop */
       --color-backdrop: rgba(0, 0, 0, 0.48);
-      --color-drawer: #101214;
+      --color-drawer: #0e0f10;
       --color-drawer-shadow: rgba(0, 0, 0, 0.32);
 
       /* Misc */
       --color-dot-separator: rgba(255, 255, 255, 0.2);
-      --color-wordmark: #e9e6df;
+      --color-wordmark: #f4f1ed;
       --color-chevron: rgba(255, 255, 255, 0.2);
+
+      /* Circe design system v1, dark expression. Layered warm near-black,
+         never pure black and never a blue-gray SaaS slate. Values must match
+         createMobileThemeVariables. */
+      --color-circe-copper: #e08a63;
+      --color-circe-copper-deep: #f0a078;
+      --color-circe-copper-bright: #f0a078;
+      --color-circe-peach: #ffd8bd;
+      --color-circe-blush: #33231f;
+      --color-circe-stone: #2a2622;
+      --color-circe-success: #83d7a3;
+      --color-circe-warning: #e6a066;
+      --color-circe-danger: #f0646e;
+      --color-circe-neutral: #a1a7af;
+      --color-circe-canvas: #0c0d0e;
+      --color-circe-surface: #121415;
+      --color-circe-surface-raised: #191b1d;
+      --color-circe-card: #121415;
+      --color-circe-ink: #f4f1ed;
+      --color-circe-copy: #b1afad;
+      --color-circe-tabbar: #121415;
+      --color-circe-tabbar-border: rgba(255, 255, 255, 0.065);
     }
   }
 }
@@ -240,9 +286,17 @@
 /* ─── Typography ────────────────────────────────────────────────────── */
 @theme {
   /* Keep these native family names aligned with app.config.ts. */
-  --font-sans: "DMSans-Regular";
-  --font-medium: "DMSans-Medium";
-  --font-bold: "DMSans-Bold";
+  --font-sans: "Inter-Regular";
+  --font-medium: "Inter-Medium";
+  --font-bold: "Inter-Bold";
+  /* Display serif for Circe identity moments only (hero statements, greetings,
+     empty states). Instrument Serif is bundled and registered in app.config.ts
+     and loaded at runtime in App.tsx; the stack after it is the fallback for the
+     brief window before it resolves. Design system v1 explicitly rules out Times
+     New Roman. */
+  --font-circe-serif:
+    "InstrumentSerif-Regular", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
+    "Noto Serif", serif;
 
   /* Keep this scale aligned with src/lib/typography.ts for native style props. */
   --text-3xs: 11px;
@@ -277,4 +331,8 @@
 @utility font-t3-extrabold {
   font-family: var(--font-bold);
   font-weight: 800;
+}
+
+@utility font-circe-serif {
+  font-family: var(--font-circe-serif);
 }

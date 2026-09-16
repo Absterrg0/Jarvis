@@ -52,7 +52,10 @@ import IconGitBranch from "@tabler/icons-react-native/IconGitBranch";
 import IconGitMerge from "@tabler/icons-react-native/IconGitMerge";
 import IconGitPullRequest from "@tabler/icons-react-native/IconGitPullRequest";
 import IconHammer from "@tabler/icons-react-native/IconHammer";
+import IconHome from "@tabler/icons-react-native/IconHome";
 import IconInfoCircle from "@tabler/icons-react-native/IconInfoCircle";
+import IconLibrary from "@tabler/icons-react-native/IconLibrary";
+import IconList from "@tabler/icons-react-native/IconList";
 import IconKeyboard from "@tabler/icons-react-native/IconKeyboard";
 import IconKeyboardHide from "@tabler/icons-react-native/IconKeyboardHide";
 import IconLayoutColumns from "@tabler/icons-react-native/IconLayoutColumns";
@@ -116,6 +119,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "bell.badge": IconBellRinging,
   "bolt.circle": IconBolt,
   "bolt.horizontal.circle": IconBolt,
+  "book.closed": IconLibrary,
   brain: IconBrain,
   camera: IconCamera,
   "chart.bar.xaxis": IconChartBar,
@@ -142,8 +146,10 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "folder.badge.plus": IconFolderPlus,
   "folder.fill": IconFolder,
   gearshape: IconSettings,
+  house: IconHome,
   "info.circle": IconInfoCircle,
   laptopcomputer: IconDeviceLaptop,
+  "list.bullet": IconList,
   link: IconLink,
   "line.3.horizontal": IconMenu2,
   "line.3.horizontal.decrease": IconFilter,

@@ -66,15 +66,37 @@ describe("mobile themes", () => {
     }
   });
 
-  it("uses the Circe graphite palette as the default", () => {
-    expect(readDefaultMobileThemeVariables("light")["--color-screen"]).toBe("#faf7f1");
-    expect(readDefaultMobileThemeVariables("dark")["--color-screen"]).toBe("#16181b");
-    expect(readDefaultMobileThemeVariables("light")["--color-user-bubble-skill-foreground"]).toBe(
-      "#e9c46a",
-    );
-    expect(readDefaultMobileThemeVariables("dark")["--color-user-bubble-skill-foreground"]).toBe(
-      "#7a5b0a",
-    );
+  it("uses the Circe design system palette as the default", () => {
+    const light = readDefaultMobileThemeVariables("light");
+    const dark = readDefaultMobileThemeVariables("dark");
+
+    // Design system v1: warm ivory paper in light, layered warm near-black in
+    // dark. Pure black is explicitly out, and so is a cool blue-gray.
+    expect(light["--color-circe-canvas"]).toBe("#fcf9f4");
+    expect(dark["--color-circe-canvas"]).toBe("#0c0d0e");
+
+    // Light is warm paper, which is testable: red leads blue.
+    const [lightRed, , lightBlue] = light["--color-circe-canvas"]!.slice(1)
+      .match(/.{2}/g)!
+      .map((channel) => Number.parseInt(channel, 16));
+    expect(lightRed!).toBeGreaterThan(lightBlue!);
+
+    // Dark is a layered near-black: never pure black, and never saturated
+    // enough to read as a colored slate. The channels stay close together.
+    const darkChannels = dark["--color-circe-canvas"]!.slice(1)
+      .match(/.{2}/g)!
+      .map((channel) => Number.parseInt(channel, 16));
+    expect(dark["--color-circe-canvas"]).not.toBe("#000000");
+    expect(Math.max(...darkChannels) - Math.min(...darkChannels)).toBeLessThanOrEqual(4);
+
+    // Copper is the one brand accent, and it is the same hue in both modes.
+    expect(light["--color-circe-copper"]).toBe("#e08a63");
+    expect(dark["--color-circe-copper"]).toBe("#e08a63");
+
+    // Dark mode leans on the bright copper for text; light mode uses the deep
+    // tone so it stays legible on paper.
+    expect(light["--color-circe-copper-deep"]).toBe("#a5482c");
+    expect(dark["--color-circe-copper-deep"]).toBe("#f0a078");
   });
 
   it("keeps the default theme surfaces solid so first paint matches themed paint", () => {
@@ -177,7 +199,27 @@ describe("mobile themes", () => {
 
   it("maps semantic palette roles onto every mobile color variable", () => {
     const variables = createMobileThemeVariables(BUILT_IN_THEMES[0].colors, "light");
-    expect(Object.keys(variables)).toHaveLength(75);
+
+    // The Circe design system tokens are additive to the shared palette. They
+    // must all be declared, because Circe-owned chrome reads them directly.
+    for (const token of [
+      "--color-circe-copper",
+      "--color-circe-copper-deep",
+      "--color-circe-copper-bright",
+      "--color-circe-peach",
+      "--color-circe-success",
+      "--color-circe-warning",
+      "--color-circe-danger",
+      "--color-circe-neutral",
+      "--color-circe-canvas",
+      "--color-circe-surface",
+      "--color-circe-surface-raised",
+      "--color-circe-ink",
+      "--color-circe-copy",
+    ] as const) {
+      expect(variables[token]).toMatch(/^#/);
+    }
+    expect(Object.keys(variables).length).toBeGreaterThanOrEqual(75);
 
     expect(variables["--color-sheet-solid"]).toBe(
       themeColorToNativeColor(BUILT_IN_THEMES[0].colors.chrome),
