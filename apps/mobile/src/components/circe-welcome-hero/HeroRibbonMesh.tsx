@@ -71,7 +71,7 @@ function buildFilaments(): Filament[] {
       offset,
       // Ordinary strands are hairline; hero strands are just heavy enough to
       // catch the light without reading as a separate mark.
-      width: hero ? 0.9 + heroHash(index, 42) * 0.25 : 0.55 + heroHash(index, 42) * 0.25,
+      width: hero ? 1 + heroHash(index, 42) * 0.2 : 0.6 + heroHash(index, 42) * 0.3,
       alpha: hero ? 0.52 + heroHash(index, 41) * 0.14 : 0.3 + (1 - Math.abs(offset)) * 0.22,
       color: hero
         ? HERO_PALETTE.ribbonPeach
@@ -156,11 +156,13 @@ function StaticFilament({
   readonly plane: "rear" | "interior" | "front";
   readonly scale: number;
 }) {
-  // Inside the glass the strands must read against a lit copper body rather than
-  // against the page, and at the same copper they disappear into it entirely.
+  // Inside the glass the strands must read against a lit copper body rather
+  // than against the page, and at the same copper they disappear into it
+  // entirely. The lift is deliberately small: pushed harder the band reads as a
+  // glowing stripe cutting the sphere rather than as light through glass.
   const interior = plane === "interior";
-  const color = interior ? HERO_PALETTE.peach : filament.color;
-  const alpha = filament.alpha * scale * (interior ? 1.45 : 1);
+  const color = interior ? HERO_PALETTE.peachCopper : filament.color;
+  const alpha = filament.alpha * scale * (interior ? 1.2 : 1);
 
   return (
     <Path
@@ -197,8 +199,8 @@ function HighlightFilament({
   readonly highlightHalfWidth: number;
 }) {
   const interior = plane === "interior";
-  const color = interior ? HERO_PALETTE.hot : filament.color;
-  const alpha = filament.alpha * scale * (interior ? 1.45 : 1);
+  const color = interior ? HERO_PALETTE.shellPeach : filament.color;
+  const alpha = filament.alpha * scale * (interior ? 1.2 : 1);
 
   const start = useDerivedValue(
     () => ({ x: highlightCenterX.value - highlightHalfWidth, y: 0 }),
@@ -214,7 +216,7 @@ function HighlightFilament({
     () => [
       heroAlpha(color, alpha),
       heroAlpha(color, bright),
-      heroAlpha(HERO_PALETTE.hot, bright * 0.85),
+      heroAlpha(HERO_PALETTE.shellHot, bright * 0.85),
       heroAlpha(color, bright),
       heroAlpha(color, alpha),
     ],
@@ -249,7 +251,7 @@ function HighlightFilament({
  * glass, and `front` carries only the hero strands so the crossing reads as
  * light catching a couple of filaments rather than as a second full field.
  */
-export function HeroRibbonField({
+export function HeroRibbonMesh({
   plane,
   width,
   centerX,

@@ -10,12 +10,11 @@ import {
 } from "@shopify/react-native-skia";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 
-import { HeroBackgroundArcs } from "./HeroBackgroundArcs";
-import { HeroInternalMotes } from "./HeroInternalMotes";
+import { HeroHaloArcs } from "./HeroHaloArcs";
 import { HeroOrbBody } from "./HeroOrbBody";
-import { HeroOrbGlass } from "./HeroOrbGlass";
-import { HeroParticles } from "./HeroParticles";
-import { HeroRibbonField } from "./HeroRibbonField";
+import { HeroOrbShell } from "./HeroOrbShell";
+import { HeroAmbientParticles } from "./HeroAmbientParticles";
+import { HeroRibbonMesh } from "./HeroRibbonMesh";
 import {
   HERO_APPEARANCE,
   HERO_METRICS,
@@ -47,7 +46,7 @@ import {
  *   8. front ribbon         (one or two strands over the shell)
  *   9. external motes
  *
- * The glass must be painted after the interior ribbon, otherwise the strands
+ * The shell must be painted after the interior mesh, otherwise the strands
  * appear to sit on top of the sphere rather than inside it.
  *
  * Motion is intentionally minimal. The ribbon geometry is frozen and moves only
@@ -81,7 +80,7 @@ export function CirceWelcomeHero({
   const ribbonDrift = useDerivedValue(() => {
     if (reducedMotion) return [{ translateY: 0 }];
     const t = clock.value / 1000;
-    const phase = (2 * Math.PI * t) / HERO_MOTION.ribbonDriftSeconds;
+    const phase = (2 * Math.PI * t) / HERO_MOTION.driftSeconds;
     return [{ translateY: Math.sin(phase) * HERO_MOTION.ribbonDriftDp }];
   }, [clock, reducedMotion]);
 
@@ -103,7 +102,7 @@ export function CirceWelcomeHero({
   // gradient is cut off and leaves a faint horizontal seam across the page.
   const atmosphereColors = useMemo(
     () => [
-      heroAlpha(HERO_PALETTE.peach, 0.16 * tuning.glowScale),
+      heroAlpha(HERO_PALETTE.peachCopper, 0.16 * tuning.glowScale),
       heroAlpha(HERO_PALETTE.ribbonCopper, 0.09 * tuning.glowScale),
       heroAlpha(HERO_PALETTE.ribbonCopper, 0),
     ],
@@ -124,7 +123,7 @@ export function CirceWelcomeHero({
         </Circle>
 
         {/* 2. Halo arcs. */}
-        <HeroBackgroundArcs
+        <HeroHaloArcs
           centerX={centerX}
           centerY={centerY}
           radius={radius}
@@ -133,7 +132,7 @@ export function CirceWelcomeHero({
 
         {/* 3. Rear ribbon, behind the body. */}
         <Group transform={ribbonDrift}>
-          <HeroRibbonField
+          <HeroRibbonMesh
             plane="rear"
             width={width}
             centerX={centerX}
@@ -147,14 +146,9 @@ export function CirceWelcomeHero({
         {/* 4. The body. */}
         <HeroOrbBody centerX={centerX} centerY={centerY} radius={radius} />
 
-        {/* 5. Motes suspended inside the body. */}
-        <Group clip={sphereClip}>
-          <HeroInternalMotes centerX={centerX} centerY={centerY} radius={radius} />
-        </Group>
-
-        {/* 6. The same ribbon, refracted through the glass. */}
+        {/* 5. The same mesh, refracted through the glass. */}
         <Group transform={ribbonDrift}>
-          <HeroRibbonField
+          <HeroRibbonMesh
             plane="interior"
             width={width}
             centerX={centerX}
@@ -166,12 +160,12 @@ export function CirceWelcomeHero({
           />
         </Group>
 
-        {/* 7. The shell, over the interior ribbon. */}
-        <HeroOrbGlass centerX={centerX} centerY={centerY} radius={radius} />
+        {/* 6. The shell, over the interior mesh. */}
+        <HeroOrbShell centerX={centerX} centerY={centerY} radius={radius} />
 
-        {/* 8. A couple of strands crossing over the shell. */}
+        {/* 7. A couple of strands crossing over the shell. */}
         <Group transform={ribbonDrift}>
-          <HeroRibbonField
+          <HeroRibbonMesh
             plane="front"
             width={width}
             centerX={centerX}
@@ -182,8 +176,8 @@ export function CirceWelcomeHero({
           />
         </Group>
 
-        {/* 9. Dust in the air around the hero. */}
-        <HeroParticles
+        {/* 8. Ambient particles. */}
+        <HeroAmbientParticles
           centerX={centerX}
           centerY={centerY}
           radius={radius}

@@ -1,13 +1,19 @@
 import { Image, useImage } from "@shopify/react-native-skia";
 
+import { HERO_ASSET_SPHERE_SCALE } from "./heroTokens";
+
 /**
- * The opaque volumetric body of the hero orb.
+ * The warm copper-brown body of the hero orb.
  *
- * This is a baked asset rather than a radial shader. Radius-driven ramps cannot
- * express asymmetric directional lighting, a Fresnel rim or a specular lobe, so
- * a sphere built from them reads as concentric bands. The asset is shaded from
- * the reconstructed sphere normal instead, and it is hero-only: `CirceOrb` stays
- * fully procedural for product states.
+ * A baked layer rather than a radial shader. Radius-driven ramps cannot express
+ * directional lighting, a shell rim or a specular streak, so a sphere built
+ * from them reads as concentric bands.
+ *
+ * Contains the body volume, internal tonal variation, and the faint suspended
+ * specks. No page glow and no rim: those belong to the shell layer.
+ *
+ * Drawn larger than the sphere by `HERO_ASSET_SPHERE_SCALE`, because the asset
+ * reserves margin for the shell's outward bloom.
  */
 export function HeroOrbBody({
   centerX,
@@ -18,15 +24,16 @@ export function HeroOrbBody({
   readonly centerY: number;
   readonly radius: number;
 }) {
-  const image = useImage(require("../../../assets/hero/hero-orb-body.webp"));
+  const image = useImage(require("../../../assets/circe/hero-orb-body.png"));
   if (image === null) return null;
+  const size = (radius * 2) / HERO_ASSET_SPHERE_SCALE;
   return (
     <Image
       image={image}
-      x={centerX - radius}
-      y={centerY - radius}
-      width={radius * 2}
-      height={radius * 2}
+      x={centerX - size / 2}
+      y={centerY - size / 2}
+      width={size}
+      height={size}
       fit="contain"
     />
   );

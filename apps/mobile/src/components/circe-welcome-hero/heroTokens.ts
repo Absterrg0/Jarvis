@@ -7,24 +7,33 @@
  */
 
 export const HERO_PALETTE = {
-  /** Deep centre of the body. Warm brown, never pitch black. */
-  core: "#2A1710",
-  /** Body volume. */
-  warm: "#6E4534",
-  /** Lit body. */
-  copper: "#B9785B",
-  /** Shell and rim. */
-  peach: "#F2C9AC",
-  /** Hot edge, specular and glints only. */
-  hot: "#FFF2E5",
+  /** Body ramp, deep brown through copper to peach-copper. */
+  deepBrown: "#4A2F24",
+  warmBrown: "#6E4636",
+  copper: "#B97A5D",
+  peachCopper: "#EAC2A4",
 
-  /** Ribbon field. */
+  /** Shell: copper glow, shell peach, hot edge. */
+  shellCopper: "#E7B18E",
+  shellPeach: "#F5D8C1",
+  shellHot: "#FFF1E4",
+
+  /** Ribbon mesh. */
   ribbonCopper: "#C9784F",
   ribbonAmber: "#E29A68",
   ribbonPeach: "#F2C0A0",
 
   paper: "#FCF9F4",
 } as const;
+
+/**
+ * Sphere radius as a fraction of the half-image in both baked orb layers.
+ *
+ * The layers are drawn larger than the sphere so the shell has margin to bloom
+ * outward past the silhouette without being clipped by the image bounds. The
+ * generator and the Skia components must agree on this number.
+ */
+export const HERO_ASSET_SPHERE_SCALE = 0.93;
 
 export type HeroAppearance = "light" | "dark";
 
@@ -48,33 +57,33 @@ export const HERO_APPEARANCE: Record<HeroAppearance, HeroAppearanceTuning> = {
 /** Hero geometry, expressed relative to the hero's available width. */
 export const HERO_METRICS = {
   /** Fixed hero height. Wide and short, like a banner illustration. */
-  height: 300,
-  /** Orb radius as a fraction of hero width, clamped. */
-  radiusFraction: 0.215,
-  radiusMin: 76,
+  height: 310,
+  /** Orb radius as a fraction of hero width, clamped to a 172-176dp diameter. */
+  radiusFraction: 0.22,
+  radiusMin: 78,
   radiusMax: 88,
   /**
    * Orb centre as a fraction of hero height. Sits in the upper-middle zone but
    * leaves enough room above that the widest halo arc is not cut off.
    */
   centerYFraction: 0.46,
-  /** Ribbon filaments across the woven surface. */
+  /** Strands across the woven mesh. */
   ribbonCount: 24,
-  /** Filaments that cross in front of the shell. */
+  /** Strands that cross in front of the shell. */
   frontRibbonCount: 2,
   /** Halo arcs behind the orb. */
   arcCount: 4,
-  /** External dust motes. Deliberately few. */
+  /** Ambient particles in the air around the hero. Deliberately few. */
   particleCount: 7,
-  /** Internal light motes inside the body. */
-  internalMoteCount: 20,
 } as const;
 
 /**
  * The master centreline, in hero-normalized coordinates (x across the width,
- * y across the height). This is deliberately art-directed rather than
- * generated: it is one shallow S that passes through the sphere, so the ribbon
- * reads as a single surface threaded through the object.
+ * y across the height).
+ *
+ * This is one deliberate S rather than a generated waveform: it rises from the
+ * left, enters the orb slightly above centre, bends down through it, exits
+ * slightly below centre, and opens out to the right.
  *
  * These points do not animate. See `HERO_MOTION`.
  */
@@ -91,20 +100,20 @@ export const HERO_CENTRELINE: ReadonlyArray<readonly [number, number]> = [
 /**
  * Motion budget.
  *
- * The primary spline geometry is frozen. The ribbon is a brand mark, not an
- * audio waveform, so the silhouette has to stay essentially stable: the whole
- * surface drifts rigidly by a few dp, and the life in the illustration comes
- * from a highlight travelling along it and from slow atmosphere breathing.
+ * The mesh geometry is frozen. The hero is a brand mark, not an audio waveform,
+ * so the silhouette stays essentially stable: the whole surface drifts rigidly
+ * by a few dp, and the life comes from a highlight gliding along the filaments
+ * and from the atmosphere breathing.
  *
  * A rigid translate cannot introduce a loop seam, which is why there is no
  * geometry morphing and therefore no phase-wrap discontinuity anywhere.
  */
 export const HERO_MOTION = {
-  /** Rigid vertical drift of the entire ribbon surface, in dp. */
+  /** Rigid vertical drift of the entire mesh, in dp. */
   ribbonDriftDp: 4,
   /** Seconds for one full out-and-back drift. */
-  ribbonDriftSeconds: 12,
-  /** Seconds for the highlight to travel from one end to the other and back. */
+  driftSeconds: 13,
+  /** Seconds for the highlight to glide from one end to the other and back. */
   highlightPeriodSeconds: 15,
   /** Seconds for the atmosphere and halo arcs to complete one breath. */
   breathSeconds: 13,

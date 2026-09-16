@@ -21,7 +21,7 @@ interface Mote {
  * Not a starfield and not sparkles: this reads as suspended dust in warm light,
  * and if you notice an individual mote the count is too high.
  */
-export function HeroParticles({
+export function HeroAmbientParticles({
   centerX,
   centerY,
   radius,

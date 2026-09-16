@@ -4,23 +4,25 @@
 /**
  * Render the welcome hero's orb layers.
  *
- * The welcome hero uses two baked transparent layers instead of reproducing a
- * rendered sphere with radial shader ramps. Radius-driven ramps read as
- * concentric bands: they cannot express asymmetric directional lighting, a
- * Fresnel rim, or a specular lobe, so the object looks like a gradient rather
- * than a lit sphere. Without the source render available, these are shaded
- * analytically from the reconstructed sphere normal, and the dynamic interior
- * ribbon is composited between the two layers at runtime.
+ * The hero uses two baked transparent layers rather than reproducing a rendered
+ * sphere with radial shader ramps, and the ribbon mesh is composited between
+ * them so the strands read as passing through the object.
  *
- *   hero-orb-body.webp   opaque brown/copper volumetric body, internal
- *                        illumination, limb darkening
- *   hero-orb-glass.webp  mostly transparent shell: Fresnel rim, specular
- *                        hotspots, faint face tint
+ *   hero-orb-body.png   warm copper-brown volume, internal tonal variation,
+ *                       faint suspended specks, no page glow
+ *   hero-orb-shell.png  luminous rim, shell glow, one highlight streak, bloom
  *
- * These are hero-only. `CirceOrb` stays fully procedural for product states.
+ * Both layers place the sphere at HERO_ASSET_SPHERE_SCALE of the half-image so
+ * the shell has margin to bloom outward past the silhouette without being
+ * clipped. The Skia components scale by the same constant.
  *
- * Writes PAM intermediates and converts with ImageMagick, matching the existing
- * brand-asset pipeline so no extra raster dependency enters the repo.
+ * Asset generation alone is not enough to make this look premium, so the
+ * shading is art-directed rather than physical:
+ *   - no hard terminator. An earlier revision multiplied the body by a
+ *     directional falloff down to 0.24, which produced a planet-like dark side.
+ *     The floor is now 0.45 so the shadow side stays warm brown.
+ *   - no round specular hotspot. The single highlight is an anisotropic streak,
+ *     which is what reads as studio lighting rather than a shiny ball.
  */
 
 import * as NodeChildProcess from "node:child_process";
@@ -29,17 +31,24 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 const repoRoot = NodePath.resolve(import.meta.dirname, "..");
-const outputDir = NodePath.join(repoRoot, "apps/mobile/assets/hero");
+const outputDir = NodePath.join(repoRoot, "apps/mobile/assets/circe");
 const SIZE = 1024;
+
+/** Sphere radius as a fraction of the half-image. Must match heroTokens. */
+const SPHERE_SCALE = 0.93;
 
 type Rgb = readonly [number, number, number];
 
-const CORE: Rgb = [42, 23, 16];
-const DEEP: Rgb = [58, 34, 24];
-const WARM: Rgb = [110, 69, 52];
-const COPPER: Rgb = [185, 120, 91];
-const PEACH: Rgb = [242, 201, 172];
-const HOT: Rgb = [255, 242, 229];
+/** Body ramp: deep brown through warm brown and copper to peach-copper. */
+const DEEP_BROWN: Rgb = [74, 47, 36];
+const WARM_BROWN: Rgb = [110, 70, 54];
+const COPPER: Rgb = [185, 122, 93];
+const PEACH_COPPER: Rgb = [234, 194, 164];
+
+/** Shell: copper glow through shell peach to the hot edge. */
+const SHELL_COPPER: Rgb = [231, 177, 142];
+const SHELL_PEACH: Rgb = [245, 216, 193];
+const SHELL_HOT: Rgb = [255, 241, 228];
 
 function mix(a: Rgb, b: Rgb, t: number): Rgb {
   const clamped = Math.min(1, Math.max(0, t));
@@ -60,45 +69,60 @@ function normalize(v: readonly [number, number, number]): [number, number, numbe
   return [v[0] / length, v[1] / length, v[2] / length];
 }
 
+function hash01(index: number, salt: number): number {
+  const value = Math.sin(index * 91.7 + salt * 233.1) * 43758.5453;
+  return value - Math.floor(value);
+}
+
 /** Key light: upper left and in front. Fill: lower right, warm and weak. */
-const KEY = normalize([-0.55, -0.62, 0.56]);
-const FILL = normalize([0.72, 0.4, 0.57]);
-const VIEW: readonly [number, number, number] = [0, 0, 1];
-const KEY_HALF = normalize([KEY[0] + VIEW[0], KEY[1] + VIEW[1], KEY[2] + VIEW[2]]);
-const FILL_HALF = normalize([FILL[0] + VIEW[0], FILL[1] + VIEW[1], FILL[2] + VIEW[2]]);
+const KEY = normalize([-0.5, -0.58, 0.64]);
+const FILL = normalize([0.74, 0.42, 0.52]);
 
 function dot(a: readonly [number, number, number], b: readonly [number, number, number]): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-/** Shading terms shared by both layers, derived from the sphere normal. */
-function sample(normal: readonly [number, number, number]): {
-  readonly keyDiffuse: number;
-  readonly fillDiffuse: number;
-  readonly fresnel: number;
-  readonly keySpecular: number;
-  readonly fillSpecular: number;
-} {
+/** Deterministic suspended specks, baked into the body. */
+const SPECKS = Array.from({ length: 18 }, (_, index) => {
+  const angle = hash01(index, 71) * Math.PI * 2;
+  const distance = Math.sqrt(hash01(index, 72)) * 0.78;
   return {
-    keyDiffuse: Math.max(dot(normal, KEY), 0),
-    fillDiffuse: Math.max(dot(normal, FILL), 0),
-    // Exponent 2.5 rather than 3: the tighter falloff produced a rim only a
-    // pixel or two wide, which at hero scale read as a hairline rather than as
-    // the thickness of a glass shell.
-    fresnel: (1 - normal[2]) ** 2.5,
-    keySpecular: Math.max(dot(normal, KEY_HALF), 0) ** 150,
-    fillSpecular: Math.max(dot(normal, FILL_HALF), 0) ** 24,
+    x: Math.cos(angle) * distance,
+    y: Math.sin(angle) * distance,
+    radius: 0.0016 + hash01(index, 73) * 0.0034,
+    strength: 0.22 + hash01(index, 74) * 0.4,
   };
+});
+
+function bodyColor(ux: number, uy: number, normalZ: number): Rgb {
+  const key = Math.max(dot([ux, uy, normalZ], KEY), 0);
+  const fill = Math.max(dot([ux, uy, normalZ], FILL), 0);
+
+  let colour = mix(DEEP_BROWN, WARM_BROWN, smoothstep(0, 0.55, key));
+  colour = mix(colour, COPPER, smoothstep(0.3, 0.82, key));
+  colour = mix(colour, PEACH_COPPER, smoothstep(0.62, 1, key) * 0.8);
+
+  // Warm fill from the opposite side, so the shadow side is lit too.
+  colour = mix(colour, WARM_BROWN, fill * 0.3);
+
+  // Broad interior light pooling off-centre, giving the volume depth.
+  const gx = ux + 0.22;
+  const gy = uy - 0.16;
+  colour = mix(colour, COPPER, Math.exp(-((gx * gx + gy * gy) / 0.34)) * 0.22);
+
+  // Soft directional falloff with a high floor: keeps a sense of form without
+  // the hard planet terminator.
+  const shade = 0.45 + 0.55 * key ** 0.8;
+  // Very mild limb darkening for volume. No fresnel here; that belongs to the
+  // shell layer.
+  const limb = 0.86 + 0.14 * normalZ;
+  const scale = shade * limb;
+  return [colour[0] * scale, colour[1] * scale, colour[2] * scale];
 }
 
-/**
- * Opaque body. Asymmetric key/fill diffuse so the lighting has a clear
- * direction, a subsurface glow for internal illumination, and limb darkening so
- * the sphere reads as a volume and separates from the glass shell.
- */
 function shadeBody(): Uint8Array {
   const pixels = new Uint8Array(SIZE * SIZE * 4);
-  const radius = SIZE / 2 - 2;
+  const radius = (SIZE / 2) * SPHERE_SCALE;
 
   for (let y = 0; y < SIZE; y += 1) {
     for (let x = 0; x < SIZE; x += 1) {
@@ -108,47 +132,18 @@ function shadeBody(): Uint8Array {
       const d = Math.hypot(ux, uy);
       if (d >= 1) continue;
 
-      const normal: [number, number, number] = [ux, uy, Math.sqrt(Math.max(0, 1 - d * d))];
-      const { keyDiffuse, fillDiffuse } = sample(normal);
+      const normalZ = Math.sqrt(Math.max(0, 1 - d * d));
+      let colour = bodyColor(ux, uy, normalZ);
 
-      let colour = mix(CORE, DEEP, smoothstep(0, 0.35, keyDiffuse));
-      colour = mix(colour, WARM, smoothstep(0.2, 0.62, keyDiffuse));
-      colour = mix(colour, COPPER, smoothstep(0.5, 0.9, keyDiffuse));
-
-      colour = [
-        colour[0] + COPPER[0] * fillDiffuse * 0.22,
-        colour[1] + COPPER[1] * fillDiffuse * 0.22,
-        colour[2] + COPPER[2] * fillDiffuse * 0.22,
-      ];
-
-      // Subsurface: warm light pooling inside the body, offset from centre.
-      const gx = ux + 0.2;
-      const gy = uy - 0.18;
-      const glow = Math.exp(-((gx * gx + gy * gy) / 0.3));
-      colour = [
-        colour[0] + COPPER[0] * glow * 0.3,
-        colour[1] + COPPER[1] * glow * 0.3,
-        colour[2] + COPPER[2] * glow * 0.3,
-      ];
-
-      const gx2 = ux - 0.16;
-      const gy2 = uy + 0.1;
-      const glow2 = Math.exp(-((gx2 * gx2 + gy2 * gy2) / 0.38));
-      colour = [
-        colour[0] + WARM[0] * glow2 * 0.16,
-        colour[1] + WARM[1] * glow2 * 0.16,
-        colour[2] + WARM[2] * glow2 * 0.16,
-      ];
-
-      // Directional falloff gives the sphere a real terminator. Without it the
-      // body is evenly lit everywhere and reads as a glossy ball rather than a
-      // volume. The floor is kept well above black so the shadow side stays warm
-      // brown instead of going dead, and the Fresnel rim on the glass layer
-      // lifts the silhouette back out.
-      const shade = 0.24 + 0.76 * keyDiffuse ** 0.85;
-      // Limb darkening tightens the silhouette against the glass shell.
-      const limb = (0.78 + 0.22 * normal[2]) * shade;
-      colour = [colour[0] * limb, colour[1] * limb, colour[2] * limb];
+      // Baked specks. Faint, soft, and few: this is suspended dust in warm
+      // light, not noise.
+      for (const speck of SPECKS) {
+        const dx = ux - speck.x;
+        const dy = uy - speck.y;
+        const falloff = Math.exp(-((dx * dx + dy * dy) / (speck.radius * speck.radius)));
+        if (falloff < 0.01) continue;
+        colour = mix(colour, PEACH_COPPER, falloff * speck.strength);
+      }
 
       const edge = Math.min(1, ((1 - d) * radius) / 1.2);
       pixels[offset] = Math.min(255, Math.round(colour[0]));
@@ -160,18 +155,19 @@ function shadeBody(): Uint8Array {
   return pixels;
 }
 
-/**
- * Mostly transparent shell. The face stays nearly clear so the interior ribbon
- * reads through it; the shell shows up as a Fresnel rim plus two specular
- * lobes, one tight and one broad.
- */
-function shadeGlass(): Uint8Array {
+function shadeShell(): Uint8Array {
   const pixels = new Uint8Array(SIZE * SIZE * 4);
-  const radius = SIZE / 2 - 2;
-  // The face must stay nearly clear so the interior ribbon reads through it.
-  // An earlier value plus a broad sheen washed the body out into polished
-  // metal, which is the opposite of glass over warm copper.
-  const faceTint = 0.012;
+  const radius = (SIZE / 2) * SPHERE_SCALE;
+  // The face stays nearly clear so the interior mesh reads through it.
+  const faceTint = 0.01;
+
+  // The single highlight streak, elongated along a diagonal so it reads as
+  // studio lighting rather than a round specular dot.
+  const streakAngle = -0.62;
+  const streakCos = Math.cos(streakAngle);
+  const streakSin = Math.sin(streakAngle);
+  const streakX = -0.3;
+  const streakY = -0.34;
 
   for (let y = 0; y < SIZE; y += 1) {
     for (let x = 0; x < SIZE; x += 1) {
@@ -179,18 +175,42 @@ function shadeGlass(): Uint8Array {
       const ux = (x + 0.5 - SIZE / 2) / radius;
       const uy = (y + 0.5 - SIZE / 2) / radius;
       const d = Math.hypot(ux, uy);
-      if (d >= 1) continue;
+      // Allow the bloom to extend past the silhouette into the image margin.
+      if (d >= 1 / SPHERE_SCALE) continue;
 
-      const normal: [number, number, number] = [ux, uy, Math.sqrt(Math.max(0, 1 - d * d))];
-      const { fresnel, keySpecular, fillSpecular } = sample(normal);
+      const inside = d < 1;
+      const normalZ = inside ? Math.sqrt(Math.max(0, 1 - d * d)) : 0;
 
-      const alpha = Math.min(1, faceTint + fresnel + keySpecular * 0.95 + fillSpecular * 0.03);
+      // Rim, biased so the shell is stronger top-left, top and right rather
+      // than uniform all the way round.
+      const directionBias = Math.min(
+        1,
+        0.42 + 0.42 * Math.max(0, -uy) + 0.34 * Math.max(0, ux) + 0.18 * Math.max(0, -ux),
+      );
+      const rim = inside ? (1 - normalZ) ** 2.8 * directionBias : 0;
 
-      // Rim reads peach; the specular lobes read hot.
-      const hotness = Math.min(1, keySpecular * 2.6 + fresnel * 0.24);
-      const colour = mix(PEACH, HOT, hotness);
+      // Narrow inner shell transition, just inside the rim. A wide one reads as
+      // a second ring and hazes the whole face.
+      const inner = inside ? smoothstep(0.78, 0.96, d) * (1 - smoothstep(0.96, 1, d)) * 0.08 : 0;
 
-      const edge = Math.min(1, ((1 - d) * radius) / 1.2);
+      // Outward bloom past the silhouette. The falloff must reach zero well
+      // inside the image margin: an earlier, much wider sigma stayed near full
+      // strength across the whole margin, which rendered as a solid opaque
+      // donut around the sphere rather than a glow.
+      const bloomDistance = (d - 1) / (0.03 / SPHERE_SCALE);
+      const bloom = inside ? 0 : Math.exp(-(bloomDistance * bloomDistance)) * 0.2;
+
+      const rx = (ux - streakX) * streakCos + (uy - streakY) * streakSin;
+      const ry = -(ux - streakX) * streakSin + (uy - streakY) * streakCos;
+      const streak = inside ? Math.exp(-((rx * rx) / 0.028 + (ry * ry) / 0.0022)) : 0;
+
+      const alpha = Math.min(1, faceTint + rim * 1.15 + inner + bloom + streak * 0.7);
+
+      // Rim and bloom read peach; the streak reads hot.
+      let colour = mix(SHELL_COPPER, SHELL_PEACH, Math.min(1, rim * 1.4 + inner * 2));
+      colour = mix(colour, SHELL_HOT, Math.min(1, streak * 1.6));
+
+      const edge = Math.min(1, ((1 / SPHERE_SCALE - d) * radius) / 1.2);
       pixels[offset] = Math.round(colour[0]);
       pixels[offset + 1] = Math.round(colour[1]);
       pixels[offset + 2] = Math.round(colour[2]);
@@ -208,10 +228,10 @@ function writePam(path: string, pixels: Uint8Array): void {
   NodeFS.writeFileSync(path, Buffer.concat([header, Buffer.from(pixels)]));
 }
 
-function toWebp(pamPath: string, webpPath: string): void {
+function toPng(pamPath: string, pngPath: string): void {
   NodeChildProcess.execFileSync(
     "magick",
-    [pamPath, "-define", "webp:method=6", "-quality", "92", "-depth", "8", "-strip", webpPath],
+    [pamPath, "-define", "png:compression-level=9", "-depth", "8", "-strip", pngPath],
     { cwd: repoRoot, stdio: "pipe" },
   );
 }
@@ -222,16 +242,16 @@ function main(): void {
 
   const layers = [
     ["hero-orb-body", shadeBody()],
-    ["hero-orb-glass", shadeGlass()],
+    ["hero-orb-shell", shadeShell()],
   ] as const;
 
   for (const [name, pixels] of layers) {
     const pamPath = NodePath.join(staging, `${name}.pam`);
-    const webpPath = NodePath.join(outputDir, `${name}.webp`);
+    const pngPath = NodePath.join(outputDir, `${name}.png`);
     writePam(pamPath, pixels);
-    toWebp(pamPath, webpPath);
-    const size = NodeFS.statSync(webpPath).size;
-    console.log(`${NodePath.relative(repoRoot, webpPath)}  ${(size / 1024).toFixed(1)} KiB`);
+    toPng(pamPath, pngPath);
+    const size = NodeFS.statSync(pngPath).size;
+    console.log(`${NodePath.relative(repoRoot, pngPath)}  ${(size / 1024).toFixed(1)} KiB`);
   }
 
   NodeFS.rmSync(staging, { recursive: true, force: true });

@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { Circle, Group, useClock } from "@shopify/react-native-skia";
 import { useDerivedValue } from "react-native-reanimated";
 
-import { HERO_METRICS, HERO_PALETTE, heroAlpha, heroHash } from "./heroTokens";
+import { HERO_METRICS, HERO_MOTION, HERO_PALETTE, heroAlpha, heroHash } from "./heroTokens";
 
 /**
  * Halo arcs behind the orb.
@@ -12,7 +12,7 @@ import { HERO_METRICS, HERO_PALETTE, heroAlpha, heroHash } from "./heroTokens";
  * At these alphas they should be felt rather than counted, and if you can
  * clearly see a ring it is too strong.
  */
-export function HeroBackgroundArcs({
+export function HeroHaloArcs({
   centerX,
   centerY,
   radius,
@@ -46,7 +46,7 @@ export function HeroBackgroundArcs({
   const breatheScale = useDerivedValue(() => {
     if (reducedMotion) return 1;
     const t = clock.value / 1000;
-    return 1 + Math.sin((2 * Math.PI * t) / 13) * 0.012;
+    return 1 + Math.sin((2 * Math.PI * t) / HERO_MOTION.breathSeconds) * 0.012;
   }, [clock, reducedMotion]);
   const breatheTransform = useDerivedValue(() => [{ scale: breatheScale.value }], [breatheScale]);
 
